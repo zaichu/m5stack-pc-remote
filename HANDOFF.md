@@ -51,10 +51,15 @@
 - 生成した`.exe`と`config.toml`をPC上の作業ディレクトリへ配置し、`Start-Process`で手動起動して動作確認した(Task Schedulerへの登録はまだ)。Windows Firewallの既定設定で外部ホストからのTCP 18080着信もブロックされていたため、
   `netsh advfirewall firewall add rule name="pc-remote-agent inbound 18080" dir=in action=allow protocol=TCP localport=18080 profile=private` で解消。
 - 上記対応後、M5Stack実機からの`SHUTDOWN`/`REBOOT`ボタン操作でエージェントへの署名付きPOSTが両方とも`200`で成功(HMAC認証・confirm必須チェックとも正常)。`dry_run = true`のため実際の電源操作は未実行。
-- 未検証: WAKE(Wake-on-LAN)の実地確認(PCがONの状態では意味のあるテストができないため)、`dry_run = false`にした実際のSHUTDOWN/REBOOT実行。次セッションでの確認事項とする。
-- Windows Agentの配布・常駐化を`windows-agent/install.ps1`(新規)に統合した。バイナリ配置、`config.toml`未作成時のexampleからの生成(ランダムshared_secret付き)、Windows Firewallの受信許可ルール作成、Scheduled Task登録(`SYSTEM`権限・起動時トリガー)を一括で行う。対になる`uninstall.ps1`も追加し、旧`install-scheduled-task.ps1`/`uninstall-scheduled-task.ps1`は置き換えて削除した。
+- Windows Agentの配布・常駐化を`windows-agent/install.ps1`(新規)に統合した。バイナリ配置、`config.toml`未作成時のexampleからの生成(ランダムshared_secret付き)、Windows Firewallの受信許可ルール作成、Scheduled Task登録(`SYSTEM`権限・起動時トリガー)を一括で行う。対になる`uninstall.ps1`も追加し、旧`install-scheduled-task.ps1`/`uninstall-scheduled-task.ps1`は置き換えて削除した。実機にインストールし、PC再起動後もScheduled Taskの起動時トリガーで自動的にエージェントが立ち上がることを確認済み。
 - ユーザーから「Task SchedulerではなくWindowsサービス化したら?」という提案があったが、AGENTS.md/CLAUDE.mdで「Windowsサービス化方針」はCodexレビュー前提と定められているため、今回は実装せず据え置いた。次回、Codexで設計レビューしてから着手する別タスクとする(`windows-service`クレート導入、SCMコールバック対応、ログ出力方式変更などが必要になる想定)。
-- NICの`Wake on Magic Packet`/`Shutdown Wake-On-Lan`はドライバ側で有効になっていることを確認済み(`Get-NetAdapterAdvancedProperty`)。`config.h`の`PC_MAC_ADDRESS`/`PC_IP_ADDRESS`/`WOL_BROADCAST_ADDRESS`が実機と一致していることも確認済み(値自体はログに残していない)。
+- `config.h`の`AGENT_SHARED_SECRET`が`config.example.h`のプレースホルダー文字列のまま変更されておらず、公開リポジトリに載っている既知の値でHMAC認証が通ってしまっていた(認証として機能していない状態)。ランダムな48文字の秘密鍵を生成して`config.h`と`windows-agent/config.toml`の両方に反映した(値はコミット・ログに残していない)。**新規セットアップ時は`AGENT_SHARED_SECRET`を必ずランダム値に変更すること。**
+- `dry_run = false`にした上で、M5Stack実機からのREBOOT/SHUTDOWNボタン操作で実際にPCが再起動・シャットダウンすることを確認した。どちらの操作もこのセッション(WSL2)自体を巻き込んで終了するため、セッションを再開しながら検証した。
+- WAKE(Wake-on-LAN)は当初、実機で全く起動しなかった。切り分けの過程で2件の不具合を発見・修正した:
+  1. `config.h`の`PC_MAC_ADDRESS`がWindowsの`ipconfig`表示形式(ハイフン区切り `XX-XX-XX-XX-XX-XX`)のままで、firmwareの`parseMac()`はコロン区切りを要求するため常にパース失敗し(`invalid PC_MAC_ADDRESS`)、マジックパケット自体が送信されていなかった。コロン区切りに修正。
+  2. 上記を直しても起動せず、スマートフォンの別WOLアプリからは同じ2.4GHz Wi-Fiから成功したため切り分けた結果、実ネットワークのサブネットが`/16`(`255.255.0.0`)であるのに`config.h`の`WOL_BROADCAST_ADDRESS`が`/24`前提の値(`x.x.1.255`)になっており、正しい`/16`のブロードキャストアドレス(`x.x.255.255`)ではなかったため、ESP32のlwIPからは通常のユニキャスト宛て(実質どこにも届かない)として送信されていた。スマホアプリは全体ブロードキャスト`255.255.255.255`を使っていたため、サブネットマスクの誤りの影響を受けずに成功していた。恒久対策として`WOL_BROADCAST_ADDRESS`設定自体を廃止し、`firmware/src/main.cpp`は`255.255.255.255`固定で送信するように変更した(サブネットマスクに関わらず動作する)。
+- 上記全ての修正後、実機でWi-Fi接続、STATUS(ONLINE表示)、WAKE(WOL)、REBOOT、SHUTDOWNの一連の操作が最初から最後まですべて実際に動作することを確認した。Phase 1のスコープ(Wi-Fi接続 -> Wake-on-LAN -> STATUS、REBOOT/SHUTDOWN)は実機で完全に検証済み。
+- NICの`Wake on Magic Packet`/`Shutdown Wake-On-Lan`はドライバ側で有効になっていることを確認済み(`Get-NetAdapterAdvancedProperty`)。BIOS(ASUS TUF GAMING B660M-PLUS D4)側の設定は今回変更していない(スマホからのWOL成功により、ドライバ設定で十分と判明したため)。
 
 ## 次のセッションへの依頼例
 
