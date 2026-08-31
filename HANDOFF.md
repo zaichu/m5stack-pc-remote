@@ -18,9 +18,11 @@
 - ローカル秘密設定:
   - `firmware/include/config.h`
   - `windows-agent/config.toml`
-- 外部操作の将来経路:
-  - `Smartphone -> Cloudflare Worker等 -> M5Stack Core2 -> Windows PC`
+- 外部操作の経路:
+  - `Smartphone -> Telegram Bot API (outbound HTTPS long polling) -> M5Stack Core2 -> Windows PC`
   - Windows Agentを直接インターネットへ公開しない
+  - `firmware/src/telegram_client.h` / `telegram_client.cpp` (Telegram long polling、core 0の専用FreeRTOSタスク)
+  - `firmware/src/power_controller.h` / `power_controller.cpp` (WOL送信、Windows AgentへのHMAC署名付きPOST、PC ping状態。タッチUIとTelegramタスクの共有ロジック)
 
 ## 現在の状態
 
@@ -61,6 +63,17 @@
   2. 上記を直しても起動せず、スマートフォンの別WOLアプリからは同じ2.4GHz Wi-Fiから成功したため切り分けた結果、実ネットワークのサブネットが`/16`(`255.255.0.0`)であるのに`config.h`の`WOL_BROADCAST_ADDRESS`が`/24`前提の値(`x.x.1.255`)になっており、正しい`/16`のブロードキャストアドレス(`x.x.255.255`)ではなかったため、ESP32のlwIPからは通常のユニキャスト宛て(実質どこにも届かない)として送信されていた。スマホアプリは全体ブロードキャスト`255.255.255.255`を使っていたため、サブネットマスクの誤りの影響を受けずに成功していた。恒久対策として`WOL_BROADCAST_ADDRESS`設定自体を廃止し、`firmware/src/main.cpp`は`255.255.255.255`固定で送信するように変更した(サブネットマスクに関わらず動作する)。
 - 上記全ての修正後、実機でWi-Fi接続、STATUS(ONLINE表示)、WAKE(WOL)、REBOOT、SHUTDOWNの一連の操作が最初から最後まですべて実際に動作することを確認した。Phase 1のスコープ(Wi-Fi接続 -> Wake-on-LAN -> STATUS、REBOOT/SHUTDOWN)は実機で完全に検証済み。
 - NICの`Wake on Magic Packet`/`Shutdown Wake-On-Lan`はドライバ側で有効になっていることを確認済み(`Get-NetAdapterAdvancedProperty`)。BIOS(ASUS TUF GAMING B660M-PLUS D4)側の設定は今回変更していない(スマホからのWOL成功により、ドライバ設定で十分と判明したため)。
+
+## Telegram Bot API 外部操作の実装 (2026-09-01)
+
+- `docs/external-access.md` のTelegram Bot API long polling方式(Phase 5A/5B/5C)をfirmwareに実装した。
+- `firmware/src/telegram_client.h` / `telegram_client.cpp` を新規追加。`getUpdates` によるlong pollingをcore 0の専用FreeRTOSタスクとして実行し、タッチUI/STATUS更新(core 1のメインloop)を長時間ブロックしないようにした。
+- `firmware/src/power_controller.h` / `power_controller.cpp` を新規追加。既存の`sendWakeOnLan()` / `postAgentCommand()` / PC ping状態を`main.cpp`から切り出し、タッチUIとTelegramタスクの両方から呼べるようにした。共有するWiFiUDPソケットとPC状態フラグへの同時アクセスは内部の1つのFreeRTOSミューテックスで直列化している。
+- `/status`、`/wake`、`/reboot`+`/confirm_reboot <nonce>`、`/shutdown`+`/confirm_shutdown <nonce>` を実装。`from.id`が`TELEGRAM_ALLOWED_USER_ID`と一致しないupdateは無視・返信なし。確認nonceはRAM上のみ、`TELEGRAM_CONFIRM_TTL_MS`でTTL、成功/失敗・不一致に関わらず1回で消費(再利用不可)。
+- `firmware/include/config.example.h`(および実機用のローカル`config.h`、コミット対象外)に`TELEGRAM_BOT_TOKEN`、`TELEGRAM_ALLOWED_USER_ID`、`TELEGRAM_LONG_POLL_TIMEOUT_SECONDS`、`TELEGRAM_CONFIRM_TTL_MS`を追加。`TELEGRAM_BOT_TOKEN`/`TELEGRAM_ALLOWED_USER_ID`がplaceholderのままだとTelegramタスク自体を起動せず、画面は`Telegram: disabled`になる(既存のタッチUI・WOL・STATUSは無変更で動作)。
+- `make check`(Rust fmt/clippy/test + `pio run -d firmware`)、`bash -n scripts/*.sh`、`git diff --check`、secretパターン検索はすべて成功・検出なし。この環境には実際にPlatformIO CLIが入っており`firmware-build`はスキップされず実行された。
+- **実Telegram疎通は未確認。** 実bot token・実user idを使った動作確認(`docs/external-access.md`のPhase 5D: 実機での`/status`・`/wake`・`/reboot`・`/shutdown`)はこのセッションでは行っていない。次回、実bot tokenとuser idを`config.h`に設定した上で実機書き込み・動作確認が必要。
+- Telegram APIとのHTTPS通信は`WiFiClientSecure::setInsecure()`でサーバー証明書検証を省略している。残リスクとして`docs/external-access.md`・`docs/security.md`に明記済み。将来Codexレビューで証明書検証の要否を判断する。
 
 ## 次のセッションへの依頼例
 

@@ -63,6 +63,8 @@ cp include/config.example.h include/config.h
 #define AGENT_SHARED_SECRET "replace-with-the-same-secret-as-windows-agent"
 ```
 
+Telegram経由のスマホ外部操作を使う場合は、`TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` も設定します(セットアップ手順は次節)。両方ともplaceholderのままか空の場合、Telegram機能は無効化され、既存のタッチUI・WOL・STATUSはそのまま動作します。
+
 ビルド:
 
 ```bash
@@ -106,6 +108,44 @@ Windows起動時に自動起動するには、管理者PowerShellで以下を実
 ```powershell
 .\install.ps1
 ```
+
+## セットアップ: Telegram Bot (スマホ外部操作)
+
+賃貸無料回線などでルーターVPNを前提にできない場合、M5StackがTelegram Bot APIを外向きHTTPSでlong pollingし、スマホから `/status`、`/wake`、`/reboot`、`/shutdown` を操作できます。設計の詳細は [External Access Design](docs/external-access.md) を参照してください。
+
+### 1. BotFatherでbotを作る
+
+1. TelegramでBotFather (`@BotFather`) とのチャットを開く。
+2. `/newbot` を送り、bot名とusernameを設定する。
+3. 発行されたbot token (`123456789:AA...` の形式) を控える。**このtokenは秘密情報です。第三者と共有したりGitへコミットしたりしないでください。**
+
+### 2. 自分のTelegram user idを取得する
+
+1. Telegramで `@userinfobot` など、自分のuser idを教えてくれるbotとチャットする、またはBot APIの `getUpdates` を一度手動で呼んで自分の `from.id` を確認する。
+2. 数値のuser id (`123456789` のような形式) を控える。
+
+### 3. `config.h` に設定する
+
+`firmware/include/config.h` に以下を追加(または placeholder から変更)します。
+
+```cpp
+#define TELEGRAM_BOT_TOKEN "123456789:your-real-bot-token"
+#define TELEGRAM_ALLOWED_USER_ID "123456789"
+#define TELEGRAM_LONG_POLL_TIMEOUT_SECONDS 20
+#define TELEGRAM_CONFIRM_TTL_MS 60000
+```
+
+`TELEGRAM_ALLOWED_USER_ID` と一致しない `from.id` からのメッセージはすべて無視され、返信もされません。`TELEGRAM_BOT_TOKEN` はWindows Agent用の `AGENT_SHARED_SECRET` とは別の秘密情報で、Windows Agentへは一切渡りません。
+
+### 4. 実行方法
+
+書き込み後、M5Stackの画面に `Telegram: polling` と表示されればTelegram連携が有効です。placeholderのままだと `Telegram: disabled` と表示され、Telegram機能だけが無効化されます(タッチUI・WOL・STATUSは通常どおり動作します)。
+
+Telegramアプリから許可したuser idのアカウントで、bot宛てに以下を送信します。
+
+- `/status`: PCのONLINE/OFFLINE、Wi-Fi RSSI、M5Stack IPを返信します。
+- `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
+- `/reboot` / `/shutdown`: 即実行せず、確認nonce付きの `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を送るよう案内が返信されます。nonceは `TELEGRAM_CONFIRM_TTL_MS` の間だけ有効で、一度使う(または期限切れになる)と再利用できません。
 
 ## ローカル品質チェック
 

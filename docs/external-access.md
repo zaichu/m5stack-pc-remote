@@ -144,28 +144,28 @@ Windows Agent側の `confirm: true` 必須条件は維持します。
 
 ## 実装フェーズ
 
-### Phase 5A: Telegram Bot設計
+### Phase 5A: Telegram Bot設計 (実装済み)
 
 - BotFatherでbotを作る。
 - bot tokenと自分のTelegram user idを取得する。
 - `firmware/include/config.example.h` にTelegram設定テンプレートを追加する。
 - READMEにセットアップ手順を書く。
 
-### Phase 5B: M5Stack Telegram client
+### Phase 5B: M5Stack Telegram client (実装済み)
 
 - `getUpdates` で `/status` と `/wake` を処理する。
 - `sendMessage` で結果を返す。
 - 許可ユーザー以外を無視する。
 - tokenやuser idをログに出さない。
 
-### Phase 5C: 危険操作の二段階確認
+### Phase 5C: 危険操作の二段階確認 (実装済み)
 
 - `/reboot` と `/shutdown` で確認nonceを発行する。
 - `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を実装する。
 - nonceは短時間で期限切れにする。
 - Windows Agentへの既存HMAC署名付きPOSTを呼ぶ。
 
-### Phase 5D: 実機確認
+### Phase 5D: 実機確認 (未実施)
 
 - スマホのTelegramから `/status`。
 - PC OFF状態で `/wake`。
@@ -173,12 +173,28 @@ Windows Agent側の `confirm: true` 必須条件は維持します。
 - PC ON状態で `/shutdown`。
 - すべて結果を `HANDOFF.md` に記録する。
 
-## 残リスク
+## 実装済み範囲 (2026-09-01時点)
 
+- `firmware/src/telegram_client.h` / `telegram_client.cpp` が `getUpdates` によるlong pollingを、`xTaskCreatePinnedToCore` でcore 0の専用FreeRTOSタスクとして実行する。タッチUI/STATUS更新のメインloop(core 1)を長時間ブロックしない。
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_ALLOWED_USER_ID` が未設定(placeholderまたは空)の場合はタスクを起動せず、画面表示は `Telegram: disabled` になる。既存のタッチUI・WOL・STATUSはそのまま動作する。
+- `from.id` が `TELEGRAM_ALLOWED_USER_ID` と一致しないupdateは無視し、返信しない。`update_id` は次回 `offset` として保持し、再処理しない。起動直後の最初の1バッチは、オフライン中に来たコマンドを実行しないよう、offset調整のみ行い実行はしない。
+- `/status` はキャッシュ済みのPC ONLINE/OFFLINE(既存のICMP ping結果)、Wi-Fi RSSI、M5Stack local IPを返す。
+- `/wake` は既存の `sendWakeOnLan()` を呼び、成功/失敗を返信後にSTATUSを再取得する。
+- `/reboot` / `/shutdown` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_MS` でTTL)を発行し、`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を案内する。
+- 確認コマンドはnonce一致・TTL内・action一致のときだけ実行し、既存の `postAgentCommand("/reboot")` / `postAgentCommand("/shutdown")` (HMAC署名付き)を呼ぶ。成功/失敗に関わらずnonceを消費し、再利用・ブルートフォースを防ぐ。
+- HTTP失敗時は5秒から60秒への指数バックオフを行い、画面状態を `Telegram: error` にする。
+- Telegram APIとの通信はTLS (`WiFiClientSecure`) を使うが、証明書検証は `setInsecure()` で省略している(下記の残リスク参照)。
+- Wake-on-LAN送信・Windows Agentへの署名付きPOST・PC ping結果は `firmware/src/power_controller.h` / `power_controller.cpp` に切り出し、タッチUIとTelegramタスクの両方から呼べるようにした。共有するWiFiUDPソケットとPC状態フラグへの同時アクセスは、内部の1つのFreeRTOSミューテックスで直列化している。
+
+## 未実装 / 残リスク
+
+- **実機・実Telegram疎通は未確認。** 実bot token・実user idを使った動作確認(Phase 5D)はこのPRでは行っていない。`pio run -d firmware` によるビルド成功のみ確認済み。
+- **TLS証明書検証を省略している。** `WiFiClientSecure::setInsecure()` を使っており、`api.telegram.org` のサーバー証明書チェーンを検証していない。ESP32上でのCA証明書埋め込み・検証を追加できれば中間者攻撃への耐性が上がるが、今回はゼロコスト・実装スコープを優先し省略した。将来Codexレビューで対応要否を判断する。
 - Telegram Bot APIの仕様や制限が将来変わる可能性はある。コストが発生する変更が必要になった場合は採用しない。
 - Bot tokenが漏れると第三者がbot APIへアクセスできる。BotFatherでrevokeし、M5Stackのconfigを更新する。
 - Telegramアカウントが乗っ取られると許可ユーザーとして操作される。スマホ側のロックとTelegramの二段階認証を有効にする。
 - M5StackがOFFLINEなら外部操作はできない。
+- `/status` のPC ONLINE/OFFLINEは既存のSTATUS更新間隔(`STATUS_INTERVAL_MS`)でキャッシュされた値を返す。Telegramからのリクエストのたびに即時pingはしていないため、直近の状態変化から最大 `STATUS_INTERVAL_MS` 程度のずれがありうる(`/wake` 実行後は明示的に再取得する)。
 
 ## 参照
 
