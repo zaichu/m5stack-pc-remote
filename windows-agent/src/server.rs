@@ -1,0 +1,152 @@
+use std::{net::SocketAddr, sync::Arc};
+
+use axum::{
+    body::Bytes,
+    extract::State,
+    http::{HeaderMap, Method, StatusCode, Uri},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+use tokio::net::TcpListener;
+
+use crate::{
+    auth::{verify_request, AuthConfig, AuthError, NonceStore},
+    config::AgentConfig,
+    power::{run_power_action, PowerAction},
+};
+
+#[derive(Clone)]
+pub struct AppState {
+    auth: Arc<AuthConfig>,
+    nonces: Arc<NonceStore>,
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusResponse {
+    online: bool,
+    agent: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommandRequest {
+    confirm: bool,
+}
+
+pub fn router(config: AgentConfig) -> Router {
+    let state = AppState {
+        auth: Arc::new(AuthConfig {
+            secret: config.shared_secret.into_bytes(),
+            allowed_skew_seconds: config.allowed_skew_seconds,
+        }),
+        nonces: Arc::new(NonceStore::default()),
+        dry_run: config.dry_run,
+    };
+
+    Router::new()
+        .route("/status", get(status))
+        .route("/reboot", post(reboot))
+        .route("/shutdown", post(shutdown))
+        .with_state(state)
+}
+
+pub async fn serve(config: AgentConfig) -> anyhow::Result<()> {
+    let addr: SocketAddr = config.bind.parse()?;
+    let listener = TcpListener::bind(addr).await?;
+    axum::serve(listener, router(config)).await?;
+    Ok(())
+}
+
+async fn status() -> Json<StatusResponse> {
+    Json(StatusResponse {
+        online: true,
+        agent: "pc-remote-agent",
+    })
+}
+
+async fn reboot(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    command(state, method, uri, headers, body, PowerAction::Reboot).await
+}
+
+async fn shutdown(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    command(state, method, uri, headers, body, PowerAction::Shutdown).await
+}
+
+async fn command(
+    state: AppState,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+    action: PowerAction,
+) -> Response {
+    match verify_headers(&state, &method, &uri, &headers, &body) {
+        Ok(()) => {
+            let Ok(request) = serde_json::from_slice::<CommandRequest>(&body) else {
+                return (StatusCode::BAD_REQUEST, "request body must be valid JSON")
+                    .into_response();
+            };
+            if !request.confirm {
+                return (StatusCode::BAD_REQUEST, "confirm must be true").into_response();
+            }
+            match run_power_action(action, state.dry_run) {
+                Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+                Err(err) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("power command failed: {err}"),
+                )
+                    .into_response(),
+            }
+        }
+        Err(err) => (StatusCode::UNAUTHORIZED, err.to_string()).into_response(),
+    }
+}
+
+fn verify_headers(
+    state: &AppState,
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(), AuthError> {
+    let timestamp = header_str(headers, "x-timestamp")?
+        .parse::<i64>()
+        .map_err(|_| AuthError::MissingHeader)?;
+    let nonce = header_str(headers, "x-nonce")?;
+    let signature = header_str(headers, "x-signature")?;
+
+    verify_request(
+        &state.auth,
+        &state.nonces,
+        method.as_str(),
+        uri.path(),
+        timestamp,
+        nonce,
+        body,
+        signature,
+        OffsetDateTime::now_utc(),
+    )
+}
+
+fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, AuthError> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .ok_or(AuthError::MissingHeader)
+}
