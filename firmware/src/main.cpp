@@ -125,7 +125,7 @@ String nonce() {
 }
 
 String agentUrl(const char *path) {
-  return String("http://") + AGENT_HOST + ":" + String(AGENT_PORT) + path;
+  return String("http://") + PC_IP_ADDRESS + ":" + String(AGENT_PORT) + path;
 }
 
 bool postAgentCommand(const char *path) {
