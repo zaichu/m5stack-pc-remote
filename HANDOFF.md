@@ -35,6 +35,7 @@
 - `bash -n scripts/*.sh` は成功。
 - secretパターンの簡易検索は検出なし。
 - Git hooks は `core.hooksPath=.githooks` に設定済み。
+- 外部スマホ操作経路は、ユーザーから「コストはゼロにすること。絶対守る」と明示され、さらに「賃貸の無料回線なのでルーター無い」と共有されたため、Cloudflare Worker案とルーターVPN案を下げ、Telegram Bot API long polling方式へ変更した。正本は `docs/external-access.md` と `docs/cost.md`。
 
 ## 実機動作確認 (2026-08-31)
 

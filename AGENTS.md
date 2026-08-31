@@ -6,7 +6,8 @@
 - 実装はフェーズごとに動作確認できる状態を維持する。最初の正本は `Wi-Fi接続 -> Wake-on-LAN -> STATUS`。
 - M5Stack firmware は `firmware/` に閉じる。原則として PlatformIO + Arduino Framework + M5Unified を使う。
 - Windows Agent は `windows-agent/` に閉じる。Rustで単一バイナリ配布できる構成を維持する。
-- 外部スマートフォン操作は直接 Windows Agent へ到達させない。将来も `Smartphone -> Cloudflare Worker等 -> M5Stack -> Windows PC` を基本経路にする。
+- 外部スマートフォン操作は直接 Windows Agent へ到達させない。ルーターVPNを前提にできない環境では `Smartphone -> Telegram Bot API -> M5Stack -> Windows PC` を基本経路にする。
+- 外部操作経路はコストゼロを絶対条件にする。月額課金、従量課金、無料枠超過で課金される可能性があるサービスを運用必須経路にしない。
 - Windows Agent の管理ポートをインターネットへ直接公開しない。
 - `REBOOT` / `SHUTDOWN` は HMAC-SHA256、timestamp、nonceで認証する。認証を弱めたり、LAN内だからという理由で無認証APIを追加しない。
 - 秘密鍵、Wi-Fiパスワード、PCの実MACアドレス、実LAN構成はGitへ入れない。

@@ -21,15 +21,17 @@ Phase 1では Windows Agent を使わず、M5Stack から Magic Packet を送信
 
 ```text
 Smartphone
-  ↓ HTTPS
-Cloudflare Worker等
-  ↓ authenticated relay
+  ↓ Telegram app
+Telegram Bot API
+  ↓ outbound HTTPS long polling
 M5Stack Core2
   ↓ WOL / authenticated LAN request
 Windows PC
 ```
 
-Windows AgentはLAN内限定です。外部公開が必要な場合でも、公開するのはWorker等の中継層に限定します。
+Windows AgentはLAN内限定です。外部公開が必要な場合でも、Windows Agentの管理ポートは直接公開せず、M5Stackが外向きHTTPSで取得したコマンドだけを実行します。
+
+詳細設計は [External Access Design](external-access.md) を正本にします。コストゼロを絶対条件にし、ルーターVPNを前提にできないため、初期案はTelegram Bot APIのlong polling方式です。
 
 ## 境界
 

@@ -24,14 +24,15 @@ Windows 11 Pro PC
 ```text
 Smartphone
   ↓
-Cloudflare Worker等
+Telegram Bot API
   ↓
 M5Stack Core2
   ↓
 Windows PC
 ```
 
-Windows Agent のポートをインターネットへ直接公開しません。
+Windows Agent のポートをインターネットへ直接公開しません。賃貸無料回線などでルーターVPNを前提にできない場合は、M5StackがTelegram Bot APIを外向きHTTPSでlong pollingしてコマンドを受け取ります。
+外部操作経路はコストゼロを絶対条件にし、月額課金・従量課金・無料枠超過リスクのある構成を運用必須経路にしません。
 
 ## 技術選定
 
@@ -136,3 +137,5 @@ Gitへ入れないファイル:
 - [Architecture](docs/architecture.md)
 - [Phases](docs/phases.md)
 - [Security](docs/security.md)
+- [External Access Design](docs/external-access.md)
+- [Cost Policy](docs/cost.md)
