@@ -39,5 +39,5 @@ if ($RemoveFiles) {
         Write-Host "Install directory removed: $InstallDir"
     }
 } else {
-    Write-Host "Install directory kept: $InstallDir (-RemoveFiles で削除できます。config.tomlにshared_secretが含まれる点に注意してください)"
+    Write-Host "Install directory kept: $InstallDir (-RemoveFiles で削除できます。config.tomlにshared_secretが含まれ、ACLはAdministratorsとSYSTEMのみ読み取り可能に制限されています。手動でACLを変更していないか確認してください)"
 }

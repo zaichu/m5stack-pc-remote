@@ -21,8 +21,9 @@ cargo build --release
 ## インストール(Windows起動時の自動起動)
 
 管理者PowerShellで実行します。`config.toml` が無い場合は `config.example.toml` から
-ランダムな `shared_secret` を生成して作成します(生成後、`firmware/include/config.h` の
-`AGENT_SHARED_SECRET` を同じ値に必ず合わせてください)。
+暗号論的乱数(`RandomNumberGenerator`、64文字)で生成した `shared_secret` を使って
+作成します(生成後、`firmware/include/config.h` の `AGENT_SHARED_SECRET` を
+同じ値に必ず合わせてください)。
 
 ```powershell
 .\install.ps1
@@ -33,6 +34,11 @@ cargo build --release
 `config.toml` の `bind` ポートに対してプライベートネットワークプロファイル限定の
 Windows Firewall受信許可ルールも作成します(Windows Firewallは既定でこの種の
 未知のアプリへの受信を静かにブロックするため、実機確認で必須と分かりました)。
+
+インストール先ディレクトリのACLは、`icacls` でAdministratorsとSYSTEMのみに
+読み取り・書き込みを制限します。`config.toml` はREBOOT/SHUTDOWNの認証に使う
+shared_secretを平文で含むため、ローカルの一般ユーザーから読めないようにする
+ためです。
 
 インストール直後にエージェントを起動する場合は `-Start` を付けます。
 
