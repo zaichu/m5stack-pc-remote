@@ -18,21 +18,36 @@ cargo build --release
 .\target\release\pc-remote-agent.exe --config .\config.toml
 ```
 
-## Windows起動時の自動起動
+## インストール(Windows起動時の自動起動)
 
-管理者PowerShellで実行します。
-
-```powershell
-.\install-scheduled-task.ps1
-```
-
-削除:
+管理者PowerShellで実行します。`config.toml` が無い場合は `config.example.toml` から
+ランダムな `shared_secret` を生成して作成します(生成後、`firmware/include/config.h` の
+`AGENT_SHARED_SECRET` を同じ値に必ず合わせてください)。
 
 ```powershell
-.\uninstall-scheduled-task.ps1
+.\install.ps1
 ```
 
-本番運用で `dry_run = false` にする前に、Windows Firewall で待受ポートをプライベートネットワークに限定してください。
+`%ProgramData%\m5stack-pc-remote-agent\` へバイナリと設定を配置し、Windows起動時に
+`SYSTEM` 権限でエージェントを起動するScheduled Taskを登録します。同時に、
+`config.toml` の `bind` ポートに対してプライベートネットワークプロファイル限定の
+Windows Firewall受信許可ルールも作成します(Windows Firewallは既定でこの種の
+未知のアプリへの受信を静かにブロックするため、実機確認で必須と分かりました)。
+
+インストール直後にエージェントを起動する場合は `-Start` を付けます。
+
+```powershell
+.\install.ps1 -Start
+```
+
+アンインストール(Scheduled TaskとFirewallルールを削除、`-RemoveFiles` でインストール先も削除):
+
+```powershell
+.\uninstall.ps1 -RemoveFiles
+```
+
+本番運用で `dry_run = false` にする前に、`%ProgramData%\m5stack-pc-remote-agent\config.toml`
+の内容を再確認してください。
 
 ## API
 

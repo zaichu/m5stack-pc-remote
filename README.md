@@ -101,9 +101,11 @@ M5Stackからの `POST /reboot` / `POST /shutdown` は、HMAC署名に加えてJ
 ```
 
 Windows起動時に自動起動するには、管理者PowerShellで以下を実行します。
+バイナリ配置・設定ファイル生成・Windows Firewall受信許可ルール作成・Scheduled Task登録を
+まとめて行います(詳細は `windows-agent/README.md` 参照)。
 
 ```powershell
-.\install-scheduled-task.ps1
+.\install.ps1
 ```
 
 ## ローカル品質チェック
