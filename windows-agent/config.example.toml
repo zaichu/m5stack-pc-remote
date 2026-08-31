@@ -1,0 +1,4 @@
+bind = "0.0.0.0:18080"
+shared_secret = "replace-with-a-long-random-shared-secret"
+allowed_skew_seconds = 60
+dry_run = true

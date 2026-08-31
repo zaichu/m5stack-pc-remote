@@ -1,0 +1,33 @@
+# Local firmware secrets.
+firmware/include/config.h
+
+# Windows Agent local secrets.
+windows-agent/config.toml
+
+# Rust generated files.
+target/
+windows-agent/target/
+
+# PlatformIO generated files.
+firmware/.pio/
+firmware/.vscode/
+
+# Local env and secret files.
+.env
+.env.*
+!.env.example
+!.env.local.example
+*secret*.json
+*credential*.json
+*service-account*.json
+*.key
+*.pem
+
+# Local caches and logs.
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+*.log
+docs/tasks/

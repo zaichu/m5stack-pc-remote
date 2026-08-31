@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+zero_sha="0000000000000000000000000000000000000000"
+
+ref_lines=""
+while IFS= read -r line || [[ -n "$line" ]]; do
+  ref_lines="${ref_lines}${line}"$'\n'
+done
+
+has_updates=0
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  [[ -z "${local_ref:-}" ]] && continue
+  if [[ "$local_sha" != "$zero_sha" && "$remote_ref" == "refs/heads/main" ]]; then
+    echo "ERROR: direct push to refs/heads/main is blocked. Open a pull request instead." >&2
+    exit 1
+  fi
+  if [[ "$local_sha" != "$zero_sha" ]]; then
+    has_updates=1
+  fi
+done <<<"$ref_lines"
+
+if [[ "$has_updates" -eq 1 ]]; then
+  local_env_var_lines=""
+  while IFS= read -r local_env_var_line || [[ -n "$local_env_var_line" ]]; do
+    local_env_var_lines="${local_env_var_lines}${local_env_var_line}"$'\n'
+  done < <(git rev-parse --local-env-vars)
+
+  while IFS= read -r local_env_var_name || [[ -n "$local_env_var_name" ]]; do
+    [[ -z "$local_env_var_name" ]] && continue
+    unset "$local_env_var_name"
+  done <<<"$local_env_var_lines"
+
+  cd "$repo_root"
+  make git-pre-push
+fi

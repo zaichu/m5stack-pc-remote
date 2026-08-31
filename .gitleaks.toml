@@ -1,0 +1,4 @@
+title = "m5stack-pc-remote gitleaks config"
+
+[extend]
+useDefault = true
