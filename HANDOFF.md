@@ -44,7 +44,15 @@
   1. `__has_include("config.h")` がESP32ツールチェーン自身の無関係な `sys-include/config.h` を検出してしまい、ローカル `config.h` 未作成時に `config.example.h` へフォールバックせずビルド失敗していた。マクロ未定義判定 (`#ifndef WIFI_SSID`) に変更して修正。
   2. `connectWifi()` の再試行間隔ガードが起動直後の初回呼び出しにも適用され、`WiFi.mode()`が一度も呼ばれないまま `udp.begin()` がlwIPスタック初期化前に実行され `assert failed: tcpip_send_msg_wait_sem ... (Invalid mbox)` でクラッシュループしていた。`wifiConnectStarted` フラグを追加し初回呼び出しはガードを無視するよう修正。
 - 修正後、`config.example.h`のダミーSSIDのまま30秒以上クラッシュなしで安定動作(Wi-Fi接続自体はNO_AP_FOUNDで失敗するが想定通り)。
-- 実際のWi-Fi/PC設定を使った接続確認・画面タッチ操作(WAKE/REBOOT/SHUTDOWN)・Windows Agent連携は未実施。次セッションでの確認事項とする。
+- 実際の2.4GHz帯Wi-Fi設定に切り替えて接続成功。STATUS(ICMP ping)はWindows Firewallの既定設定でICMPv4 Echo Requestがブロックされ100%ロスだったが、
+  `netsh advfirewall firewall add rule name="ICMP Allow incoming V4 echo request" protocol=icmpv4:8,any dir=in action=allow` で解消。ONLINE表示・WAKE/REBOOT/SHUTDOWNボタン表示を確認。
+- `AGENT_HOST`と`PC_IP_ADDRESS`が別マクロだったため、`config.h`作成時に`PC_IP_ADDRESS`だけ実PCのIPへ書き換えて`AGENT_HOST`をexampleのプレースホルダーのまま放置し、Agentへの接続が`connection refused`になる不具合が発生した。同一PCを指す設定を分離していたこと自体が問題のため、`AGENT_HOST`マクロを廃止して`agentUrl()`は`PC_IP_ADDRESS`を使うよう`firmware/src/main.cpp`・`firmware/include/config.example.h`を修正した。
+- Windows Agent(`windows-agent/`)はこのWSL2環境からWindows向けにクロスビルドして実機で動作確認した。WSL2側にはWindows用Rustツールチェーンが無いため、`rustup target add x86_64-pc-windows-gnu` と `sudo apt-get install -y mingw-w64` を追加し、`cargo build --release --target x86_64-pc-windows-gnu` で `pc-remote-agent.exe` を生成。`windows-agent/config.toml`は`firmware/include/config.h`の`AGENT_PORT`/`AGENT_SHARED_SECRET`と値を一致させて作成(値はコミット・ログに残していない)。
+- 生成した`.exe`と`config.toml`をPC上の作業ディレクトリへ配置し、`Start-Process`で手動起動して動作確認した(Task Schedulerへの登録はまだ)。Windows Firewallの既定設定で外部ホストからのTCP 18080着信もブロックされていたため、
+  `netsh advfirewall firewall add rule name="pc-remote-agent inbound 18080" dir=in action=allow protocol=TCP localport=18080 profile=private` で解消。
+- 上記対応後、M5Stack実機からの`SHUTDOWN`/`REBOOT`ボタン操作でエージェントへの署名付きPOSTが両方とも`200`で成功(HMAC認証・confirm必須チェックとも正常)。`dry_run = true`のため実際の電源操作は未実行。
+- 未検証: WAKE(Wake-on-LAN)の実地確認(PCがONの状態では意味のあるテストができないため)、`dry_run = false`にした実際のSHUTDOWN/REBOOT実行、Windows Agentの常駐化(Task Scheduler登録)。次セッションでの確認事項とする。
+- NICの`Wake on Magic Packet`/`Shutdown Wake-On-Lan`はドライバ側で有効になっていることを確認済み(`Get-NetAdapterAdvancedProperty`)。`config.h`の`PC_MAC_ADDRESS`/`PC_IP_ADDRESS`/`WOL_BROADCAST_ADDRESS`が実機と一致していることも確認済み(値自体はログに残していない)。
 
 ## 次のセッションへの依頼例
 
