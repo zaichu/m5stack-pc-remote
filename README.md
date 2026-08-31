@@ -58,8 +58,6 @@ cp include/config.example.h include/config.h
 #define PC_HOSTNAME "desktop"
 #define PC_IP_ADDRESS "192.168.1.100"
 #define PC_MAC_ADDRESS "AA:BB:CC:DD:EE:FF"
-#define WOL_BROADCAST_ADDRESS "192.168.1.255"
-#define AGENT_HOST "192.168.1.100"
 #define AGENT_PORT 18080
 #define AGENT_SHARED_SECRET "replace-with-the-same-secret-as-windows-agent"
 ```

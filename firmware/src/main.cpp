@@ -184,15 +184,17 @@ bool sendWakeOnLan() {
     memcpy(packet + i * 6, mac, 6);
   }
 
-  IPAddress broadcast;
-  if (!broadcast.fromString(WOL_BROADCAST_ADDRESS)) {
-    Serial.println("invalid WOL_BROADCAST_ADDRESS");
-    return false;
-  }
+  // Use the limited broadcast address instead of a subnet-directed broadcast
+  // computed from the local subnet mask, so WOL keeps working regardless of
+  // the LAN's actual prefix length (e.g. a /16 network, not /24).
+  IPAddress broadcast(255, 255, 255, 255);
 
-  udp.beginPacket(broadcast, WOL_PORT);
-  udp.write(packet, sizeof(packet));
-  return udp.endPacket() == 1;
+  bool began = udp.beginPacket(broadcast, WOL_PORT) != 0;
+  size_t written = udp.write(packet, sizeof(packet));
+  bool ended = udp.endPacket() == 1;
+  Serial.printf("WOL: beginPacket=%d written=%u/%u endPacket=%d\n", began,
+                (unsigned)written, (unsigned)sizeof(packet), ended);
+  return began && written == sizeof(packet) && ended;
 }
 
 void updateStatus() {
