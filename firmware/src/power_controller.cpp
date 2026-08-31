@@ -155,6 +155,11 @@ bool postAgentCommand(const char *path) {
 
   HTTPClient http;
   http.begin(agentUrl(path));
+  // Keep this short: the call holds powerMutex, which also blocks the
+  // touch UI confirm flow and the Telegram task while a request is in
+  // flight, so a slow/unreachable Windows Agent should fail fast.
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Timestamp", String(timestamp));
   http.addHeader("X-Nonce", requestNonce);

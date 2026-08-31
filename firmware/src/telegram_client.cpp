@@ -14,6 +14,7 @@
 #include <freertos/task.h>
 
 #include "power_controller.h"
+#include "telegram_root_ca.h"
 
 #if __has_include("config.h")
 #include "config.h"
@@ -77,7 +78,7 @@ String generateConfirmNonce() {
 
 void sendReply(int64_t chatId, const String &text) {
   WiFiClientSecure client;
-  client.setInsecure();
+  client.setCACert(TELEGRAM_ROOT_CA_PEM);
   HTTPClient https;
   if (!https.begin(client, telegramApiUrl("sendMessage"))) {
     return;
@@ -264,7 +265,7 @@ void pollTask(void *) {
     }
 
     WiFiClientSecure client;
-    client.setInsecure();
+    client.setCACert(TELEGRAM_ROOT_CA_PEM);
     HTTPClient https;
     String url = telegramApiUrl("getUpdates");
     url += "?timeout=";

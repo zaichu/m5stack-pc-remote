@@ -73,7 +73,17 @@
 - `firmware/include/config.example.h`(および実機用のローカル`config.h`、コミット対象外)に`TELEGRAM_BOT_TOKEN`、`TELEGRAM_ALLOWED_USER_ID`、`TELEGRAM_LONG_POLL_TIMEOUT_SECONDS`、`TELEGRAM_CONFIRM_TTL_MS`を追加。`TELEGRAM_BOT_TOKEN`/`TELEGRAM_ALLOWED_USER_ID`がplaceholderのままだとTelegramタスク自体を起動せず、画面は`Telegram: disabled`になる(既存のタッチUI・WOL・STATUSは無変更で動作)。
 - `make check`(Rust fmt/clippy/test + `pio run -d firmware`)、`bash -n scripts/*.sh`、`git diff --check`、secretパターン検索はすべて成功・検出なし。この環境には実際にPlatformIO CLIが入っており`firmware-build`はスキップされず実行された。
 - **実Telegram疎通は未確認。** 実bot token・実user idを使った動作確認(`docs/external-access.md`のPhase 5D: 実機での`/status`・`/wake`・`/reboot`・`/shutdown`)はこのセッションでは行っていない。次回、実bot tokenとuser idを`config.h`に設定した上で実機書き込み・動作確認が必要。
-- Telegram APIとのHTTPS通信は`WiFiClientSecure::setInsecure()`でサーバー証明書検証を省略している。残リスクとして`docs/external-access.md`・`docs/security.md`に明記済み。将来Codexレビューで証明書検証の要否を判断する。
+
+## Codexレビュー対応: TLS証明書検証の有効化 (2026-09-01)
+
+- PR #10のCodexレビューで「`WiFiClientSecure::setInsecure()`によりTelegram Bot APIのサーバー証明書検証を無効化しており、bot tokenがURLに含まれ`/reboot`・`/shutdown`の外部操作経路でもあるためマージ不可」という指摘を受け、対応した。
+- `firmware/src/telegram_root_ca.h`を新規追加。`openssl s_client`で実際に`api.telegram.org:443`のTLSチェーンを取得し、葉証明書(GoDaddy発行、約1年で更新)ではなく自己署名のルートCA(「Go Daddy Root Certificate Authority - G2」、有効期限2037-12-31)を埋め込んだ。ファイル内にsubject・有効期限・SHA-256 fingerprint・取得日をコメントで記録済み。
+- `firmware/src/telegram_client.cpp`の`sendReply()`・pollingループの両方で`client.setInsecure()`を`client.setCACert(TELEGRAM_ROOT_CA_PEM)`に置き換えた。`setInsecure()`の呼び出しはリポジトリ内に残っていない(コメントの言及のみ)。
+- bot token・user idをログへ出さない方針は変更なし(既存のまま維持)。
+- ついでの対応として、`firmware/src/power_controller.cpp`の`postAgentCommand()`にHTTPClientの明示timeout(`setConnectTimeout(3000)` / `setTimeout(3000)`)を追加した。この呼び出しは`powerMutex`を保持したまま実行されるため、Windows Agentが応答しない場合でもタッチUI・Telegramタスクを長時間ブロックしないようにする狙い。
+- CA証明書のローテーション運用(将来Telegramがルート認証局を切り替えた場合の症状・復旧手順)を`docs/external-access.md`・`docs/security.md`・README.mdに追記した。
+- 検証: `pio run -d firmware`(証明書埋め込み後の再ビルド含む)、`make check`、`bash -n scripts/*.sh`、`git diff --check`、secretパターン検索。すべて成功・検出なし。
+- 埋め込んだのはルート認証局の公開証明書のみで、秘密情報ではない。実Telegram疎通(実bot tokenでの動作確認)は引き続き未実施。
 
 ## 次のセッションへの依頼例
 

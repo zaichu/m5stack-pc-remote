@@ -147,6 +147,8 @@ Telegramアプリから許可したuser idのアカウントで、bot宛てに�
 - `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
 - `/reboot` / `/shutdown`: 即実行せず、確認nonce付きの `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を送るよう案内が返信されます。nonceは `TELEGRAM_CONFIRM_TTL_MS` の間だけ有効で、一度使う(または期限切れになる)と再利用できません。
 
+Telegram APIとのTLS通信は `firmware/src/telegram_root_ca.h` に埋め込んだルートCA証明書でサーバー証明書を検証します。Telegramが将来ルート認証局を切り替えた場合、画面が `Telegram: polling` から `Telegram: error` に変わります。その場合の証明書更新手順は [External Access Design](docs/external-access.md) の「CA証明書のローテーション運用」を参照してください。
+
 ## ローカル品質チェック
 
 ```bash

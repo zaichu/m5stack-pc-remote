@@ -46,7 +46,8 @@ Agentの待受ポートはプライベートネットワークに限定します
 - 確認コマンド (`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>`) はnonce一致・TTL内・actionの種類(reboot/shutdown)一致のときだけ実行する。
 - nonceは実行の成功/失敗、またはnonce不一致・期限切れに関わらず1回で消費し、以降の `/confirm_*` では再利用できない。これにより同じ確認要求へのnonce総当たりを防ぐ。
 - 確認実行時は既存のWindows Agent向けHMAC署名付きPOST (`postAgentCommand`) をそのまま使うため、Windows Agent側の `confirm: true` 必須条件・timestamp・nonce検証はTelegram経由でも同様に効く。
-- TelegramとのHTTPS通信 (`WiFiClientSecure`) は `setInsecure()` でサーバー証明書検証を省略している。トークン自体は漏れないが、経路上の第三者による通信内容の盗聴・改ざんに対する保証は弱い。残リスクとして `docs/external-access.md` に明記する。
+- TelegramとのHTTPS通信 (`WiFiClientSecure`) は `setCACert()` でサーバー証明書チェーンを検証する。ルートCAは `firmware/src/telegram_root_ca.h` に埋め込んだ「Go Daddy Root Certificate Authority - G2」(有効期限2037-12-31)。bot tokenは全てのTelegram API URLに含まれるため、経路上の中間者攻撃に対しても証明書検証で保護する。`setInsecure()`(証明書検証省略)は使わない。
+- Telegramがルート認証局を切り替えた場合、この検証は失敗するようになる(画面が `Telegram: error` になる)。ローテーション手順は `docs/external-access.md` の「CA証明書のローテーション運用」を正本とする。
 
 ## shared_secret の保存とACL
 
