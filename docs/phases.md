@@ -32,6 +32,9 @@
 
 ## Phase 5: 外部操作
 
-- Cloudflare Worker等の中継層を追加する。
-- M5Stackが外部コマンドを安全に取得または受信できる方式を選ぶ。
+- [External Access Design](external-access.md) を正本にする。
+- コストゼロを絶対条件にする。
+- ルーターVPNを前提にできないため、初期案はTelegram Bot API long polling方式にする。
+- M5Stackに `/status`、`/wake`、`/reboot`、`/shutdown` のTelegram command処理を追加する。
+- `TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` を追加し、Windows Agent用の `AGENT_SHARED_SECRET` と分離する。
 - 外部からも WAKE、STATUS、REBOOT、SHUTDOWN を扱えるようにする。
