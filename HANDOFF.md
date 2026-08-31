@@ -51,7 +51,9 @@
 - 生成した`.exe`と`config.toml`をPC上の作業ディレクトリへ配置し、`Start-Process`で手動起動して動作確認した(Task Schedulerへの登録はまだ)。Windows Firewallの既定設定で外部ホストからのTCP 18080着信もブロックされていたため、
   `netsh advfirewall firewall add rule name="pc-remote-agent inbound 18080" dir=in action=allow protocol=TCP localport=18080 profile=private` で解消。
 - 上記対応後、M5Stack実機からの`SHUTDOWN`/`REBOOT`ボタン操作でエージェントへの署名付きPOSTが両方とも`200`で成功(HMAC認証・confirm必須チェックとも正常)。`dry_run = true`のため実際の電源操作は未実行。
-- 未検証: WAKE(Wake-on-LAN)の実地確認(PCがONの状態では意味のあるテストができないため)、`dry_run = false`にした実際のSHUTDOWN/REBOOT実行、Windows Agentの常駐化(Task Scheduler登録)。次セッションでの確認事項とする。
+- 未検証: WAKE(Wake-on-LAN)の実地確認(PCがONの状態では意味のあるテストができないため)、`dry_run = false`にした実際のSHUTDOWN/REBOOT実行。次セッションでの確認事項とする。
+- Windows Agentの配布・常駐化を`windows-agent/install.ps1`(新規)に統合した。バイナリ配置、`config.toml`未作成時のexampleからの生成(ランダムshared_secret付き)、Windows Firewallの受信許可ルール作成、Scheduled Task登録(`SYSTEM`権限・起動時トリガー)を一括で行う。対になる`uninstall.ps1`も追加し、旧`install-scheduled-task.ps1`/`uninstall-scheduled-task.ps1`は置き換えて削除した。
+- ユーザーから「Task SchedulerではなくWindowsサービス化したら?」という提案があったが、AGENTS.md/CLAUDE.mdで「Windowsサービス化方針」はCodexレビュー前提と定められているため、今回は実装せず据え置いた。次回、Codexで設計レビューしてから着手する別タスクとする(`windows-service`クレート導入、SCMコールバック対応、ログ出力方式変更などが必要になる想定)。
 - NICの`Wake on Magic Packet`/`Shutdown Wake-On-Lan`はドライバ側で有効になっていることを確認済み(`Get-NetAdapterAdvancedProperty`)。`config.h`の`PC_MAC_ADDRESS`/`PC_IP_ADDRESS`/`WOL_BROADCAST_ADDRESS`が実機と一致していることも確認済み(値自体はログに残していない)。
 
 ## 次のセッションへの依頼例
