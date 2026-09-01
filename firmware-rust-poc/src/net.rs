@@ -105,3 +105,34 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
         Err(e) => e.kind() == io::ErrorKind::ConnectionRefused,
     }
 }
+
+/// Starts SNTP so the system clock becomes real. The Windows Agent verifies
+/// the request timestamp against its own clock, so signed REBOOT/SHUTDOWN
+/// commands only work once this has synced. The returned handle must be kept
+/// alive; dropping it stops the client.
+pub fn start_sntp() -> Result<esp_idf_svc::sntp::EspSntp<'static>, Box<dyn Error>> {
+    Ok(esp_idf_svc::sntp::EspSntp::new_default()?)
+}
+
+/// Blocks until the system clock looks NTP-synced, or `timeout` elapses.
+/// Mirrors the C++ firmware's waitForNtpSync(): best-effort, so callers
+/// continue even on timeout (the agent request itself refuses a bad clock).
+pub fn wait_for_time_sync(timeout: Duration) -> bool {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
+
+    let start = std::time::Instant::now();
+    loop {
+        let synced = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() >= MIN_VALID_UNIX_TIME)
+            .unwrap_or(false);
+        if synced {
+            return true;
+        }
+        if start.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}

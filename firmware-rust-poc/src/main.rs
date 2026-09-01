@@ -1,109 +1,29 @@
+mod agent;
 mod board;
 mod config;
 mod net;
+mod ui;
 
 use std::cell::RefCell;
 use std::error::Error;
 use std::time::{Duration, Instant};
 
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_9X18_BOLD};
-use embedded_graphics::mono_font::MonoTextStyle;
-use embedded_graphics::pixelcolor::Rgb565;
-use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::Text;
 use esp_idf_hal::peripherals::Peripherals;
 
-use board::{Core2Display, DisplayPins, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use agent::PowerAction;
+use board::{DisplayPins, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use config::{PC_MAC_ADDRESS, PC_STATUS_ADDR, WIFI_PASSWORD, WIFI_SSID, WOL_PORT};
+use ui::{Status, TelegramState};
 
 const STATUS_INTERVAL: Duration = Duration::from_secs(10);
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
+const TOAST_TTL: Duration = Duration::from_secs(3);
 
-/// Full-width band at the bottom of the screen that acts as the WAKE button.
-/// Taps on the physical button strip below the display (touch y 240..279) fall
-/// in this range too, so either works.
-const WAKE_BUTTON_TOP: i32 = 180;
-
-fn draw_screen(
-    display: &mut Core2Display<'_>,
-    wifi_connected: bool,
-    pc_online: bool,
-    toast: Option<&str>,
-) -> Result<(), Box<dyn Error>> {
-    display
-        .clear(Rgb565::BLACK)
-        .map_err(|e| format!("clear failed: {e:?}"))?;
-
-    let title = MonoTextStyle::new(&FONT_6X10, Rgb565::CSS_LIGHT_GRAY);
-    Text::new("m5remote-rust-poc", Point::new(8, 14), title)
-        .draw(display)
-        .map_err(|e| format!("draw failed: {e:?}"))?;
-
-    let wifi_style = MonoTextStyle::new(
-        &FONT_6X10,
-        if wifi_connected {
-            Rgb565::GREEN
-        } else {
-            Rgb565::RED
-        },
-    );
-    Text::new(
-        if wifi_connected {
-            "Wi-Fi: connected"
-        } else {
-            "Wi-Fi: disconnected"
-        },
-        Point::new(8, 32),
-        wifi_style,
-    )
-    .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
-
-    let status_style = MonoTextStyle::new(
-        &FONT_10X20,
-        if pc_online {
-            Rgb565::GREEN
-        } else {
-            Rgb565::RED
-        },
-    );
-    Text::new(
-        if pc_online { "ONLINE" } else { "OFFLINE" },
-        Point::new(110, 100),
-        status_style,
-    )
-    .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
-
-    // WAKE button
-    Rectangle::new(
-        Point::new(8, WAKE_BUTTON_TOP),
-        Size::new(DISPLAY_WIDTH as u32 - 16, 48),
-    )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_GREEN))
-    .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
-    Text::new(
-        "WAKE (touch here)",
-        Point::new(80, WAKE_BUTTON_TOP + 30),
-        MonoTextStyle::new(&FONT_9X18_BOLD, Rgb565::WHITE),
-    )
-    .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
-
-    if let Some(text) = toast {
-        Text::new(
-            text,
-            Point::new(8, DISPLAY_HEIGHT as i32 - 8),
-            MonoTextStyle::new(&FONT_6X10, Rgb565::YELLOW),
-        )
-        .draw(display)
-        .map_err(|e| format!("draw failed: {e:?}"))?;
-    }
-
-    Ok(())
+/// Which screen the touch UI is currently showing.
+enum Screen {
+    Main,
+    Confirm(PowerAction),
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -143,7 +63,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         Err(e) => println!("touch init failed: {e:?}"),
     }
 
-    draw_screen(&mut display, false, false, Some("connecting Wi-Fi..."))?;
+    let mut status = Status {
+        wifi_connected: false,
+        pc_online: false,
+        telegram: TelegramState::Disabled,
+        toast: None,
+    };
+    let mut toast_text: Option<String> = None;
+    ui::draw_main(
+        &mut display,
+        &Status {
+            toast: Some("connecting Wi-Fi..."),
+            ..status
+        },
+    )?;
 
     // Held for the whole program: dropping it tears down the connection.
     let mut wifi = match net::Wifi::connect(peripherals.modem, WIFI_SSID, WIFI_PASSWORD) {
@@ -156,26 +89,46 @@ fn main() -> Result<(), Box<dyn Error>> {
             None
         }
     };
-    let mut wifi_connected = wifi.as_ref().is_some_and(net::Wifi::is_up);
+    status.wifi_connected = wifi.as_ref().is_some_and(net::Wifi::is_up);
 
-    let mut pc_online = false;
-    let mut toast: Option<String> = None;
-    draw_screen(&mut display, wifi_connected, pc_online, None)?;
+    // The Windows Agent rejects requests whose timestamp is outside its clock
+    // skew window, so the clock has to be real before REBOOT/SHUTDOWN work.
+    let _sntp = if status.wifi_connected {
+        match net::start_sntp() {
+            Ok(sntp) => {
+                println!("SNTP started");
+                Some(sntp)
+            }
+            Err(e) => {
+                println!("SNTP start failed: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
+    // REBOOT/SHUTDOWN carry a timestamp the agent checks against its own
+    // clock, so wait for the first NTP sync before the UI offers them.
+    if status.wifi_connected {
+        let synced = net::wait_for_time_sync(Duration::from_secs(15));
+        println!("SNTP synced: {synced}");
+    }
+
+    ui::draw_main(&mut display, &status)?;
+
+    let mut screen = Screen::Main;
     let mut status_at = Instant::now();
     let mut wifi_check_at = Instant::now();
-    let mut redraw_at = Instant::now();
+    let mut toast_at = Instant::now();
     let mut touch_was_down = false;
-    let mut touch_error_at = Instant::now() - Duration::from_secs(10);
-    let mut raw_dump_at = Instant::now();
 
     loop {
         // Re-associate if the link dropped, rate-limited like the C++ firmware.
         if wifi_check_at.elapsed() >= WIFI_RECONNECT_INTERVAL {
             wifi_check_at = Instant::now();
             if let Some(w) = wifi.as_mut() {
-                let up = w.is_up();
-                if !up {
+                if !w.is_up() {
                     println!("Wi-Fi down; reconnecting");
                     match w.reconnect() {
                         Ok(()) => println!("Wi-Fi reconnected"),
@@ -183,85 +136,104 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 let now_connected = w.is_up();
-                if now_connected != wifi_connected {
-                    wifi_connected = now_connected;
-                    if !wifi_connected {
-                        pc_online = false;
+                if now_connected != status.wifi_connected {
+                    status.wifi_connected = now_connected;
+                    if !status.wifi_connected {
+                        status.pc_online = false;
                     }
-                    draw_screen(&mut display, wifi_connected, pc_online, toast.as_deref())?;
+                    if matches!(screen, Screen::Main) {
+                        ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                    }
                 }
             }
         }
 
-        if wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
+        if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
             let now_online = net::check_pc_online(PC_STATUS_ADDR, STATUS_PROBE_TIMEOUT);
-            if now_online != pc_online {
-                pc_online = now_online;
-                println!("PC status changed: online={pc_online}");
+            if now_online != status.pc_online {
+                status.pc_online = now_online;
+                println!("PC status changed: online={}", status.pc_online);
             }
-            draw_screen(&mut display, wifi_connected, pc_online, toast.as_deref())?;
+            if matches!(screen, Screen::Main) {
+                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+            }
         }
 
-        // Rising-edge detection so one tap sends exactly one magic packet.
-        let touch_down = match touch.get_touch_event() {
-            Ok(event) => match event.p1 {
-                Some(p) => {
-                    let in_button = (p.y as i32) >= WAKE_BUTTON_TOP;
-                    if !touch_was_down {
-                        println!(
-                            "touch: x={} y={} in_wake_button={in_button}",
-                            p.x, p.y
-                        );
-                    }
-                    if !touch_was_down && in_button {
-                        println!("WAKE tapped at x={} y={}", p.x, p.y);
-                        toast = Some(match net::send_wake_on_lan(PC_MAC_ADDRESS, WOL_PORT) {
-                            Ok(()) => {
-                                println!("WOL sent");
-                                "Magic Packet sent".to_string()
-                            }
-                            Err(e) => {
-                                println!("WOL failed: {e}");
-                                "WOL failed".to_string()
-                            }
-                        });
-                        draw_screen(&mut display, wifi_connected, pc_online, toast.as_deref())?;
-                        redraw_at = Instant::now();
-                    }
-                    true
-                }
-                None => false,
-            },
-            Err(e) => {
-                // Throttled: this polls every 20ms, so log only occasionally.
-                if touch_error_at.elapsed() >= Duration::from_secs(5) {
-                    touch_error_at = Instant::now();
-                    println!("touch read error: {e:?}");
-                }
-                false
-            }
+        // Rising-edge detection so one tap triggers exactly one action.
+        let touch_point = match touch.get_touch_event() {
+            Ok(event) => event.p1.map(|p| (p.x as i32, p.y as i32)),
+            Err(_) => None,
         };
+        let touch_down = touch_point.is_some();
+
+        if let Some((x, y)) = touch_point {
+            if !touch_was_down {
+                match screen {
+                    Screen::Main => {
+                        if ui::WAKE_BUTTON.contains(x, y) {
+                            println!("WAKE tapped at x={x} y={y}");
+                            toast_text =
+                                Some(match net::send_wake_on_lan(PC_MAC_ADDRESS, WOL_PORT) {
+                                    Ok(()) => {
+                                        println!("WOL sent");
+                                        "Magic Packet sent".to_string()
+                                    }
+                                    Err(e) => {
+                                        println!("WOL failed: {e}");
+                                        "WOL failed".to_string()
+                                    }
+                                });
+                            toast_at = Instant::now();
+                            ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                        } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
+                            screen = Screen::Confirm(PowerAction::Reboot);
+                            ui::draw_confirm(&mut display, PowerAction::Reboot)?;
+                        } else if status.pc_online && ui::SHUTDOWN_BUTTON.contains(x, y) {
+                            screen = Screen::Confirm(PowerAction::Shutdown);
+                            ui::draw_confirm(&mut display, PowerAction::Shutdown)?;
+                        }
+                    }
+                    Screen::Confirm(action) => {
+                        if ui::CANCEL_BUTTON.contains(x, y) {
+                            println!("{} cancelled", action.slug());
+                            screen = Screen::Main;
+                            toast_text = None;
+                            ui::draw_main(&mut display, &status)?;
+                        } else if ui::OK_BUTTON.contains(x, y) {
+                            println!("{} confirmed", action.slug());
+                            toast_text = Some(match agent::send_command(action) {
+                                Ok(code) if agent::is_accepted(code) => "Command accepted".into(),
+                                Ok(code) => format!("Command rejected ({code})"),
+                                Err(e) => {
+                                    println!("agent command failed: {e}");
+                                    "Command failed".to_string()
+                                }
+                            });
+                            toast_at = Instant::now();
+                            screen = Screen::Main;
+                            ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                        }
+                    }
+                }
+            }
+        }
         touch_was_down = touch_down;
 
-        // Periodic raw report dump: DEV_MODE, GEST_ID, TD_STATUS, P1 X/Y.
-        if raw_dump_at.elapsed() >= Duration::from_secs(5) {
-            raw_dump_at = Instant::now();
-            match board::read_touch_raw(&i2c_bus) {
-                Ok(raw) => println!(
-                    "touch raw: mode={:#04x} gest={:#04x} td_status={} p1={:02x?}",
-                    raw[0], raw[1], raw[2], &raw[3..7]
-                ),
-                Err(e) => println!("touch raw read failed: {e:?}"),
+        if toast_text.is_some() && toast_at.elapsed() >= TOAST_TTL {
+            toast_text = None;
+            if matches!(screen, Screen::Main) {
+                ui::draw_main(&mut display, &status)?;
             }
-        }
-
-        // Clear the toast a few seconds after it was shown.
-        if toast.is_some() && redraw_at.elapsed() >= Duration::from_secs(3) {
-            toast = None;
-            draw_screen(&mut display, wifi_connected, pc_online, None)?;
         }
 
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn with_toast<'a>(status: &Status<'a>, toast: &'a Option<String>) -> Status<'a> {
+    Status {
+        toast: toast.as_deref(),
+        ..*status
     }
 }
