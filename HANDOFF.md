@@ -13,8 +13,9 @@
   - M5Unified
   - Phase 1 は Wi-Fi、Wake-on-LAN、ICMP ping STATUS
 - M5Stack側(Rust化PoC、Issue #16): `firmware-rust-poc/`
-  - `firmware/` の置き換えではない。PoCが成功するまで `firmware/` は変更しない
-  - esp-idf-sys(std)ベース。`m5unified` crateでM5Unified(C++)をラップする方針を検証中
+  - `firmware/` の即時置き換えではない。完全移植と切り替え判断はIssue #17で管理する
+  - esp-idf-sys/esp-idf-svc/esp-idf-hal(std)ベースの純Rustスタック
+  - `m5unified` crateはESP-IDF I2C driver_ng競合のため不採用
 - Windows側: `windows-agent/`
   - Rust
   - HMAC-SHA256認証
