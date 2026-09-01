@@ -73,9 +73,9 @@ Issue #16のPoC成功条件に対する進捗:
 - [x] Wi-Fi接続できる
 - [x] STATUS相当の疎通確認ができる(ICMPではなくTCP connectプローブ)
 - [x] Core2画面にONLINE/OFFLINEとWi-Fi状態を表示できる
-- [x] Wake-on-LAN Magic Packetを送信できる(コード実装済み)
-- [ ] タッチ操作でWAKEできる(実装済み。タッチコントローラーの読み取りが機能していることは
-      生レジスタダンプ(`td_status`)で確認済みだが、実際のタップによるWOL送信は未確認)
+- [x] Wake-on-LAN Magic Packetを送信できる(実機のタッチ操作から送信を確認)
+- [x] タッチ操作でWAKEできる(実機タップで `touch: x=194 y=194 in_wake_button=true` →
+      `WAKE tapped` → `WOL sent` を確認)
 - [x] 秘密情報をGitへ入れない構成を維持できる(`src/config.rs`はGit管理外)
 - [x] `make check` にRust firmware PoCのbuild確認を追加(`make firmware-rust-poc-build`。
       espツールチェーン/ldproxy/`src/config.rs` が無い環境では警告してスキップ)
