@@ -91,9 +91,10 @@ copy config.example.toml config.toml
 cargo build --release
 ```
 
-`config.toml` の `shared_secret` を長いランダム値に変更してください。初期値の `dry_run = true` では実際のshutdown/rebootは実行されません。
+`config.toml` の `shared_secret` を32文字以上の長いランダム値に変更してください。`config.example.toml` のプレースホルダー値や短すぎる値のままではAgentは起動しません。初期値の `dry_run = true` では実際のshutdown/rebootは実行されません。
 
 M5Stackからの `POST /reboot` / `POST /shutdown` は、HMAC署名に加えてJSON本文の `{"confirm":true}` が必須です。
+Windows Agentの `GET /status` はAgentプロセス自体のヘルスチェックであり、PCの電源状態判定にはM5Stack firmware側のICMP ping STATUSを使います。
 
 起動:
 

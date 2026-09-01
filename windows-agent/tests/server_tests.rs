@@ -49,8 +49,9 @@ async fn status_returns_online_agent_health() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["online"], true);
+    assert_eq!(json["agent_online"], true);
     assert_eq!(json["agent"], "pc-remote-agent");
+    assert_eq!(json["status"], "ok");
 }
 
 #[tokio::test]
@@ -77,11 +78,17 @@ async fn reboot_accepts_signed_request_and_stays_dry_run() {
 async fn reboot_rejects_signed_request_without_confirm_true() {
     let app = router(config());
     let response = app
-        .oneshot(signed_post("/reboot", "server-nonce-1b", r#"{}"#))
+        .oneshot(signed_post(
+            "/reboot",
+            "server-nonce-1b",
+            r#"{"confirm":false}"#,
+        ))
         .await
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+    assert_eq!(&bytes[..], b"confirm must be true");
 }
 
 #[tokio::test]

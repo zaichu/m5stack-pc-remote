@@ -16,6 +16,17 @@ pub struct PowerResult {
 }
 
 pub fn run_power_action(action: PowerAction, dry_run: bool) -> anyhow::Result<PowerResult> {
+    run_power_action_with_executor(action, dry_run, execute_shutdown)
+}
+
+pub fn run_power_action_with_executor<F>(
+    action: PowerAction,
+    dry_run: bool,
+    mut executor: F,
+) -> anyhow::Result<PowerResult>
+where
+    F: FnMut(&[&str]) -> anyhow::Result<()>,
+{
     let args = match action {
         PowerAction::Reboot => vec!["/r", "/t", "0"],
         PowerAction::Shutdown => vec!["/s", "/t", "0"],
@@ -25,7 +36,7 @@ pub fn run_power_action(action: PowerAction, dry_run: bool) -> anyhow::Result<Po
         .collect::<Vec<_>>();
 
     if !dry_run {
-        Command::new("shutdown.exe").args(args).spawn()?;
+        executor(&args)?;
     }
 
     Ok(PowerResult {
@@ -36,4 +47,12 @@ pub fn run_power_action(action: PowerAction, dry_run: bool) -> anyhow::Result<Po
         dry_run,
         command,
     })
+}
+
+fn execute_shutdown(args: &[&str]) -> anyhow::Result<()> {
+    let status = Command::new("shutdown.exe").args(args).status()?;
+    if !status.success() {
+        anyhow::bail!("shutdown.exe exited with status {status}");
+    }
+    Ok(())
 }
