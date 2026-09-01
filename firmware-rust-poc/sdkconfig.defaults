@@ -1,0 +1,11 @@
+# M5Stack Core2 for AWS is a plain ESP32 (not S3), 16MB flash, with PSRAM.
+# Unlike the upstream m5unified-rs examples (which target ESP32-S3 and its
+# native USB-Serial-JTAG console), this board uses a CP2104 USB-UART bridge,
+# so the default UART console is left enabled instead of being overridden.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_COMPILER_CXX_EXCEPTIONS=y
+CONFIG_COMPILER_CXX_RTTI=y

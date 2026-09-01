@@ -1,0 +1,47 @@
+[package]
+name = "m5remote-rust-poc"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+publish = false
+
+[[bin]]
+name = "m5remote-rust-poc"
+path = "src/main.rs"
+
+[dependencies]
+# Pure-Rust hardware stack. Deliberately does NOT use the `m5unified` crate
+# (a wrapper around the M5Unified C++ library): that library uses ESP-IDF's
+# legacy I2C driver, which cannot be linked alongside the modern driver_ng
+# I2C support that the rest of the ESP-IDF Rust ecosystem pulls in. See
+# Issue #16 for the investigation.
+axp192 = "0.2"
+embedded-graphics = "0.8"
+embedded-hal = "1.0"
+embedded-hal-bus = "0.3"
+embedded-svc = "0.28"
+ft6x36 = "0.6"
+hex = "0.4"
+hmac = "0.12"
+mipidsi = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[target.'cfg(target_os = "espidf")'.dependencies]
+esp-idf-sys = { version = "0.36", default-features = false, features = ["std", "binstart"] }
+esp-idf-svc = { version = "0.51", default-features = false, features = ["std"] }
+esp-idf-hal = "0.45"
+
+[build-dependencies]
+embuild = { version = "0.33", features = ["espidf"] }
+
+[package.metadata.esp-idf-sys]
+esp_idf_version = "v5.3.2"
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
