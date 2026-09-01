@@ -10,30 +10,53 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
-/// Connects to Wi-Fi in station mode and blocks until the interface is up.
-/// The returned handle must be kept alive for the connection to persist.
-pub fn connect_wifi(
-    modem: Modem,
-    ssid: &str,
-    password: &str,
-) -> Result<BlockingWifi<EspWifi<'static>>, Box<dyn Error>> {
-    let sys_loop = EspSystemEventLoop::take()?;
-    let nvs = EspDefaultNvsPartition::take()?;
+/// Wi-Fi station handle. Must be kept alive for the connection to persist:
+/// dropping it tears the connection down.
+pub struct Wifi {
+    inner: BlockingWifi<EspWifi<'static>>,
+}
 
-    let mut wifi = BlockingWifi::wrap(EspWifi::new(modem, sys_loop.clone(), Some(nvs))?, sys_loop)?;
+impl Wifi {
+    /// Configures and starts the station interface, then blocks until the
+    /// interface is up.
+    pub fn connect(modem: Modem, ssid: &str, password: &str) -> Result<Self, Box<dyn Error>> {
+        let sys_loop = EspSystemEventLoop::take()?;
+        let nvs = EspDefaultNvsPartition::take()?;
 
-    wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: ssid.try_into().map_err(|_| "WIFI_SSID too long")?,
-        password: password.try_into().map_err(|_| "WIFI_PASSWORD too long")?,
-        auth_method: AuthMethod::WPA2Personal,
-        ..Default::default()
-    }))?;
+        let mut inner =
+            BlockingWifi::wrap(EspWifi::new(modem, sys_loop.clone(), Some(nvs))?, sys_loop)?;
 
-    wifi.start()?;
-    wifi.connect()?;
-    wifi.wait_netif_up()?;
+        inner.set_configuration(&Configuration::Client(ClientConfiguration {
+            ssid: ssid.try_into().map_err(|_| "WIFI_SSID too long")?,
+            password: password.try_into().map_err(|_| "WIFI_PASSWORD too long")?,
+            auth_method: AuthMethod::WPA2Personal,
+            ..Default::default()
+        }))?;
 
-    Ok(wifi)
+        inner.start()?;
+
+        let mut wifi = Self { inner };
+        wifi.associate()?;
+        Ok(wifi)
+    }
+
+    fn associate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.inner.connect()?;
+        self.inner.wait_netif_up()?;
+        Ok(())
+    }
+
+    pub fn is_up(&self) -> bool {
+        self.inner.is_up().unwrap_or(false)
+    }
+
+    /// Re-associates after a drop-out. Mirrors the reconnect behaviour of the
+    /// C++ firmware's `connectWifi()`; callers rate-limit the retries.
+    pub fn reconnect(&mut self) -> Result<(), Box<dyn Error>> {
+        // `connect()` fails if the driver still considers itself connected.
+        let _ = self.inner.disconnect();
+        self.associate()
+    }
 }
 
 fn parse_mac(text: &str) -> Option<[u8; 6]> {

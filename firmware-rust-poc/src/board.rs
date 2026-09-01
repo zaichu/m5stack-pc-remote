@@ -33,6 +33,9 @@ const SPI_BUFFER_SIZE: usize = DISPLAY_WIDTH as usize * 2;
 pub const DISPLAY_WIDTH: u16 = 320;
 pub const DISPLAY_HEIGHT: u16 = 240;
 
+/// The axp192 driver uses this address internally; kept here as documentation
+/// of the shared-bus layout.
+#[allow(dead_code)]
 const AXP192_I2C_ADDR: u8 = 0x34;
 const TOUCH_I2C_ADDR: u8 = 0x38;
 
@@ -153,12 +156,12 @@ pub fn new_axp<'a, 'd>(bus: &'a SharedI2c<'d>) -> Axp192<RefCellDevice<'a, I2cDr
 }
 
 pub fn new_touch<'a, 'd>(bus: &'a SharedI2c<'d>) -> Ft6x36<RefCellDevice<'a, I2cDriver<'d>>> {
-    let _ = AXP192_I2C_ADDR;
-    Ft6x36::new(RefCellDevice::new(bus), ft6x36::Dimension(DISPLAY_WIDTH, DISPLAY_HEIGHT))
-}
-
-pub const fn touch_addr() -> u8 {
-    TOUCH_I2C_ADDR
+    // The ft6x36 driver uses its own default address (0x38), which matches
+    // TOUCH_I2C_ADDR; the constant is kept for the raw diagnostic read below.
+    Ft6x36::new(
+        RefCellDevice::new(bus),
+        ft6x36::Dimension(DISPLAY_WIDTH, DISPLAY_HEIGHT),
+    )
 }
 
 /// Raw dump of the FT6x36 report header (DEV_MODE, GEST_ID, TD_STATUS and the

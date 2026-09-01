@@ -19,6 +19,7 @@ use config::{PC_MAC_ADDRESS, PC_STATUS_ADDR, WIFI_PASSWORD, WIFI_SSID, WOL_PORT}
 
 const STATUS_INTERVAL: Duration = Duration::from_secs(10);
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
+const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Full-width band at the bottom of the screen that acts as the WAKE button.
 const WAKE_BUTTON_TOP: i32 = 180;
@@ -143,7 +144,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     draw_screen(&mut display, false, false, Some("connecting Wi-Fi..."))?;
 
     // Held for the whole program: dropping it tears down the connection.
-    let _wifi = match net::connect_wifi(peripherals.modem, WIFI_SSID, WIFI_PASSWORD) {
+    let mut wifi = match net::Wifi::connect(peripherals.modem, WIFI_SSID, WIFI_PASSWORD) {
         Ok(wifi) => {
             println!("Wi-Fi connected");
             Some(wifi)
@@ -153,19 +154,43 @@ fn main() -> Result<(), Box<dyn Error>> {
             None
         }
     };
-    let wifi_connected = _wifi.is_some();
+    let mut wifi_connected = wifi.as_ref().is_some_and(net::Wifi::is_up);
 
     let mut pc_online = false;
     let mut toast: Option<String> = None;
     draw_screen(&mut display, wifi_connected, pc_online, None)?;
 
     let mut status_at = Instant::now();
+    let mut wifi_check_at = Instant::now();
     let mut redraw_at = Instant::now();
     let mut touch_was_down = false;
     let mut touch_error_at = Instant::now() - Duration::from_secs(10);
     let mut raw_dump_at = Instant::now();
 
     loop {
+        // Re-associate if the link dropped, rate-limited like the C++ firmware.
+        if wifi_check_at.elapsed() >= WIFI_RECONNECT_INTERVAL {
+            wifi_check_at = Instant::now();
+            if let Some(w) = wifi.as_mut() {
+                let up = w.is_up();
+                if !up {
+                    println!("Wi-Fi down; reconnecting");
+                    match w.reconnect() {
+                        Ok(()) => println!("Wi-Fi reconnected"),
+                        Err(e) => println!("Wi-Fi reconnect failed: {e}"),
+                    }
+                }
+                let now_connected = w.is_up();
+                if now_connected != wifi_connected {
+                    wifi_connected = now_connected;
+                    if !wifi_connected {
+                        pc_online = false;
+                    }
+                    draw_screen(&mut display, wifi_connected, pc_online, toast.as_deref())?;
+                }
+            }
+        }
+
         if wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
             let now_online = net::check_pc_online(PC_STATUS_ADDR, STATUS_PROBE_TIMEOUT);

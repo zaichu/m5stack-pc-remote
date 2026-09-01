@@ -1,5 +1,6 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-check firmware-build \
-	secret-path-check secret-scan diff-check check git-pre-commit git-pre-push
+	firmware-rust-poc-build secret-path-check secret-scan diff-check check \
+	git-pre-commit git-pre-push
 
 install: install-hooks
 
@@ -27,6 +28,12 @@ firmware-build:
 		echo "WARNING: PlatformIO CLI 'pio' not found; skipping firmware build."; \
 	fi
 
+# Rust firmware PoC (Issue #16). Needs the Xtensa Rust toolchain from espup and
+# a local src/config.rs, so it skips with a warning when either is missing
+# (same policy as firmware-build without PlatformIO).
+firmware-rust-poc-build:
+	bash ./scripts/build-firmware-rust-poc.sh
+
 secret-path-check:
 	bash ./scripts/check-staged-secret-paths.sh
 
@@ -36,7 +43,8 @@ secret-scan:
 diff-check:
 	git diff --check
 
-check: diff-check secret-path-check secret-scan agent-check firmware-build
+check: diff-check secret-path-check secret-scan agent-check firmware-build \
+	firmware-rust-poc-build
 
 git-pre-commit: fmt-check secret-path-check diff-check
 
