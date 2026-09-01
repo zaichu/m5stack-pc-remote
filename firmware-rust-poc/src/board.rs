@@ -160,3 +160,13 @@ pub fn new_touch<'a, 'd>(bus: &'a SharedI2c<'d>) -> Ft6x36<RefCellDevice<'a, I2c
 pub const fn touch_addr() -> u8 {
     TOUCH_I2C_ADDR
 }
+
+/// Raw dump of the FT6x36 report header (DEV_MODE, GEST_ID, TD_STATUS and the
+/// first touch point). Used to tell "the controller reports no touch" apart
+/// from "we are not reading the controller correctly".
+pub fn read_touch_raw(bus: &SharedI2c<'_>) -> Result<[u8; 7], esp_idf_sys::EspError> {
+    let mut buf = [0u8; 7];
+    bus.borrow_mut()
+        .write_read(TOUCH_I2C_ADDR, &[0x00], &mut buf, 1000)?;
+    Ok(buf)
+}

@@ -135,8 +135,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("display initialized: {DISPLAY_WIDTH}x{DISPLAY_HEIGHT}");
 
     let mut touch = board::new_touch(&i2c_bus);
-    if let Err(e) = touch.init() {
-        println!("touch init failed: {e:?}");
+    match touch.init() {
+        Ok(()) => println!("touch initialized: info={:?}", touch.get_info()),
+        Err(e) => println!("touch init failed: {e:?}"),
     }
 
     draw_screen(&mut display, false, false, Some("connecting Wi-Fi..."))?;
@@ -161,6 +162,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut status_at = Instant::now();
     let mut redraw_at = Instant::now();
     let mut touch_was_down = false;
+    let mut touch_error_at = Instant::now() - Duration::from_secs(10);
+    let mut raw_dump_at = Instant::now();
 
     loop {
         if wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
@@ -177,7 +180,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         let touch_down = match touch.get_touch_event() {
             Ok(event) => match event.p1 {
                 Some(p) => {
-                    if !touch_was_down && (p.y as i32) >= WAKE_BUTTON_TOP {
+                    println!("touch: x={} y={}", p.x, p.y);
+                    // Any tap counts as WAKE for now: this keeps touch
+                    // coordinate mapping out of the WOL verification path.
+                    if !touch_was_down {
                         println!("WAKE tapped at x={} y={}", p.x, p.y);
                         toast = Some(match net::send_wake_on_lan(PC_MAC_ADDRESS, WOL_PORT) {
                             Ok(()) => {
@@ -196,9 +202,28 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 None => false,
             },
-            Err(_) => false,
+            Err(e) => {
+                // Throttled: this polls every 20ms, so log only occasionally.
+                if touch_error_at.elapsed() >= Duration::from_secs(5) {
+                    touch_error_at = Instant::now();
+                    println!("touch read error: {e:?}");
+                }
+                false
+            }
         };
         touch_was_down = touch_down;
+
+        // Periodic raw report dump: DEV_MODE, GEST_ID, TD_STATUS, P1 X/Y.
+        if raw_dump_at.elapsed() >= Duration::from_secs(5) {
+            raw_dump_at = Instant::now();
+            match board::read_touch_raw(&i2c_bus) {
+                Ok(raw) => println!(
+                    "touch raw: mode={:#04x} gest={:#04x} td_status={} p1={:02x?}",
+                    raw[0], raw[1], raw[2], &raw[3..7]
+                ),
+                Err(e) => println!("touch raw read failed: {e:?}"),
+            }
+        }
 
         // Clear the toast a few seconds after it was shown.
         if toast.is_some() && redraw_at.elapsed() >= Duration::from_secs(3) {

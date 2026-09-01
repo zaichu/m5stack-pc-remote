@@ -74,9 +74,16 @@ Issue #16のPoC成功条件に対する進捗:
 - [x] STATUS相当の疎通確認ができる(ICMPではなくTCP connectプローブ)
 - [x] Core2画面にONLINE/OFFLINEとWi-Fi状態を表示できる
 - [x] Wake-on-LAN Magic Packetを送信できる(コード実装済み)
-- [ ] タッチ操作でWAKEできる(実機でのタップ確認が未実施)
+- [ ] タッチ操作でWAKEできる(実装済み。タッチコントローラーの読み取りが機能していることは
+      生レジスタダンプ(`td_status`)で確認済みだが、実際のタップによるWOL送信は未確認)
 - [x] 秘密情報をGitへ入れない構成を維持できる(`src/config.rs`はGit管理外)
 - [ ] `make check` または専用verifyにRust firmware PoCのbuild確認を追加
 
 2026-09-01時点の実機確認: AXP192初期化、ディスプレイ初期化、タッチコントローラー
-初期化、Wi-Fi接続、STATUS疎通(PCのONLINE検出)まで動作を確認済み。
+初期化(FT6236U、firmware_id=16/panel_id=17をM5GFXの報告値と一致確認)、Wi-Fi接続、
+STATUS疎通(PCのONLINE検出)まで動作を確認済み。タッチはFT6x36のレポートレジスタを
+5秒ごとにダンプし、未タッチ時に `td_status=0` を正しく読めることまで確認した。
+
+なお現在のPoCは「画面のどこをタップしてもWAKE」としている。タッチ座標系の変換
+(`ft6x36` のデフォルトは Portrait、本機は 320x240 ランドスケープ)の検証は、実際の
+タップが取れてから行う。
