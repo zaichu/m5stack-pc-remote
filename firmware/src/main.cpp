@@ -1,13 +1,9 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
-#include <HTTPClient.h>
-#include <ESP32Ping.h>
 #include <M5Unified.h>
-#include <esp_system.h>
-#include <mbedtls/md.h>
-#include <time.h>
 #include <WiFi.h>
-#include <WiFiUdp.h>
+
+#include "power_controller.h"
+#include "telegram_client.h"
 
 #if __has_include("config.h")
 #include "config.h"
@@ -20,8 +16,6 @@
 #endif
 
 namespace {
-WiFiUDP udp;
-bool pcOnline = false;
 bool wifiConnectStarted = false;
 unsigned long lastStatusAt = 0;
 unsigned long lastWifiAttemptAt = 0;
@@ -47,21 +41,6 @@ enum class PendingAction {
 
 PendingAction pendingAction = PendingAction::None;
 
-bool parseMac(const char *text, uint8_t out[6]) {
-  unsigned int values[6];
-  if (sscanf(text, "%x:%x:%x:%x:%x:%x", &values[0], &values[1], &values[2],
-             &values[3], &values[4], &values[5]) != 6) {
-    return false;
-  }
-  for (int i = 0; i < 6; ++i) {
-    if (values[i] > 0xFF) {
-      return false;
-    }
-    out[i] = static_cast<uint8_t>(values[i]);
-  }
-  return true;
-}
-
 void drawButton(const Button &button) {
   M5.Display.fillRoundRect(button.x, button.y, button.w, button.h, 6,
                            button.color);
@@ -75,86 +54,6 @@ void drawButton(const Button &button) {
 bool contains(const Button &button, int32_t x, int32_t y) {
   return x >= button.x && x <= button.x + button.w && y >= button.y &&
          y <= button.y + button.h;
-}
-
-String bytesToHex(const uint8_t *bytes, size_t len) {
-  static const char *hex = "0123456789abcdef";
-  String out;
-  out.reserve(len * 2);
-  for (size_t i = 0; i < len; ++i) {
-    out += hex[(bytes[i] >> 4) & 0x0F];
-    out += hex[bytes[i] & 0x0F];
-  }
-  return out;
-}
-
-String sha256Hex(const String &body) {
-  uint8_t digest[32];
-  mbedtls_md_context_t ctx;
-  mbedtls_md_init(&ctx);
-  const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  mbedtls_md_setup(&ctx, info, 0);
-  mbedtls_md_starts(&ctx);
-  mbedtls_md_update(&ctx, reinterpret_cast<const unsigned char *>(body.c_str()),
-                    body.length());
-  mbedtls_md_finish(&ctx, digest);
-  mbedtls_md_free(&ctx);
-  return bytesToHex(digest, sizeof(digest));
-}
-
-String hmacSha256Hex(const String &message) {
-  uint8_t digest[32];
-  mbedtls_md_context_t ctx;
-  mbedtls_md_init(&ctx);
-  const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  mbedtls_md_setup(&ctx, info, 1);
-  mbedtls_md_hmac_starts(
-      &ctx, reinterpret_cast<const unsigned char *>(AGENT_SHARED_SECRET),
-      strlen(AGENT_SHARED_SECRET));
-  mbedtls_md_hmac_update(
-      &ctx, reinterpret_cast<const unsigned char *>(message.c_str()),
-      message.length());
-  mbedtls_md_hmac_finish(&ctx, digest);
-  mbedtls_md_free(&ctx);
-  return bytesToHex(digest, sizeof(digest));
-}
-
-String nonce() {
-  return String(static_cast<uint32_t>(esp_random()), HEX) + String("-") +
-         String(millis(), HEX);
-}
-
-String agentUrl(const char *path) {
-  return String("http://") + PC_IP_ADDRESS + ":" + String(AGENT_PORT) + path;
-}
-
-bool postAgentCommand(const char *path) {
-  if (WiFi.status() != WL_CONNECTED) {
-    return false;
-  }
-
-  time_t timestamp = time(nullptr);
-  if (timestamp < 1700000000) {
-    Serial.println("NTP time is not ready");
-    return false;
-  }
-
-  String body = "{\"confirm\":true}";
-  String requestNonce = nonce();
-  String canonical = String("POST\n") + path + "\n" + String(timestamp) +
-                     "\n" + requestNonce + "\n" + sha256Hex(body);
-  String signature = hmacSha256Hex(canonical);
-
-  HTTPClient http;
-  http.begin(agentUrl(path));
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-Timestamp", String(timestamp));
-  http.addHeader("X-Nonce", requestNonce);
-  http.addHeader("X-Signature", signature);
-  int status = http.POST(body);
-  http.end();
-  Serial.printf("agent %s -> %d\n", path, status);
-  return status >= 200 && status < 300;
 }
 
 void connectWifi() {
@@ -171,43 +70,28 @@ void connectWifi() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 }
 
-bool sendWakeOnLan() {
-  uint8_t mac[6];
-  if (!parseMac(PC_MAC_ADDRESS, mac)) {
-    Serial.println("invalid PC_MAC_ADDRESS");
-    return false;
+void drawTelegramLine() {
+  const char *label;
+  uint16_t color;
+  switch (TelegramClient::status()) {
+  case TelegramClient::Status::Polling:
+    label = "Telegram: polling";
+    color = TFT_GREEN;
+    break;
+  case TelegramClient::Status::Error:
+    label = "Telegram: error";
+    color = TFT_RED;
+    break;
+  case TelegramClient::Status::Disabled:
+  default:
+    label = "Telegram: disabled";
+    color = TFT_LIGHTGREY;
+    break;
   }
-
-  uint8_t packet[102];
-  memset(packet, 0xFF, 6);
-  for (int i = 1; i <= 16; ++i) {
-    memcpy(packet + i * 6, mac, 6);
-  }
-
-  // Use the limited broadcast address instead of a subnet-directed broadcast
-  // computed from the local subnet mask, so WOL keeps working regardless of
-  // the LAN's actual prefix length (e.g. a /16 network, not /24).
-  IPAddress broadcast(255, 255, 255, 255);
-
-  bool began = udp.beginPacket(broadcast, WOL_PORT) != 0;
-  size_t written = udp.write(packet, sizeof(packet));
-  bool ended = udp.endPacket() == 1;
-  Serial.printf("WOL: beginPacket=%d written=%u/%u endPacket=%d\n", began,
-                (unsigned)written, (unsigned)sizeof(packet), ended);
-  return began && written == sizeof(packet) && ended;
-}
-
-void updateStatus() {
-  if (WiFi.status() != WL_CONNECTED) {
-    pcOnline = false;
-    return;
-  }
-  IPAddress pcIp;
-  if (!pcIp.fromString(PC_IP_ADDRESS)) {
-    pcOnline = false;
-    return;
-  }
-  pcOnline = Ping.ping(pcIp, 2);
+  M5.Display.setTextDatum(top_left);
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(color, TFT_BLACK);
+  M5.Display.drawString(label, 12, 44);
 }
 
 void drawScreen() {
@@ -225,6 +109,9 @@ void drawScreen() {
                         : "Wi-Fi: disconnected";
   M5.Display.drawString(wifiLine, 12, 30);
 
+  drawTelegramLine();
+
+  bool pcOnline = PowerController::isPcOnline();
   M5.Display.setTextDatum(middle_center);
   M5.Display.setTextSize(4);
   M5.Display.setTextColor(pcOnline ? TFT_GREEN : TFT_RED, TFT_BLACK);
@@ -277,7 +164,7 @@ void handleConfirmTouch(int32_t x, int32_t y) {
 
   const char *path = pendingAction == PendingAction::Reboot ? "/reboot"
                                                             : "/shutdown";
-  bool okResult = postAgentCommand(path);
+  bool okResult = PowerController::postAgentCommand(path);
   pendingAction = PendingAction::None;
   drawScreen();
   showToast(okResult ? "Command accepted" : "Command failed",
@@ -292,9 +179,10 @@ void setup() {
   // WiFi.mode() must run before any UDP/lwIP call, or the TCP/IP task's
   // mbox is not ready yet and udp.begin() crashes with "Invalid mbox".
   connectWifi();
-  udp.begin(WOL_PORT);
+  PowerController::begin();
+  TelegramClient::begin();
   configTime(0, 0, "pool.ntp.org", "time.google.com");
-  updateStatus();
+  PowerController::updateStatus();
   drawScreen();
 }
 
@@ -305,7 +193,7 @@ void loop() {
   unsigned long now = millis();
   if (now - lastStatusAt >= STATUS_INTERVAL_MS) {
     lastStatusAt = now;
-    updateStatus();
+    PowerController::updateStatus();
     drawScreen();
   }
 
@@ -319,12 +207,13 @@ void loop() {
     return;
   }
 
+  bool pcOnline = PowerController::isPcOnline();
   if (contains(wakeButton, touch.x, touch.y)) {
-    bool ok = sendWakeOnLan();
+    bool ok = PowerController::sendWakeOnLan();
     showToast(ok ? "Magic Packet sent" : "WOL failed",
               ok ? TFT_GREEN : TFT_RED);
     delay(500);
-    updateStatus();
+    PowerController::updateStatus();
     drawScreen();
   } else if (pcOnline && contains(rebootButton, touch.x, touch.y)) {
     pendingAction = PendingAction::Reboot;

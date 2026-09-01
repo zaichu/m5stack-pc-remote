@@ -18,9 +18,11 @@
 - ローカル秘密設定:
   - `firmware/include/config.h`
   - `windows-agent/config.toml`
-- 外部操作の将来経路:
-  - `Smartphone -> Cloudflare Worker等 -> M5Stack Core2 -> Windows PC`
+- 外部操作の経路:
+  - `Smartphone -> Telegram Bot API (outbound HTTPS long polling) -> M5Stack Core2 -> Windows PC`
   - Windows Agentを直接インターネットへ公開しない
+  - `firmware/src/telegram_client.h` / `telegram_client.cpp` (Telegram long polling、core 0の専用FreeRTOSタスク)
+  - `firmware/src/power_controller.h` / `power_controller.cpp` (WOL送信、Windows AgentへのHMAC署名付きPOST、PC ping状態。タッチUIとTelegramタスクの共有ロジック)
 
 ## 現在の状態
 
@@ -61,6 +63,33 @@
   2. 上記を直しても起動せず、スマートフォンの別WOLアプリからは同じ2.4GHz Wi-Fiから成功したため切り分けた結果、実ネットワークのサブネットが`/16`(`255.255.0.0`)であるのに`config.h`の`WOL_BROADCAST_ADDRESS`が`/24`前提の値(`x.x.1.255`)になっており、正しい`/16`のブロードキャストアドレス(`x.x.255.255`)ではなかったため、ESP32のlwIPからは通常のユニキャスト宛て(実質どこにも届かない)として送信されていた。スマホアプリは全体ブロードキャスト`255.255.255.255`を使っていたため、サブネットマスクの誤りの影響を受けずに成功していた。恒久対策として`WOL_BROADCAST_ADDRESS`設定自体を廃止し、`firmware/src/main.cpp`は`255.255.255.255`固定で送信するように変更した(サブネットマスクに関わらず動作する)。
 - 上記全ての修正後、実機でWi-Fi接続、STATUS(ONLINE表示)、WAKE(WOL)、REBOOT、SHUTDOWNの一連の操作が最初から最後まですべて実際に動作することを確認した。Phase 1のスコープ(Wi-Fi接続 -> Wake-on-LAN -> STATUS、REBOOT/SHUTDOWN)は実機で完全に検証済み。
 - NICの`Wake on Magic Packet`/`Shutdown Wake-On-Lan`はドライバ側で有効になっていることを確認済み(`Get-NetAdapterAdvancedProperty`)。BIOS(ASUS TUF GAMING B660M-PLUS D4)側の設定は今回変更していない(スマホからのWOL成功により、ドライバ設定で十分と判明したため)。
+
+## Telegram Bot API 外部操作の実装 (2026-09-01)
+
+- `docs/external-access.md` のTelegram Bot API long polling方式(Phase 5A/5B/5C)をfirmwareに実装した。
+- `firmware/src/telegram_client.h` / `telegram_client.cpp` を新規追加。`getUpdates` によるlong pollingをcore 0の専用FreeRTOSタスクとして実行し、タッチUI/STATUS更新(core 1のメインloop)を長時間ブロックしないようにした。
+- `firmware/src/power_controller.h` / `power_controller.cpp` を新規追加。既存の`sendWakeOnLan()` / `postAgentCommand()` / PC ping状態を`main.cpp`から切り出し、タッチUIとTelegramタスクの両方から呼べるようにした。共有するWiFiUDPソケットとPC状態フラグへの同時アクセスは内部の1つのFreeRTOSミューテックスで直列化している。
+- `/status`、`/wake`、`/reboot`+`/confirm_reboot <nonce>`、`/shutdown`+`/confirm_shutdown <nonce>` を実装。`from.id`が`TELEGRAM_ALLOWED_USER_ID`と一致しないupdateは無視・返信なし。確認nonceはRAM上のみ、`TELEGRAM_CONFIRM_TTL_MS`でTTL、成功/失敗・不一致に関わらず1回で消費(再利用不可)。
+- `firmware/include/config.example.h`(および実機用のローカル`config.h`、コミット対象外)に`TELEGRAM_BOT_TOKEN`、`TELEGRAM_ALLOWED_USER_ID`、`TELEGRAM_LONG_POLL_TIMEOUT_SECONDS`、`TELEGRAM_CONFIRM_TTL_MS`を追加。`TELEGRAM_BOT_TOKEN`/`TELEGRAM_ALLOWED_USER_ID`がplaceholderのままだとTelegramタスク自体を起動せず、画面は`Telegram: disabled`になる(既存のタッチUI・WOL・STATUSは無変更で動作)。
+- `make check`(Rust fmt/clippy/test + `pio run -d firmware`)、`bash -n scripts/*.sh`、`git diff --check`、secretパターン検索はすべて成功・検出なし。この環境には実際にPlatformIO CLIが入っており`firmware-build`はスキップされず実行された。
+- 実bot token・実user idを`firmware/include/config.h`(Git管理外)へ設定し、M5Stack Core2実機へ`pio run -d firmware -t upload --upload-port /dev/ttyUSB0`で書き込み成功。
+- 実Telegram疎通の確認結果(2026-09-01 JST):
+  - `/status`: botから返信あり。PCのONLINE状態、Wi-Fi RSSI、M5Stack IP、最終確認時刻が返ることを確認。
+  - `/wake`: botから`WOL sent`の返信あり。Wake-on-LAN送信コマンドがTelegram経由で呼べることを確認。
+  - `/reboot`: 即時再起動せず、`/confirm_reboot <nonce>`の確認コマンド案内が返ることを確認。
+  - `/shutdown`: 即時シャットダウンせず、`/confirm_shutdown <nonce>`の確認コマンド案内が返ることを確認。
+- `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` の実行確認は未実施。危険操作のため、PC停止してよいタイミングで別途確認する。
+
+## Codexレビュー対応: TLS証明書検証の有効化 (2026-09-01)
+
+- PR #10のCodexレビューで「`WiFiClientSecure::setInsecure()`によりTelegram Bot APIのサーバー証明書検証を無効化しており、bot tokenがURLに含まれ`/reboot`・`/shutdown`の外部操作経路でもあるためマージ不可」という指摘を受け、対応した。
+- `firmware/src/telegram_root_ca.h`を新規追加。`openssl s_client`で実際に`api.telegram.org:443`のTLSチェーンを取得し、葉証明書(GoDaddy発行、約1年で更新)ではなく自己署名のルートCA(「Go Daddy Root Certificate Authority - G2」、有効期限2037-12-31)を埋め込んだ。ファイル内にsubject・有効期限・SHA-256 fingerprint・取得日をコメントで記録済み。
+- `firmware/src/telegram_client.cpp`の`sendReply()`・pollingループの両方で`client.setInsecure()`を`client.setCACert(TELEGRAM_ROOT_CA_PEM)`に置き換えた。`setInsecure()`の呼び出しはリポジトリ内に残っていない(コメントの言及のみ)。
+- bot token・user idをログへ出さない方針は変更なし(既存のまま維持)。
+- ついでの対応として、`firmware/src/power_controller.cpp`の`postAgentCommand()`にHTTPClientの明示timeout(`setConnectTimeout(3000)` / `setTimeout(3000)`)を追加した。この呼び出しは`powerMutex`を保持したまま実行されるため、Windows Agentが応答しない場合でもタッチUI・Telegramタスクを長時間ブロックしないようにする狙い。
+- CA証明書のローテーション運用(将来Telegramがルート認証局を切り替えた場合の症状・復旧手順)を`docs/external-access.md`・`docs/security.md`・README.mdに追記した。
+- 検証: `pio run -d firmware`(証明書埋め込み後の再ビルド含む)、`make check`、`bash -n scripts/*.sh`、`git diff --check`、secretパターン検索。すべて成功・検出なし。
+- 埋め込んだのはルート認証局の公開証明書のみで、秘密情報ではない。
 
 ## 次のセッションへの依頼例
 
