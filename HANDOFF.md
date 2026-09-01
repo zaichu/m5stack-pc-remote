@@ -78,7 +78,8 @@
   - `/wake`: botから`WOL sent`の返信あり。Wake-on-LAN送信コマンドがTelegram経由で呼べることを確認。
   - `/reboot`: 即時再起動せず、`/confirm_reboot <nonce>`の確認コマンド案内が返ることを確認。
   - `/shutdown`: 即時シャットダウンせず、`/confirm_shutdown <nonce>`の確認コマンド案内が返ることを確認。
-- `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` の実行確認は未実施。危険操作のため、PC停止してよいタイミングで別途確認する。
+  - `/confirm_reboot <nonce>`: nonce付き確認コマンド送信後、Windows PCが正常に再起動することを確認。
+  - `/confirm_shutdown <nonce>`: nonce付き確認コマンド送信後、Windows PCが正常にシャットダウンすることを確認。
 
 ## Codexレビュー対応: TLS証明書検証の有効化 (2026-09-01)
 

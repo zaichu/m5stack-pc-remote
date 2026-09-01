@@ -195,7 +195,7 @@ Windows Agent側の `confirm: true` 必須条件は維持します。
 
 ## 未実装 / 残リスク
 
-- **実機・実Telegram疎通は未確認。** 実bot token・実user idを使った動作確認(Phase 5D)はこのPRでは行っていない。`pio run -d firmware` によるビルド成功のみ確認済み。
+- **実機・実Telegram疎通は確認済み。** 実bot token・実user idを`firmware/include/config.h`(Git管理外)へ設定し、M5Stack Core2実機へ書き込み後、`/status`、`/wake`、`/reboot`+`/confirm_reboot <nonce>`、`/shutdown`+`/confirm_shutdown <nonce>` が動作することを2026-09-01 JSTに確認済み。
 - **ルートCAのハードコード運用に依存する。** 上記「CA証明書のローテーション運用」のとおり、Telegramがルート認証局を切り替えた場合は手動でのfirmware更新が必要になる。監視や自動更新の仕組みはない。
 - Telegram Bot APIの仕様や制限が将来変わる可能性はある。コストが発生する変更が必要になった場合は採用しない。
 - Bot tokenが漏れると第三者がbot APIへアクセスできる。BotFatherでrevokeし、M5Stackのconfigを更新する。
