@@ -1,5 +1,6 @@
 # Local firmware secrets.
 firmware/include/config.h
+firmware-rust-poc/src/config.rs
 
 # Windows Agent local secrets.
 windows-agent/config.toml
