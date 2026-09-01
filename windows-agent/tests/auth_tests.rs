@@ -10,6 +10,13 @@ fn config() -> AuthConfig {
     }
 }
 
+fn config_with_skew(allowed_skew_seconds: i64) -> AuthConfig {
+    AuthConfig {
+        secret: b"0123456789abcdef0123456789abcdef".to_vec(),
+        allowed_skew_seconds,
+    }
+}
+
 #[test]
 fn accepts_valid_signature_once() {
     let cfg = config();
@@ -77,6 +84,51 @@ fn rejects_replayed_nonce() {
         body,
         &signature,
         now,
+    )
+    .unwrap_err();
+
+    assert_eq!(err, AuthError::Replay);
+}
+
+#[test]
+fn rejects_replayed_nonce_for_entire_allowed_skew_window() {
+    let cfg = config_with_skew(900);
+    let store = NonceStore::default();
+    let first_seen = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    let replay_seen = first_seen + time::Duration::seconds(700);
+    let body = br#"{"confirm":true}"#;
+    let signature = sign_request(
+        &cfg.secret,
+        "POST",
+        "/shutdown",
+        first_seen.unix_timestamp(),
+        "long-skew-nonce",
+        body,
+    );
+
+    verify_request(
+        &cfg,
+        &store,
+        "POST",
+        "/shutdown",
+        first_seen.unix_timestamp(),
+        "long-skew-nonce",
+        body,
+        &signature,
+        first_seen,
+    )
+    .unwrap();
+
+    let err = verify_request(
+        &cfg,
+        &store,
+        "POST",
+        "/shutdown",
+        first_seen.unix_timestamp(),
+        "long-skew-nonce",
+        body,
+        &signature,
+        replay_seen,
     )
     .unwrap_err();
 

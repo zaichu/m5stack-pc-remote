@@ -10,7 +10,7 @@ copy config.example.toml config.toml
 cargo build --release
 ```
 
-`config.toml` の `shared_secret` は長いランダム値へ変更してください。`dry_run = true` の間は実際の電源操作を実行しません。
+`config.toml` の `shared_secret` は32文字以上の長いランダム値へ変更してください。`config.example.toml` のプレースホルダー値や短すぎる値のままではAgentは起動しません。`dry_run = true` の間は実際の電源操作を実行しません。
 
 ## 起動
 
@@ -60,6 +60,18 @@ shared_secretを平文で含むため、ローカルの一般ユーザーから�
 - `GET /status`
 - `POST /reboot`
 - `POST /shutdown`
+
+`GET /status` はWindows Agentプロセス自体のヘルスチェックです。PCの電源状態を判定するエンドポイントではありません。
+
+レスポンス例:
+
+```json
+{
+  "agent_online": true,
+  "agent": "pc-remote-agent",
+  "status": "ok"
+}
+```
 
 `POST` は以下のヘッダーが必須です。
 

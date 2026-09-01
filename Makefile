@@ -1,5 +1,5 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-check firmware-build \
-	secret-path-check diff-check check git-pre-commit git-pre-push
+	secret-path-check secret-scan diff-check check git-pre-commit git-pre-push
 
 install: install-hooks
 
@@ -30,10 +30,13 @@ firmware-build:
 secret-path-check:
 	bash ./scripts/check-staged-secret-paths.sh
 
+secret-scan:
+	bash ./scripts/scan-secrets.sh
+
 diff-check:
 	git diff --check
 
-check: diff-check agent-check firmware-build
+check: diff-check secret-path-check secret-scan agent-check firmware-build
 
 git-pre-commit: fmt-check secret-path-check diff-check
 

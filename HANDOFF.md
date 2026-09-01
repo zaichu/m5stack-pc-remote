@@ -103,6 +103,16 @@
 - ドキュメント更新: `README.md`、`docs/external-access.md`(Phase 5E追記)、`docs/security.md`。
 - 検証: `make check`、`bash -n scripts/*.sh`、`git diff --check`、`rg -n "setInsecure\(" firmware`(該当なし)、secretパターン検索。実機での動作確認(インラインボタンのタップ)は未実施(このセッションでは実機接続なし)。次回実機作業時に `/reboot` と `/shutdown` それぞれでボタンタップによる確定・キャンセルを確認し、`HANDOFF.md` へ結果を追記すること。
 
+## Windows Agent / 品質ゲートのIssue整理 (2026-09-01)
+
+- Issue #2: nonce保持TTLを `allowed_skew_seconds` と連動させ、skew許容中のリプレイを拒否するテストを追加。
+- Issue #3: `shutdown.exe` 実行を `spawn()` ではなく終了ステータス確認付きに変更し、実行失敗をエラーとして返すテストを追加。
+- Issue #4: `make check` に `secret-path-check` と内容ベースの `secret-scan` を追加。gitleaksがあれば使用し、無い環境ではrg fallbackで最低限検査する。
+- Issue #5: `confirm:false` を明示送信し、`confirm must be true` ガードで拒否されることを検証するテストに修正。
+- Issue #6: Windows Agent設定読み込み時にplaceholder shared_secretと32文字未満のshared_secretを拒否する検証を追加。
+- Issue #8: Windows Agentの `GET /status` はPC状態ではなくAgentプロセスのヘルスチェックとして `agent_online` / `status` を返す形に変更し、READMEにも明記。
+- 追加: GitHub Actions CIを追加し、PRとmain pushで `make check` と `bash -n scripts/*.sh` を実行する。
+
 ## 次のセッションへの依頼例
 
 ```text

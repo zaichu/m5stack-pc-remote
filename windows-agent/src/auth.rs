@@ -28,8 +28,14 @@ pub struct NonceStore {
 }
 
 impl NonceStore {
-    pub fn insert_once(&self, nonce: &str, timestamp: i64, now: OffsetDateTime) -> bool {
-        self.evict_expired(now.unix_timestamp(), 600);
+    pub fn insert_once(
+        &self,
+        nonce: &str,
+        timestamp: i64,
+        now: OffsetDateTime,
+        ttl_seconds: i64,
+    ) -> bool {
+        self.evict_expired(now.unix_timestamp(), ttl_seconds);
         self.seen.insert(nonce.to_owned(), timestamp).is_none()
     }
 
@@ -68,7 +74,7 @@ pub fn verify_request(
         return Err(AuthError::BadSignature);
     }
 
-    if !nonces.insert_once(nonce, timestamp, now) {
+    if !nonces.insert_once(nonce, timestamp, now, config.allowed_skew_seconds) {
         return Err(AuthError::Replay);
     }
 

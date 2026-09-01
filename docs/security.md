@@ -55,4 +55,6 @@ Agentの待受ポートはプライベートネットワークに限定します
 - `install.ps1` は `config.toml`(shared_secretを含む)を `%ProgramData%\m5stack-pc-remote-agent\config.toml` に配置します。
 - インストール先ディレクトリは `icacls` でAdministratorsとSYSTEMのみに読み書きを制限し、既定の継承ACLを解除します。ローカルの一般ユーザーからは読み取れません。
 - ローカル一般ユーザーがshared_secretを読めると、LAN内からREBOOT/SHUTDOWNを実行できる認証鍵が漏れるため、この制限は必須とみなします。
+- Windows Agentは、`config.example.toml` のプレースホルダー `shared_secret` と32文字未満の `shared_secret` を起動時に拒否します。
+- nonceの保持TTLは `allowed_skew_seconds` と連動し、timestamp skewを許容している間は同じnonceの再利用を拒否します。
 - `uninstall.ps1` はデフォルトでインストール先ディレクトリを削除しません。削除しない場合はACL制限が維持されている前提のため、手動でACLを緩めないでください。

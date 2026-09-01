@@ -27,8 +27,9 @@ pub struct AppState {
 
 #[derive(Debug, Serialize)]
 struct StatusResponse {
-    online: bool,
+    agent_online: bool,
     agent: &'static str,
+    status: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,8 +63,9 @@ pub async fn serve(config: AgentConfig) -> anyhow::Result<()> {
 
 async fn status() -> Json<StatusResponse> {
     Json(StatusResponse {
-        online: true,
+        agent_online: true,
         agent: "pc-remote-agent",
+        status: "ok",
     })
 }
 

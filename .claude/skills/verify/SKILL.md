@@ -25,7 +25,7 @@ bash -n scripts/*.sh
 ## secret パターン検査
 
 ```bash
-rg -n "-----BEGIN|AIza|ghp_|ghs_|xox[baprs]-|https://discord.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+" .
+bash scripts/scan-secrets.sh
 ```
 
 実Wi-Fiパスワード、実PC MACアドレス、HMAC secret、Windows認証情報を出力やdocsへ残さないでください。
