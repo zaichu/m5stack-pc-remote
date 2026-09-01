@@ -18,7 +18,9 @@ Issue #16の成功条件を満たすまで、`firmware/` は変更しない。
 | 描画 | `embedded-graphics` |
 | タッチ(FT6336U) | `ft6x36` |
 | I2Cバス共有 | `embedded-hal-bus` |
-| Wi-Fi / NVS / イベントループ | `esp-idf-svc` |
+| Wi-Fi / NVS / SNTP / HTTP(S) | `esp-idf-svc` |
+| HMAC-SHA256 署名 | `hmac` / `sha2` / `hex` |
+| Telegram JSON | `serde_json` |
 | GPIO / SPI / I2C | `esp-idf-hal` |
 
 ### なぜM5Unified(C++)を使わないか
@@ -64,6 +66,25 @@ espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust-poc
 ```
 
 WSL2から書き込む場合はusbipd-winでUSBデバイスをアタッチしてから実行する。
+
+## 実装済み機能
+
+Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の設計を移植した
+以下を実装済み:
+
+- **REBOOT / SHUTDOWN**(`src/agent.rs`): Windows AgentへのHMAC-SHA256署名付きPOST。
+  canonical文字列 `POST\n{path}\n{timestamp}\n{nonce}\n{sha256hex(body)}` と
+  本文 `{"confirm":true}` 必須をC++版と揃えてある。NTP未同期のクロックでは送信前に弾く。
+  画面上はPCがONLINEのときだけボタンが出て、確認画面(CANCEL/OK)を必ず経由する。
+- **Telegram連携**(`src/telegram.rs`): Bot APIへのアウトバウンドHTTPS long polling。
+  `/status` `/wake` `/reboot` `/shutdown` `/confirm_reboot <nonce>`
+  `/confirm_shutdown <nonce>` とインラインキーボードによる確認。`from.id` が
+  `TELEGRAM_ALLOWED_USER_ID` と一致しない更新は実行しない。確認nonceは単回使用・TTL付きで、
+  一致・不一致・期限切れのいずれでも消費する。起動後の最初のバッチはoffsetを進めるだけで
+  実行しない。TLSはルートCAをピン留めして検証する(`src/telegram_root_ca.rs`、
+  C++版 `telegram_root_ca.h` と同じ証明書)。
+  専用スレッドで動かすため、long pollingがタッチUIやSTATUS更新を止めない。
+  電源操作はUIスレッドとの間を `Mutex` で直列化する(C++版のFreeRTOSミューテックス相当)。
 
 ## 現在のスコープと実機確認結果
 

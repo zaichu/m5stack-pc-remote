@@ -2,10 +2,13 @@ mod agent;
 mod board;
 mod config;
 mod net;
+mod telegram;
+mod telegram_root_ca;
 mod ui;
 
 use std::cell::RefCell;
 use std::error::Error;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use esp_idf_hal::peripherals::Peripherals;
@@ -115,6 +118,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("SNTP synced: {synced}");
     }
 
+    // Serializes power actions between this thread and the Telegram thread,
+    // the role the FreeRTOS mutex plays in the C++ PowerController.
+    let power_lock: telegram::PowerLock = Arc::new(Mutex::new(()));
+    let telegram_state = Arc::new(Mutex::new(telegram::State::Disabled));
+
+    if status.wifi_connected && telegram::is_configured() {
+        let client = telegram::Client::new(Arc::clone(&power_lock));
+        let state_handle = Arc::clone(&telegram_state);
+        // Own thread: a long poll blocks for TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
+        // which must never stall the touch UI or the STATUS refresh.
+        std::thread::Builder::new()
+            .stack_size(12 * 1024)
+            .spawn(move || client.run(state_handle))?;
+        println!("telegram: polling task started");
+    } else if !telegram::is_configured() {
+        println!("telegram: disabled (token or user id is a placeholder)");
+    }
+
     ui::draw_main(&mut display, &status)?;
 
     let mut screen = Screen::Main;
@@ -148,6 +169,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
+        let now_telegram = match *telegram_state.lock().unwrap() {
+            telegram::State::Disabled => TelegramState::Disabled,
+            telegram::State::Polling => TelegramState::Polling,
+            telegram::State::Error => TelegramState::Error,
+        };
+        if now_telegram != status.telegram {
+            status.telegram = now_telegram;
+            if matches!(screen, Screen::Main) {
+                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+            }
+        }
+
         if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
             let now_online = net::check_pc_online(PC_STATUS_ADDR, STATUS_PROBE_TIMEOUT);
@@ -173,6 +206,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Screen::Main => {
                         if ui::WAKE_BUTTON.contains(x, y) {
                             println!("WAKE tapped at x={x} y={y}");
+                            let _guard = power_lock.lock().unwrap();
                             toast_text =
                                 Some(match net::send_wake_on_lan(PC_MAC_ADDRESS, WOL_PORT) {
                                     Ok(()) => {
@@ -202,6 +236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             ui::draw_main(&mut display, &status)?;
                         } else if ui::OK_BUTTON.contains(x, y) {
                             println!("{} confirmed", action.slug());
+                            let _guard = power_lock.lock().unwrap();
                             toast_text = Some(match agent::send_command(action) {
                                 Ok(code) if agent::is_accepted(code) => "Command accepted".into(),
                                 Ok(code) => format!("Command rejected ({code})"),

@@ -39,11 +39,8 @@ pub const DISPLAY_HEIGHT: u16 = 240;
 pub const TOUCH_WIDTH: u16 = 320;
 pub const TOUCH_HEIGHT: u16 = 280;
 
-/// The axp192 driver uses this address internally; kept here as documentation
-/// of the shared-bus layout.
-#[allow(dead_code)]
-const AXP192_I2C_ADDR: u8 = 0x34;
-const TOUCH_I2C_ADDR: u8 = 0x38;
+// The axp192 and ft6x36 drivers hold their own device addresses (0x34 and
+// 0x38); both sit on the same internal I2C bus.
 
 pub type SharedI2c<'d> = RefCell<I2cDriver<'d>>;
 
@@ -162,8 +159,6 @@ pub fn new_axp<'a, 'd>(bus: &'a SharedI2c<'d>) -> Axp192<RefCellDevice<'a, I2cDr
 }
 
 pub fn new_touch<'a, 'd>(bus: &'a SharedI2c<'d>) -> Ft6x36<RefCellDevice<'a, I2cDriver<'d>>> {
-    // The ft6x36 driver uses its own default address (0x38), which matches
-    // TOUCH_I2C_ADDR; the constant is kept for the raw diagnostic read below.
     // Orientation::Portrait (the driver default) is the identity transform,
     // which is what Core2 needs: the panel already reports coordinates in the
     // display's frame.
@@ -171,14 +166,4 @@ pub fn new_touch<'a, 'd>(bus: &'a SharedI2c<'d>) -> Ft6x36<RefCellDevice<'a, I2c
         RefCellDevice::new(bus),
         ft6x36::Dimension(TOUCH_WIDTH, TOUCH_HEIGHT),
     )
-}
-
-/// Raw dump of the FT6x36 report header (DEV_MODE, GEST_ID, TD_STATUS and the
-/// first touch point). Used to tell "the controller reports no touch" apart
-/// from "we are not reading the controller correctly".
-pub fn read_touch_raw(bus: &SharedI2c<'_>) -> Result<[u8; 7], esp_idf_sys::EspError> {
-    let mut buf = [0u8; 7];
-    bus.borrow_mut()
-        .write_read(TOUCH_I2C_ADDR, &[0x00], &mut buf, 1000)?;
-    Ok(buf)
 }
