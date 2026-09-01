@@ -1,0 +1,16 @@
+description: Rust-facing C ABI shim component for M5Unified
+url: https://github.com/mfiumara/m5unified-rs
+repository: https://github.com/mfiumara/m5unified-rs.git
+version: 0.3.8
+dependencies:
+  # M5Unified 0.2.x / M5GFX 0.2.x still pull the legacy I2C driver. ESP-IDF
+  # 5.5 can also pull driver_ng I2C paths, which aborts when both are linked.
+  idf: ">=5.0,<5.5"
+  # Pinned to 0.2.20, not upstream's "^0.2.13": M5Unified 0.2.21 (PR #320,
+  # "Replace the IO expander pull enable API with explicit modes") removed
+  # IOExpander_Base::enablePull() and changed setPullMode()'s second argument
+  # from bool to the gpio_pull_t enum. m5u_shim.cpp (as vendored from
+  # m5unified-sys 0.3.8) still calls the old bool-based API, so it fails to
+  # compile against 0.2.21+. See VENDORED.md.
+  m5stack/M5Unified: "0.2.20"
+  m5stack/M5GFX: "0.2.28"

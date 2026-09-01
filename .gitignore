@@ -12,6 +12,12 @@ windows-agent/target/
 firmware/.pio/
 firmware/.vscode/
 
+# esp-idf / embuild generated files (Rust firmware PoC).
+firmware-rust-poc/.embuild/
+firmware-rust-poc/sdkconfig
+firmware-rust-poc/managed_components/
+firmware-rust-poc/dependencies.lock
+
 # Local env and secret files.
 .env
 .env.*
