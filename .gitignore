@@ -1,5 +1,6 @@
 # Local firmware secrets.
 firmware/include/config.h
+firmware-rust-poc/src/config.rs
 
 # Windows Agent local secrets.
 windows-agent/config.toml
@@ -11,6 +12,12 @@ windows-agent/target/
 # PlatformIO generated files.
 firmware/.pio/
 firmware/.vscode/
+
+# esp-idf / embuild generated files (Rust firmware PoC).
+firmware-rust-poc/.embuild/
+firmware-rust-poc/sdkconfig
+firmware-rust-poc/managed_components/
+firmware-rust-poc/dependencies.lock
 
 # Local env and secret files.
 .env

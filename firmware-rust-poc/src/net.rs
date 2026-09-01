@@ -1,0 +1,164 @@
+// Wi-Fi, Wake-on-LAN and the STATUS reachability check.
+
+use std::error::Error;
+use std::io;
+use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
+use std::time::Duration;
+
+use esp_idf_hal::modem::Modem;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
+
+/// Wi-Fi station handle. Must be kept alive for the connection to persist:
+/// dropping it tears the connection down.
+pub struct Wifi {
+    inner: BlockingWifi<EspWifi<'static>>,
+}
+
+impl Wifi {
+    /// Configures and starts the station interface, then blocks until the
+    /// interface is up. Takes the `Modem` obtained from `Peripherals::take()`;
+    /// use this for the initial connection attempt only. If it returns `Err`,
+    /// the `Modem` passed in is gone (moved into the failed `EspWifi::new()`
+    /// call and dropped with it) — retry with `connect_retry()` instead of
+    /// trying to reuse it.
+    pub fn connect(modem: Modem, ssid: &str, password: &str) -> Result<Self, Box<dyn Error>> {
+        Self::connect_with_modem(modem, ssid, password)
+    }
+
+    /// Retries a connection from scratch after a previous attempt failed and
+    /// its `Modem` was dropped along with it.
+    ///
+    /// # Safety (of the `Modem::new()` call inside)
+    /// Only call this while no other live `Wifi`/`Modem` instance exists —
+    /// i.e. when the caller's own `Option<Wifi>` is `None`. That is exactly
+    /// the situation this exists for: the initial `connect()` failed (so its
+    /// `Modem` was already dropped) or a previous `connect_retry()` failed the
+    /// same way.
+    pub fn connect_retry(ssid: &str, password: &str) -> Result<Self, Box<dyn Error>> {
+        let modem = unsafe { Modem::new() };
+        Self::connect_with_modem(modem, ssid, password)
+    }
+
+    fn connect_with_modem(
+        modem: Modem,
+        ssid: &str,
+        password: &str,
+    ) -> Result<Self, Box<dyn Error>> {
+        let sys_loop = EspSystemEventLoop::take()?;
+        let nvs = EspDefaultNvsPartition::take()?;
+
+        let mut inner =
+            BlockingWifi::wrap(EspWifi::new(modem, sys_loop.clone(), Some(nvs))?, sys_loop)?;
+
+        inner.set_configuration(&Configuration::Client(ClientConfiguration {
+            ssid: ssid.try_into().map_err(|_| "WIFI_SSID too long")?,
+            password: password.try_into().map_err(|_| "WIFI_PASSWORD too long")?,
+            auth_method: AuthMethod::WPA2Personal,
+            ..Default::default()
+        }))?;
+
+        inner.start()?;
+
+        let mut wifi = Self { inner };
+        wifi.associate()?;
+        Ok(wifi)
+    }
+
+    fn associate(&mut self) -> Result<(), Box<dyn Error>> {
+        self.inner.connect()?;
+        self.inner.wait_netif_up()?;
+        Ok(())
+    }
+
+    pub fn is_up(&self) -> bool {
+        self.inner.is_up().unwrap_or(false)
+    }
+
+    /// Re-associates after a drop-out. Mirrors the reconnect behaviour of the
+    /// C++ firmware's `connectWifi()`; callers rate-limit the retries.
+    pub fn reconnect(&mut self) -> Result<(), Box<dyn Error>> {
+        // `connect()` fails if the driver still considers itself connected.
+        let _ = self.inner.disconnect();
+        self.associate()
+    }
+}
+
+fn parse_mac(text: &str) -> Option<[u8; 6]> {
+    let mut mac = [0u8; 6];
+    let parts: Vec<&str> = text.split(':').collect();
+    if parts.len() != 6 {
+        return None;
+    }
+    for (i, part) in parts.iter().enumerate() {
+        mac[i] = u8::from_str_radix(part, 16).ok()?;
+    }
+    Some(mac)
+}
+
+/// Sends a Wake-on-LAN magic packet to the limited broadcast address
+/// (255.255.255.255), matching firmware/src/power_controller.cpp: this keeps
+/// working regardless of the LAN's actual subnet prefix length.
+pub fn send_wake_on_lan(mac_text: &str, port: u16) -> Result<(), Box<dyn Error>> {
+    let mac = parse_mac(mac_text).ok_or("invalid PC_MAC_ADDRESS")?;
+
+    let mut packet = vec![0xFFu8; 6];
+    for _ in 0..16 {
+        packet.extend_from_slice(&mac);
+    }
+
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.set_broadcast(true)?;
+    let sent = socket.send_to(&packet, ("255.255.255.255", port))?;
+    if sent != packet.len() {
+        return Err(format!("short WOL write: {sent}/{}", packet.len()).into());
+    }
+    Ok(())
+}
+
+/// STATUS-equivalent check. A fast connect or a connection refusal both mean
+/// the PC answered; a timeout means it is off or unreachable.
+pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
+    let Ok(mut addrs) = addr_text.to_socket_addrs() else {
+        return false;
+    };
+    let Some(addr) = addrs.next() else {
+        return false;
+    };
+    match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(_) => true,
+        Err(e) => e.kind() == io::ErrorKind::ConnectionRefused,
+    }
+}
+
+/// Starts SNTP so the system clock becomes real. The Windows Agent verifies
+/// the request timestamp against its own clock, so signed REBOOT/SHUTDOWN
+/// commands only work once this has synced. The returned handle must be kept
+/// alive; dropping it stops the client.
+pub fn start_sntp() -> Result<esp_idf_svc::sntp::EspSntp<'static>, Box<dyn Error>> {
+    Ok(esp_idf_svc::sntp::EspSntp::new_default()?)
+}
+
+/// Blocks until the system clock looks NTP-synced, or `timeout` elapses.
+/// Mirrors the C++ firmware's waitForNtpSync(): best-effort, so callers
+/// continue even on timeout (the agent request itself refuses a bad clock).
+pub fn wait_for_time_sync(timeout: Duration) -> bool {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
+
+    let start = std::time::Instant::now();
+    loop {
+        let synced = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() >= MIN_VALID_UNIX_TIME)
+            .unwrap_or(false);
+        if synced {
+            return true;
+        }
+        if start.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
