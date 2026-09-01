@@ -72,7 +72,13 @@
 - `/status`、`/wake`、`/reboot`+`/confirm_reboot <nonce>`、`/shutdown`+`/confirm_shutdown <nonce>` を実装。`from.id`が`TELEGRAM_ALLOWED_USER_ID`と一致しないupdateは無視・返信なし。確認nonceはRAM上のみ、`TELEGRAM_CONFIRM_TTL_MS`でTTL、成功/失敗・不一致に関わらず1回で消費(再利用不可)。
 - `firmware/include/config.example.h`(および実機用のローカル`config.h`、コミット対象外)に`TELEGRAM_BOT_TOKEN`、`TELEGRAM_ALLOWED_USER_ID`、`TELEGRAM_LONG_POLL_TIMEOUT_SECONDS`、`TELEGRAM_CONFIRM_TTL_MS`を追加。`TELEGRAM_BOT_TOKEN`/`TELEGRAM_ALLOWED_USER_ID`がplaceholderのままだとTelegramタスク自体を起動せず、画面は`Telegram: disabled`になる(既存のタッチUI・WOL・STATUSは無変更で動作)。
 - `make check`(Rust fmt/clippy/test + `pio run -d firmware`)、`bash -n scripts/*.sh`、`git diff --check`、secretパターン検索はすべて成功・検出なし。この環境には実際にPlatformIO CLIが入っており`firmware-build`はスキップされず実行された。
-- **実Telegram疎通は未確認。** 実bot token・実user idを使った動作確認(`docs/external-access.md`のPhase 5D: 実機での`/status`・`/wake`・`/reboot`・`/shutdown`)はこのセッションでは行っていない。次回、実bot tokenとuser idを`config.h`に設定した上で実機書き込み・動作確認が必要。
+- 実bot token・実user idを`firmware/include/config.h`(Git管理外)へ設定し、M5Stack Core2実機へ`pio run -d firmware -t upload --upload-port /dev/ttyUSB0`で書き込み成功。
+- 実Telegram疎通の確認結果(2026-09-01 JST):
+  - `/status`: botから返信あり。PCのONLINE状態、Wi-Fi RSSI、M5Stack IP、最終確認時刻が返ることを確認。
+  - `/wake`: botから`WOL sent`の返信あり。Wake-on-LAN送信コマンドがTelegram経由で呼べることを確認。
+  - `/reboot`: 即時再起動せず、`/confirm_reboot <nonce>`の確認コマンド案内が返ることを確認。
+  - `/shutdown`: 即時シャットダウンせず、`/confirm_shutdown <nonce>`の確認コマンド案内が返ることを確認。
+- `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` の実行確認は未実施。危険操作のため、PC停止してよいタイミングで別途確認する。
 
 ## Codexレビュー対応: TLS証明書検証の有効化 (2026-09-01)
 
@@ -83,7 +89,7 @@
 - ついでの対応として、`firmware/src/power_controller.cpp`の`postAgentCommand()`にHTTPClientの明示timeout(`setConnectTimeout(3000)` / `setTimeout(3000)`)を追加した。この呼び出しは`powerMutex`を保持したまま実行されるため、Windows Agentが応答しない場合でもタッチUI・Telegramタスクを長時間ブロックしないようにする狙い。
 - CA証明書のローテーション運用(将来Telegramがルート認証局を切り替えた場合の症状・復旧手順)を`docs/external-access.md`・`docs/security.md`・README.mdに追記した。
 - 検証: `pio run -d firmware`(証明書埋め込み後の再ビルド含む)、`make check`、`bash -n scripts/*.sh`、`git diff --check`、secretパターン検索。すべて成功・検出なし。
-- 埋め込んだのはルート認証局の公開証明書のみで、秘密情報ではない。実Telegram疎通(実bot tokenでの動作確認)は引き続き未実施。
+- 埋め込んだのはルート認証局の公開証明書のみで、秘密情報ではない。
 
 ## 次のセッションへの依頼例
 
