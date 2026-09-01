@@ -14,7 +14,7 @@
 - `firmware/include/config.h` と `windows-agent/config.toml` はローカル専用で、テンプレートだけをGit管理する。
 - 設定を追加したら、対応する `*.example.*`、README、関連docsを同じ変更で更新する。
 - テストで実ネットワーク、実PCのshutdown/reboot、実Wi-Fi認証情報を使わない。Agentの認証や設定処理は純粋関数またはループバックでテストする。
-- firmwareの実機動作確認結果は README または `HANDOFF.md` に、日時と確認範囲を明記して残す。
+- firmwareの実機動作確認結果は、対応するGitHub IssueまたはPRに日時と確認範囲を明記して残す。`HANDOFF.md`は変わりにくい恒久構成のみを書き、日時付きの実装履歴は書かない。
 - ソースコードの識別子は英語、コメントとドキュメントは日本語または英語のどちらでもよいが、ユーザー向け説明は日本語を優先する。
 - `.githooks/` はローカルで早期に事故を止める入口であり、品質ゲートの正本は `Makefile` と `.claude/skills/verify/SKILL.md` に置く。
 - `git add .` / `git add -A` は使わない。stageは明示パス指定または `git add -p` にする。
