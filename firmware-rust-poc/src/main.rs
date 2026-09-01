@@ -1,10 +1,17 @@
 mod agent;
 mod board;
-mod config;
 mod net;
 mod telegram;
 mod telegram_root_ca;
 mod ui;
+
+/// Generated at build time from the git-ignored `config.toml` (see
+/// `config.example.toml`), never written into `src/` as Rust source. See
+/// `build.rs` and Issue #21: a literal secret in `src/` could leak into
+/// build logs via a compiler warning printing the offending source line.
+mod config {
+    include!(concat!(env!("OUT_DIR"), "/generated_config.rs"));
+}
 
 use std::cell::RefCell;
 use std::error::Error;

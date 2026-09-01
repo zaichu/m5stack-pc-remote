@@ -16,6 +16,11 @@ if [[ ! -d "$poc_dir" ]]; then
   exit 0
 fi
 
+# Blocks on the old secrets-in-Rust-source file (Issue #21) without printing
+# its contents. Runs even when the esp toolchain is missing below, so CI (and
+# any machine without it) still catches a leftover legacy file.
+bash "$repo_root/scripts/check-local-firmware-rust-secrets.sh"
+
 if ! command -v cargo >/dev/null 2>&1; then
   echo "WARNING: cargo not found; skipping Rust firmware PoC build."
   exit 0
@@ -31,8 +36,8 @@ if ! command -v ldproxy >/dev/null 2>&1; then
   exit 0
 fi
 
-if [[ ! -f "$poc_dir/src/config.rs" ]]; then
-  echo "WARNING: $poc_dir/src/config.rs not found (copy src/config.example.rs); skipping Rust firmware PoC build."
+if [[ ! -f "$poc_dir/config.toml" ]]; then
+  echo "WARNING: $poc_dir/config.toml not found (copy config.example.toml); skipping Rust firmware PoC build."
   exit 0
 fi
 

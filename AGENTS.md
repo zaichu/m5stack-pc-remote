@@ -12,6 +12,7 @@
 - `REBOOT` / `SHUTDOWN` は HMAC-SHA256、timestamp、nonceで認証する。認証を弱めたり、LAN内だからという理由で無認証APIを追加しない。
 - 秘密鍵、Wi-Fiパスワード、PCの実MACアドレス、実LAN構成はGitへ入れない。
 - `firmware/include/config.h` と `windows-agent/config.toml` はローカル専用で、テンプレートだけをGit管理する。
+- `firmware-rust-poc/` も同様に `config.toml` をローカル専用にし、テンプレート(`config.example.toml`)だけをGit管理する。secretをRustソース(`src/`配下)へ直接 `pub const` として書かない。コンパイラの unused警告がソース行を出力してビルドログへ秘密情報が漏れる事故があったため(Issue #21)、`build.rs` がビルド時に `config.toml` を読み込む方式にしている。
 - 設定を追加したら、対応する `*.example.*`、README、関連docsを同じ変更で更新する。
 - テストで実ネットワーク、実PCのshutdown/reboot、実Wi-Fi認証情報を使わない。Agentの認証や設定処理は純粋関数またはループバックでテストする。
 - firmwareの実機動作確認結果は、対応するGitHub IssueまたはPRに日時と確認範囲を明記して残す。`HANDOFF.md`は変わりにくい恒久構成のみを書き、日時付きの実装履歴は書かない。

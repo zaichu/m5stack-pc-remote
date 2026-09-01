@@ -24,6 +24,7 @@
 - ローカル秘密設定(Git管理外):
   - `firmware/include/config.h`
   - `windows-agent/config.toml`
+  - `firmware-rust-poc/config.toml`(secretをRustソースへ直接書かない。Issue #21)
 - 外部操作の経路:
   - `Smartphone -> Telegram Bot API (outbound HTTPS long polling) -> M5Stack Core2 -> Windows PC`
   - Windows Agentを直接インターネットへ公開しない

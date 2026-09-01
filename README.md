@@ -182,6 +182,8 @@ make install-hooks
 Gitへ入れないファイル:
 
 - `firmware/include/config.h`
+- `firmware-rust-poc/config.toml`
+- `firmware-rust-poc/src/config.rs` (旧方式。ビルドログ漏えい防止のため使用禁止)
 - `windows-agent/config.toml`
 - `.env`
 - `*.pem`
@@ -189,6 +191,7 @@ Gitへ入れないファイル:
 - `*secret*.json`
 
 テンプレートだけをGit管理します。
+Rust firmware PoCでは、秘密情報をRustソースへ直接書かず、Git管理外のTOML設定を使います。
 
 ## ドキュメント
 

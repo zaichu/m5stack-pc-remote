@@ -20,6 +20,7 @@ fi
 
 tracked_files=()
 while IFS= read -r path; do
+  [[ -f "$path" ]] || continue
   case "${path}" in
     firmware/src/telegram_root_ca.h|firmware-rust-poc/src/telegram_root_ca.rs|scripts/scan-secrets.sh|.claude/skills/verify/SKILL.md)
       continue
