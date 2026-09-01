@@ -190,10 +190,14 @@ void loop() {
   M5.update();
   connectWifi();
 
+  // PowerController::begin() already refreshes PC status on its own
+  // background task (see power_controller.cpp), so this only needs to
+  // redraw periodically to reflect whatever it last found. Redrawing here
+  // instead of relying on that task to trigger a redraw keeps all display
+  // writes on loopTask.
   unsigned long now = millis();
   if (now - lastStatusAt >= STATUS_INTERVAL_MS) {
     lastStatusAt = now;
-    PowerController::updateStatus();
     drawScreen();
   }
 

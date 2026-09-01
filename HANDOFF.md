@@ -113,6 +113,12 @@
 - Issue #8: Windows Agentの `GET /status` はPC状態ではなくAgentプロセスのヘルスチェックとして `agent_online` / `status` を返す形に変更し、READMEにも明記。
 - 追加: GitHub Actions CIを追加し、PRとmain pushで `make check` と `bash -n scripts/*.sh` を実行する。
 
+## STATUS非同期化とTelegram実機確認、WOLのスリープ復帰検証 (2026-09-01)
+
+- Issue #7: `updateStatus()` 内の `Ping.ping()` を `power_controller.cpp` 内の専用FreeRTOSタスク(`statusPollTask`, `STATUS_INTERVAL_MS`周期)へ移し、`loop()` からは外した。`loop()` の周期処理は `drawScreen()` のみ残し、WOL/Windows Agentコマンド実行直後の明示的な `updateStatus()` 呼び出し(トースト表示・`delay(500)` と合わせた同期呼び出し)は変更していない。実機でSTATUS更新中もボタン操作が取りこぼされないことを確認済み。
+- Issue #14: Telegramアプリから `/reboot` を送信し、インラインボタンでの「キャンセル」動作、および実際の `/reboot` 実行(PC再起動)・`/shutdown` 実行(PCシャットダウン)まで実機で確認できた。`agent /shutdown -> 200` をfirmwareログで確認。
+- WOLは完全シャットダウン(S5)だけでなく、スリープ(S3)からの復帰でも実機で動作することを確認した。スリープはシャットダウンと異なりWSL2(このセッションの実行基盤)を巻き込まないため、セッションを中断せずに検証できた。
+
 ## 次のセッションへの依頼例
 
 ```text

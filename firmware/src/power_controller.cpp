@@ -10,6 +10,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/task.h>
 
 #if __has_include("config.h")
 #include "config.h"
@@ -92,6 +93,19 @@ String agentUrl(const char *path) {
   return String("http://") + PC_IP_ADDRESS + ":" + String(AGENT_PORT) + path;
 }
 
+// Runs the blocking ICMP ping on its own task so the periodic STATUS refresh
+// never stalls loopTask (touch handling / drawScreen), unlike calling
+// updateStatus() directly from loop(). Deliberate manual refreshes (after
+// WOL, after a Windows Agent command) still call updateStatus() synchronously
+// from their own call sites, which is fine since those already pause the UI
+// with a toast/delay.
+void statusPollTask(void *) {
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(STATUS_INTERVAL_MS));
+    PowerController::updateStatus();
+  }
+}
+
 } // namespace
 
 namespace PowerController {
@@ -99,6 +113,7 @@ namespace PowerController {
 void begin() {
   powerMutex = xSemaphoreCreateMutex();
   udp.begin(WOL_PORT);
+  xTaskCreate(statusPollTask, "status_poll", 4096, nullptr, 1, nullptr);
 }
 
 bool sendWakeOnLan() {
