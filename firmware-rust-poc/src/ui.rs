@@ -7,7 +7,7 @@
 
 use std::error::Error;
 
-use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_9X18_BOLD, FONT_10X20};
+use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_9X18_BOLD};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
@@ -125,7 +125,10 @@ impl TelegramState {
     }
 }
 
-pub fn draw_main(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<(), Box<dyn Error>> {
+pub fn draw_main(
+    display: &mut Core2Display<'_>,
+    status: &Status<'_>,
+) -> Result<(), Box<dyn Error>> {
     display
         .clear(Rgb565::BLACK)
         .map_err(|e| format!("clear failed: {e:?}"))?;
@@ -166,7 +169,11 @@ pub fn draw_main(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<
     .map_err(|e| format!("draw failed: {e:?}"))?;
 
     Text::new(
-        if status.pc_online { "ONLINE" } else { "OFFLINE" },
+        if status.pc_online {
+            "ONLINE"
+        } else {
+            "OFFLINE"
+        },
         Point::new(105, 110),
         MonoTextStyle::new(
             &FONT_10X20,

@@ -29,6 +29,57 @@ enum Screen {
     Confirm(PowerAction),
 }
 
+/// Starts the services that only make sense once Wi-Fi is up (SNTP and the
+/// Telegram poller). Idempotent: safe to call every time the link comes up,
+/// including after a drop-and-reconnect, because `sntp`/`telegram_started`
+/// remember what has already been started. Called both right after the
+/// initial connection attempt and from the reconnect loop, so that Telegram
+/// still starts even when Wi-Fi was down at boot and only recovers later.
+///
+/// Does not wait for the NTP sync to complete: this runs on the touch UI
+/// loop's thread, which must keep polling touch/STATUS every ~20ms on this
+/// 24/7 device. `agent::send_command` already refuses to run on an unsynced
+/// clock, and the Telegram thread (`telegram::Client::run`) does its own
+/// bounded wait on its own thread before polling, so neither needs the UI
+/// loop to block here.
+fn start_online_services(
+    sntp: &mut Option<esp_idf_svc::sntp::EspSntp<'static>>,
+    telegram_started: &mut bool,
+    power_lock: &telegram::PowerLock,
+    telegram_state: &Arc<Mutex<telegram::State>>,
+) {
+    if sntp.is_none() {
+        // The Windows Agent rejects requests whose timestamp is outside its
+        // clock skew window, so the clock has to be real before
+        // REBOOT/SHUTDOWN work. Starting it here is enough; see the doc
+        // comment above for why we don't also wait for sync here.
+        match net::start_sntp() {
+            Ok(started) => {
+                println!("SNTP started");
+                *sntp = Some(started);
+            }
+            Err(e) => println!("SNTP start failed: {e}"),
+        }
+    }
+
+    if !*telegram_started && telegram::is_configured() {
+        let client = telegram::Client::new(Arc::clone(power_lock));
+        let state_handle = Arc::clone(telegram_state);
+        // Own thread: a long poll blocks for TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
+        // which must never stall the touch UI or the STATUS refresh.
+        match std::thread::Builder::new()
+            .stack_size(12 * 1024)
+            .spawn(move || client.run(state_handle))
+        {
+            Ok(_) => {
+                *telegram_started = true;
+                println!("telegram: polling task started");
+            }
+            Err(e) => println!("telegram: failed to start polling thread: {e}"),
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     esp_idf_sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -81,7 +132,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     )?;
 
-    // Held for the whole program: dropping it tears down the connection.
+    // Serializes power actions between this thread and the Telegram thread,
+    // the role the FreeRTOS mutex plays in the C++ PowerController.
+    let power_lock: telegram::PowerLock = Arc::new(Mutex::new(()));
+    let telegram_state = Arc::new(Mutex::new(telegram::State::Disabled));
+    let mut sntp: Option<esp_idf_svc::sntp::EspSntp<'static>> = None;
+    let mut telegram_started = false;
+    if !telegram::is_configured() {
+        println!("telegram: disabled (token or user id is a placeholder)");
+    }
+
+    // Held for the whole program: dropping it tears down the connection. If
+    // this fails, `wifi_check_at` below retries every WIFI_RECONNECT_INTERVAL
+    // instead of leaving the device offline for good.
     let mut wifi = match net::Wifi::connect(peripherals.modem, WIFI_SSID, WIFI_PASSWORD) {
         Ok(wifi) => {
             println!("Wi-Fi connected");
@@ -93,47 +156,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     status.wifi_connected = wifi.as_ref().is_some_and(net::Wifi::is_up);
-
-    // The Windows Agent rejects requests whose timestamp is outside its clock
-    // skew window, so the clock has to be real before REBOOT/SHUTDOWN work.
-    let _sntp = if status.wifi_connected {
-        match net::start_sntp() {
-            Ok(sntp) => {
-                println!("SNTP started");
-                Some(sntp)
-            }
-            Err(e) => {
-                println!("SNTP start failed: {e}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // REBOOT/SHUTDOWN carry a timestamp the agent checks against its own
-    // clock, so wait for the first NTP sync before the UI offers them.
     if status.wifi_connected {
-        let synced = net::wait_for_time_sync(Duration::from_secs(15));
-        println!("SNTP synced: {synced}");
-    }
-
-    // Serializes power actions between this thread and the Telegram thread,
-    // the role the FreeRTOS mutex plays in the C++ PowerController.
-    let power_lock: telegram::PowerLock = Arc::new(Mutex::new(()));
-    let telegram_state = Arc::new(Mutex::new(telegram::State::Disabled));
-
-    if status.wifi_connected && telegram::is_configured() {
-        let client = telegram::Client::new(Arc::clone(&power_lock));
-        let state_handle = Arc::clone(&telegram_state);
-        // Own thread: a long poll blocks for TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
-        // which must never stall the touch UI or the STATUS refresh.
-        std::thread::Builder::new()
-            .stack_size(12 * 1024)
-            .spawn(move || client.run(state_handle))?;
-        println!("telegram: polling task started");
-    } else if !telegram::is_configured() {
-        println!("telegram: disabled (token or user id is a placeholder)");
+        start_online_services(
+            &mut sntp,
+            &mut telegram_started,
+            &power_lock,
+            &telegram_state,
+        );
     }
 
     ui::draw_main(&mut display, &status)?;
@@ -148,24 +177,48 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Re-associate if the link dropped, rate-limited like the C++ firmware.
         if wifi_check_at.elapsed() >= WIFI_RECONNECT_INTERVAL {
             wifi_check_at = Instant::now();
-            if let Some(w) = wifi.as_mut() {
-                if !w.is_up() {
-                    println!("Wi-Fi down; reconnecting");
-                    match w.reconnect() {
-                        Ok(()) => println!("Wi-Fi reconnected"),
-                        Err(e) => println!("Wi-Fi reconnect failed: {e}"),
+            match wifi.as_mut() {
+                Some(w) => {
+                    if !w.is_up() {
+                        println!("Wi-Fi down; reconnecting");
+                        match w.reconnect() {
+                            Ok(()) => println!("Wi-Fi reconnected"),
+                            Err(e) => println!("Wi-Fi reconnect failed: {e}"),
+                        }
                     }
                 }
-                let now_connected = w.is_up();
-                if now_connected != status.wifi_connected {
-                    status.wifi_connected = now_connected;
-                    if !status.wifi_connected {
-                        status.pc_online = false;
-                    }
-                    if matches!(screen, Screen::Main) {
-                        ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                None => {
+                    // The initial connect (or a previous retry) failed and
+                    // dropped its Modem; re-acquire one and try again so a
+                    // failed boot connection is not permanent.
+                    println!("Wi-Fi never connected; retrying");
+                    match net::Wifi::connect_retry(WIFI_SSID, WIFI_PASSWORD) {
+                        Ok(w) => {
+                            println!("Wi-Fi connected");
+                            wifi = Some(w);
+                        }
+                        Err(e) => println!("Wi-Fi connect retry failed: {e}"),
                     }
                 }
+            }
+
+            let now_connected = wifi.as_ref().is_some_and(net::Wifi::is_up);
+            if now_connected != status.wifi_connected {
+                status.wifi_connected = now_connected;
+                if !status.wifi_connected {
+                    status.pc_online = false;
+                }
+                if matches!(screen, Screen::Main) {
+                    ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                }
+            }
+            if now_connected {
+                start_online_services(
+                    &mut sntp,
+                    &mut telegram_started,
+                    &power_lock,
+                    &telegram_state,
+                );
             }
         }
 

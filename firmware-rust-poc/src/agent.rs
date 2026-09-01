@@ -16,8 +16,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use embedded_svc::http::client::Client as HttpClient;
 use embedded_svc::http::Method;
-use esp_idf_svc::io::Write;
 use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
+use esp_idf_svc::io::Write;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 

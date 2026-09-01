@@ -18,7 +18,7 @@ use esp_idf_hal::delay::{Delay, FreeRtos};
 use esp_idf_hal::gpio::{AnyIOPin, Gpio15, Gpio18, Gpio23, Gpio5, Output, PinDriver};
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver, I2C0};
 use esp_idf_hal::prelude::*;
-use esp_idf_hal::spi::config::{Config as SpiConfig, Duplex, DriverConfig};
+use esp_idf_hal::spi::config::{Config as SpiConfig, DriverConfig, Duplex};
 use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver, SPI2};
 use ft6x36::Ft6x36;
 use mipidsi::interface::SpiInterface;

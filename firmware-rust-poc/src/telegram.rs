@@ -181,13 +181,15 @@ impl Client {
     }
 
     fn status_text(&self) -> String {
-        let online = net::check_pc_online(
-            crate::config::PC_STATUS_ADDR,
-            Duration::from_millis(800),
-        );
+        let online =
+            net::check_pc_online(crate::config::PC_STATUS_ADDR, Duration::from_millis(800));
         format!(
             "PC: {}\nM5Stack: Rust firmware (PoC)",
-            if online { "オンライン" } else { "オフライン" }
+            if online {
+                "オンライン"
+            } else {
+                "オフライン"
+            }
         )
     }
 
@@ -225,7 +227,9 @@ impl Client {
         let pending = self.pending.take();
         match pending {
             Some(p) => {
-                p.action == action && !supplied.is_empty() && p.nonce == supplied
+                p.action == action
+                    && !supplied.is_empty()
+                    && p.nonce == supplied
                     && Instant::now() < p.expires_at
             }
             None => false,
@@ -319,11 +323,20 @@ impl Client {
             return;
         };
 
-        let chat_id = callback["message"]["chat"]["id"].as_i64().unwrap_or_default();
+        let chat_id = callback["message"]["chat"]["id"]
+            .as_i64()
+            .unwrap_or_default();
         let valid = self.consume_pending(action, &nonce);
 
         if !is_confirm {
-            Self::answer_callback_query(&id, if valid { "キャンセルしました" } else { "処理済みです" });
+            Self::answer_callback_query(
+                &id,
+                if valid {
+                    "キャンセルしました"
+                } else {
+                    "処理済みです"
+                },
+            );
             if chat_id != 0 {
                 let reply = if valid {
                     format!("{}をキャンセルしました。", action.label_ja())

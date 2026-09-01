@@ -18,8 +18,34 @@ pub struct Wifi {
 
 impl Wifi {
     /// Configures and starts the station interface, then blocks until the
-    /// interface is up.
+    /// interface is up. Takes the `Modem` obtained from `Peripherals::take()`;
+    /// use this for the initial connection attempt only. If it returns `Err`,
+    /// the `Modem` passed in is gone (moved into the failed `EspWifi::new()`
+    /// call and dropped with it) — retry with `connect_retry()` instead of
+    /// trying to reuse it.
     pub fn connect(modem: Modem, ssid: &str, password: &str) -> Result<Self, Box<dyn Error>> {
+        Self::connect_with_modem(modem, ssid, password)
+    }
+
+    /// Retries a connection from scratch after a previous attempt failed and
+    /// its `Modem` was dropped along with it.
+    ///
+    /// # Safety (of the `Modem::new()` call inside)
+    /// Only call this while no other live `Wifi`/`Modem` instance exists —
+    /// i.e. when the caller's own `Option<Wifi>` is `None`. That is exactly
+    /// the situation this exists for: the initial `connect()` failed (so its
+    /// `Modem` was already dropped) or a previous `connect_retry()` failed the
+    /// same way.
+    pub fn connect_retry(ssid: &str, password: &str) -> Result<Self, Box<dyn Error>> {
+        let modem = unsafe { Modem::new() };
+        Self::connect_with_modem(modem, ssid, password)
+    }
+
+    fn connect_with_modem(
+        modem: Modem,
+        ssid: &str,
+        password: &str,
+    ) -> Result<Self, Box<dyn Error>> {
         let sys_loop = EspSystemEventLoop::take()?;
         let nvs = EspDefaultNvsPartition::take()?;
 
