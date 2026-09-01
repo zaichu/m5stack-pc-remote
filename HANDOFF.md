@@ -75,7 +75,7 @@
 - 実bot token・実user idを`firmware/include/config.h`(Git管理外)へ設定し、M5Stack Core2実機へ`pio run -d firmware -t upload --upload-port /dev/ttyUSB0`で書き込み成功。
 - 実Telegram疎通の確認結果(2026-09-01 JST):
   - `/status`: botから返信あり。PCのONLINE状態、Wi-Fi RSSI、M5Stack IP、最終確認時刻が返ることを確認。
-  - `/wake`: botから`WOL sent`の返信あり。Wake-on-LAN送信コマンドがTelegram経由で呼べることを確認。
+  - `/wake`: botからWOL送信成功の返信あり。Wake-on-LAN送信コマンドがTelegram経由で呼べることを確認。
   - `/reboot`: 即時再起動せず、`/confirm_reboot <nonce>`の確認コマンド案内が返ることを確認。
   - `/shutdown`: 即時シャットダウンせず、`/confirm_shutdown <nonce>`の確認コマンド案内が返ることを確認。
   - `/confirm_reboot <nonce>`: nonce付き確認コマンド送信後、Windows PCが正常に再起動することを確認。
@@ -94,7 +94,7 @@
 
 ## Telegram inline keyboardによる確認操作の改善 (2026-09-01)
 
-- `firmware/src/telegram_client.cpp` を変更し、`/reboot` / `/shutdown` の確認メッセージにインラインキーボード(確定ボタン「Reboot」/「Shutdown」とCancelボタン)を付けた。ボタンをタップするだけでnonce付き `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を手入力せずに確定・キャンセルできる。
+- `firmware/src/telegram_client.cpp` を変更し、`/reboot` / `/shutdown` の確認メッセージにインラインキーボード(確定ボタン「再起動」/「シャットダウン」と「キャンセル」ボタン)を付けた。ボタンをタップするだけでnonce付き `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を手入力せずに確定・キャンセルできる。
 - `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの1-64byte制限内)。`callback_query` を受けたら `parseCallbackData()` でaction/typeを検証し、既存の `consumePendingConfirm()` (旧 `handleConfirmation` から共通化)でpending nonce/action/TTLと突き合わせる。一致した場合だけ既存の `PowerController::postAgentCommand("/reboot")` / `("/shutdown")` を呼ぶ。
 - `callback_query` の `from.id` も `message` と同じく `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証する。不一致の場合はpending確認を操作せず、`answerCallbackQuery` で短い拒否文言だけ返す(`sendMessage` による通常返信はしない)。
 - 成功/失敗/キャンセル/nonce不一致/期限切れのいずれでも `consumePendingConfirm()` がpendingを消費するため、古いボタンの再タップやnonce総当たりは通らない。すべての `callback_query` で `answerCallbackQuery` を呼び、Telegramクライアント側のボタン読み込み状態を終える。

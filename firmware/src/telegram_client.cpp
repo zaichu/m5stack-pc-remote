@@ -121,7 +121,7 @@ void sendReplyWithConfirmButtons(int64_t chatId, const String &text,
   confirmBtn["text"] = confirmLabel;
   confirmBtn["callback_data"] = confirmData;
   JsonObject cancelBtn = row.add<JsonObject>();
-  cancelBtn["text"] = "Cancel";
+  cancelBtn["text"] = "キャンセル";
   cancelBtn["callback_data"] = cancelData;
   postTelegramJson("sendMessage", doc);
 }
@@ -139,7 +139,7 @@ void answerCallbackQuery(const String &callbackQueryId, const String &text) {
 
 String buildStatusReply() {
   String text = "PC: ";
-  text += PowerController::isPcOnline() ? "ONLINE" : "OFFLINE";
+  text += PowerController::isPcOnline() ? "オンライン" : "オフライン";
   text += "\nWi-Fi RSSI: ";
   text += String(WiFi.RSSI());
   text += " dBm\nM5Stack IP: ";
@@ -151,7 +151,7 @@ String buildStatusReply() {
     localtime_r(&now, &timeInfo);
     char buf[32];
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeInfo);
-    text += "\nLast check: ";
+    text += "\n最終確認: ";
     text += buf;
   }
   return text;
@@ -170,9 +170,11 @@ void requestConfirmation(int64_t chatId, PendingConfirmAction action,
   pendingConfirm.nonceValue = generateConfirmNonce();
   pendingConfirm.expiresAtMs = millis() + TELEGRAM_CONFIRM_TTL_MS;
 
-  String reply = "Confirm ";
-  reply += actionLabel;
-  reply += ": ";
+  String reply = action == PendingConfirmAction::Reboot
+                     ? "PCを再起動しますか？"
+                     : "PCをシャットダウンしますか？";
+  reply += "\nボタンを押すと実行します。";
+  reply += "\n手入力する場合: ";
   reply += confirmCommand;
   reply += " ";
   reply += pendingConfirm.nonceValue;
@@ -211,18 +213,20 @@ void handleConfirmation(int64_t chatId, PendingConfirmAction action,
   bool valid = consumePendingConfirm(action, suppliedNonce);
 
   if (!valid) {
-    String reply = "No matching pending ";
-    reply += actionLabel;
-    reply += " confirmation (expired, already used, or wrong nonce). Send /";
-    reply += actionLabel;
-    reply += " again.";
+    String reply = "有効な";
+    reply += strcmp(actionLabel, "reboot") == 0 ? "再起動" : "シャットダウン";
+    reply += "確認がありません。期限切れ、使用済み、またはnonce不一致です。";
+    reply += "\nもう一度 ";
+    reply += strcmp(actionLabel, "reboot") == 0 ? "/reboot" : "/shutdown";
+    reply += " から実行してください。";
     sendReply(chatId, reply);
     return;
   }
 
   bool ok = PowerController::postAgentCommand(agentPathFor(action));
   String reply = actionLabel;
-  reply += ok ? " accepted" : " failed";
+  reply = strcmp(actionLabel, "reboot") == 0 ? "再起動" : "シャットダウン";
+  reply += ok ? "を受け付けました。" : "に失敗しました。";
   sendReply(chatId, reply);
 }
 
@@ -232,14 +236,14 @@ void dispatchCommand(int64_t chatId, const String &command,
     sendReply(chatId, buildStatusReply());
   } else if (command == "/wake") {
     bool ok = PowerController::sendWakeOnLan();
-    sendReply(chatId, ok ? "WOL sent" : "WOL failed");
+    sendReply(chatId, ok ? "WOLを送信しました。" : "WOL送信に失敗しました。");
     PowerController::updateStatus();
   } else if (command == "/reboot") {
     requestConfirmation(chatId, PendingConfirmAction::Reboot, "reboot",
-                        "Reboot", "/confirm_reboot");
+                        "再起動", "/confirm_reboot");
   } else if (command == "/shutdown") {
     requestConfirmation(chatId, PendingConfirmAction::Shutdown, "shutdown",
-                        "Shutdown", "/confirm_shutdown");
+                        "シャットダウン", "/confirm_shutdown");
   } else if (command == "/confirm_reboot") {
     handleConfirmation(chatId, PendingConfirmAction::Reboot, "reboot", args);
   } else if (command == "/confirm_shutdown") {
@@ -307,14 +311,14 @@ void handleCallbackQuery(JsonObject callbackQuery) {
   if (strcmp(fromIdStr, TELEGRAM_ALLOWED_USER_ID) != 0) {
     // Unauthorized user: don't act on the button, but still close out the
     // client's loading state per the Bot API contract.
-    answerCallbackQuery(String(callbackId), "Unauthorized");
+    answerCallbackQuery(String(callbackId), "権限がありません");
     return;
   }
 
   const char *data = callbackQuery["data"] | "";
   ParsedCallback parsed = parseCallbackData(String(data));
   if (!parsed.ok) {
-    answerCallbackQuery(String(callbackId), "Invalid button");
+    answerCallbackQuery(String(callbackId), "無効なボタンです");
     return;
   }
 
@@ -323,34 +327,37 @@ void handleCallbackQuery(JsonObject callbackQuery) {
 
   if (!parsed.isConfirm) {
     answerCallbackQuery(String(callbackId),
-                        valid ? "Cancelled" : "Already handled");
+                        valid ? "キャンセルしました" : "処理済みです");
     if (chatId != 0) {
-      String reply = valid ? "Cancelled " : "No matching pending ";
-      reply += parsed.actionLabel;
-      reply += valid ? " confirmation."
-                     : " confirmation (expired, already used, or wrong "
-                       "nonce).";
+      String actionName =
+          strcmp(parsed.actionLabel, "reboot") == 0 ? "再起動" : "シャットダウン";
+      String reply = valid ? actionName + "をキャンセルしました。"
+                           : "有効な" + actionName +
+                                 "確認がありません。期限切れ、使用済み、または"
+                                 "nonce不一致です。";
       sendReply(chatId, reply);
     }
     return;
   }
 
   if (!valid) {
-    answerCallbackQuery(String(callbackId), "Expired or already used");
+    answerCallbackQuery(String(callbackId), "期限切れまたは処理済みです");
     if (chatId != 0) {
-      String reply = "No matching pending ";
-      reply += parsed.actionLabel;
-      reply += " confirmation (expired, already used, or wrong nonce). Send /";
-      reply += parsed.actionLabel;
-      reply += " again.";
+      String reply = "有効な";
+      reply += strcmp(parsed.actionLabel, "reboot") == 0 ? "再起動" : "シャットダウン";
+      reply += "確認がありません。期限切れ、使用済み、またはnonce不一致です。";
+      reply += "\nもう一度 ";
+      reply += strcmp(parsed.actionLabel, "reboot") == 0 ? "/reboot" : "/shutdown";
+      reply += " から実行してください。";
       sendReply(chatId, reply);
     }
     return;
   }
 
   bool ok = PowerController::postAgentCommand(agentPathFor(parsed.action));
-  String resultText = parsed.actionLabel;
-  resultText += ok ? " accepted" : " failed";
+  String resultText =
+      strcmp(parsed.actionLabel, "reboot") == 0 ? "再起動" : "シャットダウン";
+  resultText += ok ? "を受け付けました。" : "に失敗しました。";
   answerCallbackQuery(String(callbackId), resultText);
   if (chatId != 0) {
     sendReply(chatId, resultText);

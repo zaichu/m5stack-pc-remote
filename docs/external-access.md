@@ -47,14 +47,15 @@ M5Stackが `getUpdates` を定期実行またはlong pollingし、許可ユー�
 - `/reboot`
 - `/shutdown`
 
-`/reboot` と `/shutdown` は即実行しません。M5Stackは確認メッセージを返し、短時間だけ有効な確認nonceを生成します。メッセージには「Reboot」/「Shutdown」ボタンと「Cancel」ボタンのインラインキーボードが付き、タップ1回で確定/キャンセルできます。
+`/reboot` と `/shutdown` は即実行しません。M5Stackは日本語の確認メッセージを返し、短時間だけ有効な確認nonceを生成します。メッセージには「再起動」/「シャットダウン」ボタンと「キャンセル」ボタンのインラインキーボードが付き、タップ1回で確定/キャンセルできます。
 
 例:
 
 ```text
 /shutdown
--> Confirm shutdown: /confirm_shutdown 8K3P2Q
-   [Shutdown] [Cancel]
+-> PCをシャットダウンしますか？
+   手入力する場合: /confirm_shutdown 8K3P2Q
+   [シャットダウン] [キャンセル]
 ```
 
 確認nonceはM5StackのRAM上だけに保持し、期限切れ・使用済み・不一致を拒否します。インラインボタンの `callback_data` にも同じactionとnonceを埋め込み(`confirm:shutdown:8K3P2Q` / `cancel:shutdown:8K3P2Q` の形式)、古いメッセージのボタンや別actionのボタンを押しても通らないようにしています。
@@ -90,10 +91,10 @@ Telegramや外部中継先には `AGENT_SHARED_SECRET` を渡しません。
 応答例:
 
 ```text
-PC: ONLINE
+PC: オンライン
 Wi-Fi RSSI: -58 dBm
 M5Stack IP: 192.168.1.50
-Last check: 2026-09-01 00:00:00 JST
+最終確認: 2026-09-01 00:00:00 JST
 ```
 
 ## WAKE
@@ -105,11 +106,11 @@ Last check: 2026-09-01 00:00:00 JST
 `/reboot` / `/shutdown` は以下の二段階です。
 
 1. Telegramで操作要求を受ける。
-2. M5Stackが確認nonce付きメッセージを、インラインキーボード(確定ボタン/Cancelボタン)付きで返す。
+2. M5Stackが確認nonce付きメッセージを、インラインキーボード(確定ボタン/キャンセルボタン)付きで返す。
 3. 許可ユーザーが確定ボタンをタップするか、`/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を送る。
 4. M5StackがWindows Agentへ既存のHMAC署名付きPOSTを送る。
 
-Cancelボタンをタップした場合はpending確認だけを消費し、Windows Agentへは何も送りません。ボタン経由(`callback_query`)でも `from.id` を `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、Telegram仕様に従って `answerCallbackQuery` を必ず呼びます。Windows Agent側の `confirm: true` 必須条件は維持します。
+キャンセルボタンをタップした場合はpending確認だけを消費し、Windows Agentへは何も送りません。ボタン経由(`callback_query`)でも `from.id` を `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、Telegram仕様に従って `answerCallbackQuery` を必ず呼びます。Windows Agent側の `confirm: true` 必須条件は維持します。
 
 ## poll間隔
 
@@ -176,7 +177,7 @@ Cancelボタンをタップした場合はpending確認だけを消費し、Wind
 
 ### Phase 5E: インラインボタンによる確認 (実装済み / 実機確認待ち)
 
-- `/reboot` / `/shutdown` の確認メッセージに、確定ボタンとCancelボタンのインラインキーボードを追加する。
+- `/reboot` / `/shutdown` の確認メッセージに、確定ボタンとキャンセルボタンのインラインキーボードを追加する。
 - `callback_query` を処理し、`callback_data` のaction/nonceがpending確認と一致する場合だけ実行する。
 - `callback_query` でも `from.id` を厳密一致で検証し、`answerCallbackQuery` を必ず呼ぶ。
 - 既存の `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` は後方互換として残す。
@@ -188,8 +189,8 @@ Cancelボタンをタップした場合はpending確認だけを消費し、Wind
 - `from.id` が `TELEGRAM_ALLOWED_USER_ID` と一致しないupdateは無視し、返信しない。`update_id` は次回 `offset` として保持し、再処理しない。起動直後の最初の1バッチは、オフライン中に来たコマンドを実行しないよう、offset調整のみ行い実行はしない。
 - `/status` はキャッシュ済みのPC ONLINE/OFFLINE(既存のICMP ping結果)、Wi-Fi RSSI、M5Stack local IPを返す。
 - `/wake` は既存の `sendWakeOnLan()` を呼び、成功/失敗を返信後にSTATUSを再取得する。
-- `/reboot` / `/shutdown` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_MS` でTTL)を発行し、確定/Cancelのインラインキーボード付きで `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を案内する。
-- 確定ボタン・Cancelボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、既存の `postAgentCommand("/reboot")` / `postAgentCommand("/shutdown")` (HMAC署名付き)を呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
+- `/reboot` / `/shutdown` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_MS` でTTL)を発行し、確定/キャンセルのインラインキーボード付きで `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を案内する。
+- 確定ボタン・キャンセルボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、既存の `postAgentCommand("/reboot")` / `postAgentCommand("/shutdown")` (HMAC署名付き)を呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
 - ボタンの `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの64byte制限内)。`callback_query` の `from.id` もメッセージと同様に `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、一致しない場合はpending確認を操作せず、Telegram仕様どおり `answerCallbackQuery` だけ短い拒否文言付きで返す(通常のメッセージ返信はしない)。
 - HTTP失敗時は5秒から60秒への指数バックオフを行い、画面状態を `Telegram: error` にする。
 - Telegram APIとの通信はTLS (`WiFiClientSecure::setCACert()`) でサーバー証明書チェーンを検証する。ルートCAは `firmware/src/telegram_root_ca.h` に埋め込んだ「Go Daddy Root Certificate Authority - G2」(2037-12-31まで有効な自己署名ルート)を使う。`api.telegram.org` の葉証明書自体はおよそ年1回更新されるが、ルートCAを固定していれば葉証明書の更新だけでは検証は壊れない。
