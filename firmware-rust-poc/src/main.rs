@@ -22,6 +22,8 @@ const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Full-width band at the bottom of the screen that acts as the WAKE button.
+/// Taps on the physical button strip below the display (touch y 240..279) fall
+/// in this range too, so either works.
 const WAKE_BUTTON_TOP: i32 = 180;
 
 fn draw_screen(
@@ -205,10 +207,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let touch_down = match touch.get_touch_event() {
             Ok(event) => match event.p1 {
                 Some(p) => {
-                    println!("touch: x={} y={}", p.x, p.y);
-                    // Any tap counts as WAKE for now: this keeps touch
-                    // coordinate mapping out of the WOL verification path.
+                    let in_button = (p.y as i32) >= WAKE_BUTTON_TOP;
                     if !touch_was_down {
+                        println!(
+                            "touch: x={} y={} in_wake_button={in_button}",
+                            p.x, p.y
+                        );
+                    }
+                    if !touch_was_down && in_button {
                         println!("WAKE tapped at x={} y={}", p.x, p.y);
                         toast = Some(match net::send_wake_on_lan(PC_MAC_ADDRESS, WOL_PORT) {
                             Ok(()) => {

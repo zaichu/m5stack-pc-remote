@@ -33,6 +33,12 @@ const SPI_BUFFER_SIZE: usize = DISPLAY_WIDTH as usize * 2;
 pub const DISPLAY_WIDTH: u16 = 320;
 pub const DISPLAY_HEIGHT: u16 = 240;
 
+/// The Core2 touch panel is taller than the display: y 0..239 maps 1:1 onto
+/// the screen, and y 240..279 is the physical button strip below it (M5GFX
+/// configures the same range: x_max=319, y_max=279).
+pub const TOUCH_WIDTH: u16 = 320;
+pub const TOUCH_HEIGHT: u16 = 280;
+
 /// The axp192 driver uses this address internally; kept here as documentation
 /// of the shared-bus layout.
 #[allow(dead_code)]
@@ -158,9 +164,12 @@ pub fn new_axp<'a, 'd>(bus: &'a SharedI2c<'d>) -> Axp192<RefCellDevice<'a, I2cDr
 pub fn new_touch<'a, 'd>(bus: &'a SharedI2c<'d>) -> Ft6x36<RefCellDevice<'a, I2cDriver<'d>>> {
     // The ft6x36 driver uses its own default address (0x38), which matches
     // TOUCH_I2C_ADDR; the constant is kept for the raw diagnostic read below.
+    // Orientation::Portrait (the driver default) is the identity transform,
+    // which is what Core2 needs: the panel already reports coordinates in the
+    // display's frame.
     Ft6x36::new(
         RefCellDevice::new(bus),
-        ft6x36::Dimension(DISPLAY_WIDTH, DISPLAY_HEIGHT),
+        ft6x36::Dimension(TOUCH_WIDTH, TOUCH_HEIGHT),
     )
 }
 
