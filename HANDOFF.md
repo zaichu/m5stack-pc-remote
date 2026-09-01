@@ -92,6 +92,17 @@
 - 検証: `pio run -d firmware`(証明書埋め込み後の再ビルド含む)、`make check`、`bash -n scripts/*.sh`、`git diff --check`、secretパターン検索。すべて成功・検出なし。
 - 埋め込んだのはルート認証局の公開証明書のみで、秘密情報ではない。
 
+## Telegram inline keyboardによる確認操作の改善 (2026-09-01)
+
+- `firmware/src/telegram_client.cpp` を変更し、`/reboot` / `/shutdown` の確認メッセージにインラインキーボード(確定ボタン「Reboot」/「Shutdown」とCancelボタン)を付けた。ボタンをタップするだけでnonce付き `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を手入力せずに確定・キャンセルできる。
+- `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの1-64byte制限内)。`callback_query` を受けたら `parseCallbackData()` でaction/typeを検証し、既存の `consumePendingConfirm()` (旧 `handleConfirmation` から共通化)でpending nonce/action/TTLと突き合わせる。一致した場合だけ既存の `PowerController::postAgentCommand("/reboot")` / `("/shutdown")` を呼ぶ。
+- `callback_query` の `from.id` も `message` と同じく `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証する。不一致の場合はpending確認を操作せず、`answerCallbackQuery` で短い拒否文言だけ返す(`sendMessage` による通常返信はしない)。
+- 成功/失敗/キャンセル/nonce不一致/期限切れのいずれでも `consumePendingConfirm()` がpendingを消費するため、古いボタンの再タップやnonce総当たりは通らない。すべての `callback_query` で `answerCallbackQuery` を呼び、Telegramクライアント側のボタン読み込み状態を終える。
+- 既存の `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` テキストコマンドは後方互換としてそのまま残した。
+- `WiFiClientSecure::setInsecure()` は使っていない(既存どおり `setCACert(TELEGRAM_ROOT_CA_PEM)` を維持)。bot tokenをログへ出す変更もしていない。
+- ドキュメント更新: `README.md`、`docs/external-access.md`(Phase 5E追記)、`docs/security.md`。
+- 検証: `make check`、`bash -n scripts/*.sh`、`git diff --check`、`rg -n "setInsecure\(" firmware`(該当なし)、secretパターン検索。実機での動作確認(インラインボタンのタップ)は未実施(このセッションでは実機接続なし)。次回実機作業時に `/reboot` と `/shutdown` それぞれでボタンタップによる確定・キャンセルを確認し、`HANDOFF.md` へ結果を追記すること。
+
 ## 次のセッションへの依頼例
 
 ```text

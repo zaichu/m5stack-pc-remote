@@ -41,10 +41,11 @@ Agentの待受ポートはプライベートネットワークに限定します
 
 - `TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` は `firmware/include/config.h` に置き、Windows Agent用の `AGENT_SHARED_SECRET` とは分離する。Telegramや外部中継先には `AGENT_SHARED_SECRET` を渡さない。
 - どちらもSerialログ、画面表示、コミット、PR本文には出さない。`config.example.h` にはダミー値だけを置く。
-- `from.id` を文字列として `TELEGRAM_ALLOWED_USER_ID` と厳密一致で比較する。一致しないupdateは処理も返信もしない。
-- `/reboot` / `/shutdown` は即実行しない。6文字の確認nonceをRAM上だけに生成し、`TELEGRAM_CONFIRM_TTL_MS` で失効させる。
-- 確認コマンド (`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>`) はnonce一致・TTL内・actionの種類(reboot/shutdown)一致のときだけ実行する。
-- nonceは実行の成功/失敗、またはnonce不一致・期限切れに関わらず1回で消費し、以降の `/confirm_*` では再利用できない。これにより同じ確認要求へのnonce総当たりを防ぐ。
+- `from.id` を文字列として `TELEGRAM_ALLOWED_USER_ID` と厳密一致で比較する。一致しないupdateは処理も返信もしない。`callback_query`(インラインボタン)の `from.id` も同様に厳密一致で検証し、一致しない場合はpending確認を操作せず、`answerCallbackQuery` で短い拒否文言だけ返す(`sendMessage` による通常返信はしない)。
+- `/reboot` / `/shutdown` は即実行しない。6文字の確認nonceをRAM上だけに生成し、`TELEGRAM_CONFIRM_TTL_MS` で失効させる。確認メッセージには確定ボタン(Reboot/Shutdown)とCancelボタンのインラインキーボードを付ける。
+- 確定ボタン・Cancelボタン・従来の確認コマンド (`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>`) のいずれも、nonce一致・TTL内・actionの種類(reboot/shutdown)一致のときだけ実行する。ボタンの `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの1-64byte制限内)で、古いメッセージのボタンや別action/別nonceのボタンは一致しないため通らない。
+- nonceは実行の成功/失敗、キャンセル、またはnonce不一致・期限切れに関わらず1回で消費し、以降の確定ボタン・Cancelボタン・`/confirm_*` では再利用できない。これにより同じ確認要求へのnonce総当たりを防ぐ。
+- `callback_query` はTelegramの仕様どおり、認可の成否や処理結果によらず必ず `answerCallbackQuery` を呼び、クライアント側のボタン読み込み状態を終える。
 - 確認実行時は既存のWindows Agent向けHMAC署名付きPOST (`postAgentCommand`) をそのまま使うため、Windows Agent側の `confirm: true` 必須条件・timestamp・nonce検証はTelegram経由でも同様に効く。
 - TelegramとのHTTPS通信 (`WiFiClientSecure`) は `setCACert()` でサーバー証明書チェーンを検証する。ルートCAは `firmware/src/telegram_root_ca.h` に埋め込んだ「Go Daddy Root Certificate Authority - G2」(有効期限2037-12-31)。bot tokenは全てのTelegram API URLに含まれるため、経路上の中間者攻撃に対しても証明書検証で保護する。`setInsecure()`(証明書検証省略)は使わない。
 - Telegramがルート認証局を切り替えた場合、この検証は失敗するようになる(画面が `Telegram: error` になる)。ローテーション手順は `docs/external-access.md` の「CA証明書のローテーション運用」を正本とする。

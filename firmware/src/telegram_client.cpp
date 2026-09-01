@@ -76,26 +76,65 @@ String generateConfirmNonce() {
   return out;
 }
 
-void sendReply(int64_t chatId, const String &text) {
+// Posts a JSON body to the given Telegram Bot API method. Never logs `doc`
+// or the request URL: both can carry TELEGRAM_BOT_TOKEN or chat content.
+void postTelegramJson(const char *method, const JsonDocument &doc) {
   WiFiClientSecure client;
   client.setCACert(TELEGRAM_ROOT_CA_PEM);
   HTTPClient https;
-  if (!https.begin(client, telegramApiUrl("sendMessage"))) {
+  if (!https.begin(client, telegramApiUrl(method))) {
     return;
   }
   https.addHeader("Content-Type", "application/json");
 
-  JsonDocument doc;
-  doc["chat_id"] = chatId;
-  doc["text"] = text;
   String body;
   serializeJson(doc, body);
 
   int status = https.POST(body);
   https.end();
   if (status < 200 || status >= 300) {
-    Serial.printf("telegram sendMessage failed: %d\n", status);
+    Serial.printf("telegram %s failed: %d\n", method, status);
   }
+}
+
+void sendReply(int64_t chatId, const String &text) {
+  JsonDocument doc;
+  doc["chat_id"] = chatId;
+  doc["text"] = text;
+  postTelegramJson("sendMessage", doc);
+}
+
+// Sends `text` with a single row of two inline buttons: a confirm button
+// (labelled `confirmLabel`, sending `confirmData`) and a cancel button
+// (sending `cancelData`). Both callback_data values must stay within
+// Telegram's 1-64 byte limit; callers keep them well under that.
+void sendReplyWithConfirmButtons(int64_t chatId, const String &text,
+                                 const char *confirmLabel,
+                                 const String &confirmData,
+                                 const String &cancelData) {
+  JsonDocument doc;
+  doc["chat_id"] = chatId;
+  doc["text"] = text;
+  JsonArray rows = doc["reply_markup"]["inline_keyboard"].to<JsonArray>();
+  JsonArray row = rows.add<JsonArray>();
+  JsonObject confirmBtn = row.add<JsonObject>();
+  confirmBtn["text"] = confirmLabel;
+  confirmBtn["callback_data"] = confirmData;
+  JsonObject cancelBtn = row.add<JsonObject>();
+  cancelBtn["text"] = "Cancel";
+  cancelBtn["callback_data"] = cancelData;
+  postTelegramJson("sendMessage", doc);
+}
+
+// Telegram requires every callback_query to be acknowledged via
+// answerCallbackQuery, or the tapping client keeps showing a loading spinner.
+void answerCallbackQuery(const String &callbackQueryId, const String &text) {
+  JsonDocument doc;
+  doc["callback_query_id"] = callbackQueryId;
+  if (text.length() > 0) {
+    doc["text"] = text;
+  }
+  postTelegramJson("answerCallbackQuery", doc);
 }
 
 String buildStatusReply() {
@@ -118,8 +157,14 @@ String buildStatusReply() {
   return text;
 }
 
+const char *agentPathFor(PendingConfirmAction action) {
+  return action == PendingConfirmAction::Reboot ? "/reboot" : "/shutdown";
+}
+
+// actionLabel doubles as the callback_data action slug ("reboot" /
+// "shutdown"), so it must stay a plain lowercase word with no ':' or spaces.
 void requestConfirmation(int64_t chatId, PendingConfirmAction action,
-                         const char *actionLabel,
+                         const char *actionLabel, const char *buttonLabel,
                          const char *confirmCommand) {
   pendingConfirm.action = action;
   pendingConfirm.nonceValue = generateConfirmNonce();
@@ -131,21 +176,39 @@ void requestConfirmation(int64_t chatId, PendingConfirmAction action,
   reply += confirmCommand;
   reply += " ";
   reply += pendingConfirm.nonceValue;
-  sendReply(chatId, reply);
+
+  String confirmData = "confirm:";
+  confirmData += actionLabel;
+  confirmData += ":";
+  confirmData += pendingConfirm.nonceValue;
+
+  String cancelData = "cancel:";
+  cancelData += actionLabel;
+  cancelData += ":";
+  cancelData += pendingConfirm.nonceValue;
+
+  sendReplyWithConfirmButtons(chatId, reply, buttonLabel, confirmData,
+                              cancelData);
 }
 
-void handleConfirmation(int64_t chatId, PendingConfirmAction action,
-                       const char *actionLabel, const String &suppliedNonce,
-                       const char *agentPath) {
+// Checks `action`/`suppliedNonce` against the current pendingConfirm and
+// always consumes it (even on mismatch/expiry) so it cannot be replayed or
+// brute-forced across multiple confirm attempts, whether they arrive as a
+// /confirm_* command or a button tap.
+bool consumePendingConfirm(PendingConfirmAction action,
+                           const String &suppliedNonce) {
   bool valid = pendingConfirm.action == action &&
                pendingConfirm.nonceValue.length() > 0 &&
                suppliedNonce.length() > 0 &&
                pendingConfirm.nonceValue == suppliedNonce &&
                millis() < pendingConfirm.expiresAtMs;
-
-  // Consume the nonce regardless of the outcome so it cannot be replayed or
-  // brute-forced across multiple confirm attempts.
   pendingConfirm = PendingConfirm{};
+  return valid;
+}
+
+void handleConfirmation(int64_t chatId, PendingConfirmAction action,
+                       const char *actionLabel, const String &suppliedNonce) {
+  bool valid = consumePendingConfirm(action, suppliedNonce);
 
   if (!valid) {
     String reply = "No matching pending ";
@@ -157,7 +220,7 @@ void handleConfirmation(int64_t chatId, PendingConfirmAction action,
     return;
   }
 
-  bool ok = PowerController::postAgentCommand(agentPath);
+  bool ok = PowerController::postAgentCommand(agentPathFor(action));
   String reply = actionLabel;
   reply += ok ? " accepted" : " failed";
   sendReply(chatId, reply);
@@ -173,18 +236,125 @@ void dispatchCommand(int64_t chatId, const String &command,
     PowerController::updateStatus();
   } else if (command == "/reboot") {
     requestConfirmation(chatId, PendingConfirmAction::Reboot, "reboot",
-                        "/confirm_reboot");
+                        "Reboot", "/confirm_reboot");
   } else if (command == "/shutdown") {
     requestConfirmation(chatId, PendingConfirmAction::Shutdown, "shutdown",
-                        "/confirm_shutdown");
+                        "Shutdown", "/confirm_shutdown");
   } else if (command == "/confirm_reboot") {
-    handleConfirmation(chatId, PendingConfirmAction::Reboot, "reboot", args,
-                      "/reboot");
+    handleConfirmation(chatId, PendingConfirmAction::Reboot, "reboot", args);
   } else if (command == "/confirm_shutdown") {
     handleConfirmation(chatId, PendingConfirmAction::Shutdown, "shutdown",
-                      args, "/shutdown");
+                      args);
   }
   // Unrecognized commands are ignored silently.
+}
+
+struct ParsedCallback {
+  bool ok = false;
+  bool isConfirm = false; // true: confirm button, false: cancel button
+  PendingConfirmAction action = PendingConfirmAction::None;
+  const char *actionLabel = "";
+  String nonce;
+};
+
+// Parses callback_data of the form "confirm:<reboot|shutdown>:<nonce>" or
+// "cancel:<reboot|shutdown>:<nonce>". Rejects anything else (old/foreign
+// buttons, malformed data) by leaving ParsedCallback::ok false.
+ParsedCallback parseCallbackData(const String &data) {
+  ParsedCallback result;
+  int firstColon = data.indexOf(':');
+  int secondColon = firstColon < 0 ? -1 : data.indexOf(':', firstColon + 1);
+  if (firstColon < 0 || secondColon < 0) {
+    return result;
+  }
+
+  String type = data.substring(0, firstColon);
+  String actionSlug = data.substring(firstColon + 1, secondColon);
+  String nonce = data.substring(secondColon + 1);
+  if (nonce.length() == 0) {
+    return result;
+  }
+
+  if (type == "confirm") {
+    result.isConfirm = true;
+  } else if (type == "cancel") {
+    result.isConfirm = false;
+  } else {
+    return result;
+  }
+
+  if (actionSlug == "reboot") {
+    result.action = PendingConfirmAction::Reboot;
+    result.actionLabel = "reboot";
+  } else if (actionSlug == "shutdown") {
+    result.action = PendingConfirmAction::Shutdown;
+    result.actionLabel = "shutdown";
+  } else {
+    return result;
+  }
+
+  result.nonce = nonce;
+  result.ok = true;
+  return result;
+}
+
+void handleCallbackQuery(JsonObject callbackQuery) {
+  const char *callbackId = callbackQuery["id"] | "";
+
+  int64_t fromId = callbackQuery["from"]["id"] | (int64_t)0;
+  char fromIdStr[24];
+  snprintf(fromIdStr, sizeof(fromIdStr), "%lld", (long long)fromId);
+  if (strcmp(fromIdStr, TELEGRAM_ALLOWED_USER_ID) != 0) {
+    // Unauthorized user: don't act on the button, but still close out the
+    // client's loading state per the Bot API contract.
+    answerCallbackQuery(String(callbackId), "Unauthorized");
+    return;
+  }
+
+  const char *data = callbackQuery["data"] | "";
+  ParsedCallback parsed = parseCallbackData(String(data));
+  if (!parsed.ok) {
+    answerCallbackQuery(String(callbackId), "Invalid button");
+    return;
+  }
+
+  int64_t chatId = callbackQuery["message"]["chat"]["id"] | (int64_t)0;
+  bool valid = consumePendingConfirm(parsed.action, parsed.nonce);
+
+  if (!parsed.isConfirm) {
+    answerCallbackQuery(String(callbackId),
+                        valid ? "Cancelled" : "Already handled");
+    if (chatId != 0) {
+      String reply = valid ? "Cancelled " : "No matching pending ";
+      reply += parsed.actionLabel;
+      reply += valid ? " confirmation."
+                     : " confirmation (expired, already used, or wrong "
+                       "nonce).";
+      sendReply(chatId, reply);
+    }
+    return;
+  }
+
+  if (!valid) {
+    answerCallbackQuery(String(callbackId), "Expired or already used");
+    if (chatId != 0) {
+      String reply = "No matching pending ";
+      reply += parsed.actionLabel;
+      reply += " confirmation (expired, already used, or wrong nonce). Send /";
+      reply += parsed.actionLabel;
+      reply += " again.";
+      sendReply(chatId, reply);
+    }
+    return;
+  }
+
+  bool ok = PowerController::postAgentCommand(agentPathFor(parsed.action));
+  String resultText = parsed.actionLabel;
+  resultText += ok ? " accepted" : " failed";
+  answerCallbackQuery(String(callbackId), resultText);
+  if (chatId != 0) {
+    sendReply(chatId, resultText);
+  }
 }
 
 void processUpdates(JsonArray results, bool dispatch) {
@@ -197,6 +367,12 @@ void processUpdates(JsonArray results, bool dispatch) {
     if (!dispatch) {
       // First batch after boot: only advance the offset so commands issued
       // while the device was offline are skipped instead of replayed.
+      continue;
+    }
+
+    JsonObject callbackQuery = item["callback_query"];
+    if (!callbackQuery.isNull()) {
+      handleCallbackQuery(callbackQuery);
       continue;
     }
 
