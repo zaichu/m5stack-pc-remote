@@ -54,10 +54,18 @@ espup install --targets esp32
 
 ```bash
 cd firmware-rust-poc
-cp src/config.example.rs src/config.rs   # Git管理外。実際の値に書き換える
+cp config.example.toml config.toml   # Git管理外。実際の値に書き換える
 . ~/export-esp.sh
 cargo build --release --target xtensa-esp32-espidf
 ```
+
+秘密情報は `config.toml`(Git管理外、TOML)にだけ書く。Rustソース(`src/`配下)へ
+secretを直接書かない(Issue #21): `build.rs` がビルド時に `config.toml` を読み、
+`$OUT_DIR/generated_config.rs` を生成して `src/main.rs` が `include!()` で取り込む。
+生成した定数は未使用でも `#[allow(dead_code)]` により警告が出ないため、コンパイラの
+unused警告がソース行としてbot token等をビルドログへ出す事故が起きない。旧方式の
+`src/config.rs` が残っていると `scripts/check-local-firmware-rust-secrets.sh`
+(`make firmware-rust-poc-build` から自動実行)がbuildを止める。
 
 ## 書き込み・モニタ
 
@@ -97,9 +105,10 @@ Issue #16のPoC成功条件に対する進捗:
 - [x] Wake-on-LAN Magic Packetを送信できる(実機のタッチ操作から送信を確認)
 - [x] タッチ操作でWAKEできる(実機タップで `touch: x=194 y=194 in_wake_button=true` →
       `WAKE tapped` → `WOL sent` を確認)
-- [x] 秘密情報をGitへ入れない構成を維持できる(`src/config.rs`はGit管理外)
+- [x] 秘密情報をGitへ入れない構成を維持できる(`config.toml`はGit管理外。Rustソースへ
+      secretを直接書かない。Issue #21)
 - [x] `make check` にRust firmware PoCのbuild確認を追加(`make firmware-rust-poc-build`。
-      espツールチェーン/ldproxy/`src/config.rs` が無い環境では警告してスキップ)
+      espツールチェーン/ldproxy/`config.toml` が無い環境では警告してスキップ)
 
 2026-09-01時点の実機確認: AXP192初期化、ディスプレイ初期化、タッチコントローラー
 初期化(FT6236U、firmware_id=16/panel_id=17をM5GFXの報告値と一致確認)、Wi-Fi接続、

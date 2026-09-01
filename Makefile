@@ -29,7 +29,7 @@ firmware-build:
 	fi
 
 # Rust firmware PoC (Issue #16). Needs the Xtensa Rust toolchain from espup and
-# a local src/config.rs, so it skips with a warning when either is missing
+# a local config.toml, so it skips with a warning when either is missing
 # (same policy as firmware-build without PlatformIO).
 firmware-rust-poc-build:
 	bash ./scripts/build-firmware-rust-poc.sh

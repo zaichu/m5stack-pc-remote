@@ -1,5 +1,8 @@
 # Local firmware secrets.
 firmware/include/config.h
+firmware-rust-poc/config.toml
+# Legacy location (Issue #21): secrets used to be a Rust source file here.
+# Still ignored in case one lingers on an older checkout.
 firmware-rust-poc/src/config.rs
 
 # Windows Agent local secrets.

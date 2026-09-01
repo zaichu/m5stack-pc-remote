@@ -35,6 +35,9 @@ esp-idf-hal = "0.45"
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }
+# Parses the git-ignored config.toml at build time (Issue #21); runs on the
+# host, so it does not need the esp-idf toolchain.
+toml = "0.8"
 
 [package.metadata.esp-idf-sys]
 esp_idf_version = "v5.3.2"
