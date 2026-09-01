@@ -137,7 +137,22 @@ Windows起動時に自動起動するには、管理者PowerShellで以下を実
 
 `TELEGRAM_ALLOWED_USER_ID` と一致しない `from.id` からのメッセージはすべて無視され、返信もされません。`TELEGRAM_BOT_TOKEN` はWindows Agent用の `AGENT_SHARED_SECRET` とは別の秘密情報で、Windows Agentへは一切渡りません。
 
-### 4. 実行方法
+### 4. Telegramのコマンド候補を登録する
+
+Telegramアプリで `/` を入力したときに候補一覧を出すには、Bot APIの `setMyCommands` でbot側へコマンドを登録します。`TELEGRAM_BOT_TOKEN` 設定後に以下を実行してください。
+
+```bash
+bash scripts/telegram-set-commands.sh
+```
+
+登録される候補:
+
+- `/status`: PC状態を表示
+- `/wake`: PCへWake-on-LANを送信
+- `/reboot`: 確認後にPCを再起動
+- `/shutdown`: 確認後にPCをシャットダウン
+
+### 5. 実行方法
 
 書き込み後、M5Stackの画面に `Telegram: polling` と表示されればTelegram連携が有効です。placeholderのままだと `Telegram: disabled` と表示され、Telegram機能だけが無効化されます(タッチUI・WOL・STATUSは通常どおり動作します)。
 
