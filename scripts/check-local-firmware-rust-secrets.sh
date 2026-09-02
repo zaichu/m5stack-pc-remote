@@ -8,15 +8,15 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 legacy_configs=(
-  "firmware-rust-poc/src/config.rs"
-  "firmware-rust-poc/src/_config.rs"
+  "firmware/src/config.rs"
+  "firmware/src/_config.rs"
 )
 
 for legacy_config in "${legacy_configs[@]}"; do
   if [[ -e "$repo_root/$legacy_config" ]]; then
     echo "ERROR: $legacy_config still exists." >&2
     echo "このファイルはsecretをRustソースへ直接置いている可能性があり、コンパイラ警告でビルドログへ漏れる恐れがあります。" >&2
-    echo "値を firmware-rust-poc/config.toml へ移し、旧ファイルを削除してください。" >&2
+    echo "値を firmware/config.toml へ移し、旧ファイルを削除してください。" >&2
     echo "secretを含む可能性があるため、内容は表示しません。" >&2
     exit 1
   fi

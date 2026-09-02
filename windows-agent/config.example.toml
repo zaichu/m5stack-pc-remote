@@ -1,4 +1,13 @@
+# このファイルを同じディレクトリの config.toml へコピーし、値を書き換える。
+# config.toml は .gitignore 対象なのでコミットしない。
+
 bind = "0.0.0.0:18080"
+
+# firmware/config.toml の agent_shared_secret と同じ値にする(HMAC-SHA256署名の検証に使う)。
+# 32文字以上の長いランダム値にする。placeholderのままではAgentは起動しない。
 shared_secret = "replace-with-a-long-random-shared-secret"
+
 allowed_skew_seconds = 60
+
+# true の間は実際のshutdown/rebootを実行しない。実機確認が済むまでtrueのままにする。
 dry_run = true

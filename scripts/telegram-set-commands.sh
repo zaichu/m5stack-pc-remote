@@ -2,20 +2,20 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-config_file="${repo_root}/firmware/include/config.h"
+config_file="${repo_root}/firmware/config.toml"
 
 if [[ ! -f "${config_file}" ]]; then
-  echo "firmware/include/config.h not found. Copy config.example.h and set TELEGRAM_BOT_TOKEN first." >&2
+  echo "firmware/config.toml not found. Copy config.example.toml and set telegram_bot_token first." >&2
   exit 1
 fi
 
 token="$(
-  perl -ne 'if (/^#define\s+TELEGRAM_BOT_TOKEN\s+"([^"]*)"/) { print $1; exit }' \
+  perl -ne 'if (/^\s*telegram_bot_token\s*=\s*"([^"]*)"/) { print $1; exit }' \
     "${config_file}"
 )"
 
 if [[ -z "${token}" || "${token}" == "replace-with-your-telegram-bot-token" ]]; then
-  echo "TELEGRAM_BOT_TOKEN is not configured in firmware/include/config.h." >&2
+  echo "telegram_bot_token is not configured in firmware/config.toml." >&2
   exit 1
 fi
 

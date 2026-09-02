@@ -21,8 +21,7 @@ bash -n scripts/*.sh
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
-- `pio run -d firmware`。PlatformIO CLI がない環境では警告のみ。
-- `cargo +esp build --release --target xtensa-esp32-espidf`。esp toolchain / `firmware-rust-poc/config.toml` がない環境では警告のみ。
+- `cargo +esp build --release --target xtensa-esp32-espidf`。esp toolchain / `firmware/config.toml` がない環境では警告のみ。
 
 ## secret パターン検査
 
@@ -31,4 +30,4 @@ bash scripts/scan-secrets.sh
 ```
 
 実Wi-Fiパスワード、実PC MACアドレス、HMAC secret、Windows認証情報を出力やdocsへ残さないでください。
-Rust firmwareではsecretをRustソース(`firmware-rust-poc/src/`)へ直接書かず、Git管理外の `firmware-rust-poc/config.toml` を使ってください。旧 `firmware-rust-poc/src/config.rs` / `firmware-rust-poc/src/_config.rs` はビルドログ漏えい防止のため禁止です。
+Rust firmwareではsecretをRustソース(`firmware/src/`)へ直接書かず、Git管理外の `firmware/config.toml` を使ってください。旧 `firmware/src/config.rs` / `firmware/src/_config.rs` はビルドログ漏えい防止のため禁止です。

@@ -1,5 +1,5 @@
-.PHONY: install install-hooks fmt fmt-check clippy test agent-check firmware-build \
-	firmware-rust-build firmware-rust-poc-build firmware-rust-nvs-image \
+.PHONY: install install-hooks fmt fmt-check clippy test agent-check \
+	firmware-build firmware-nvs-image \
 	secret-path-check secret-scan diff-check check git-pre-commit git-pre-push
 
 install: install-hooks
@@ -21,21 +21,12 @@ test:
 
 agent-check: fmt-check clippy test
 
-firmware-build:
-	@if command -v pio >/dev/null 2>&1; then \
-		pio run -d firmware; \
-	else \
-		echo "WARNING: PlatformIO CLI 'pio' not found; skipping firmware build."; \
-	fi
-
 # Rust firmware。espupのXtensa Rust toolchainとローカルconfig.tomlが必要。
-# どちらかが無い環境では、firmware-buildと同じく警告だけ出してskipする。
-firmware-rust-build:
-	bash ./scripts/build-firmware-rust-poc.sh
+# どちらかが無い環境では警告だけ出してskipする。
+firmware-build:
+	bash ./scripts/build-firmware.sh
 
-firmware-rust-poc-build: firmware-rust-build
-
-firmware-rust-nvs-image:
+firmware-nvs-image:
 	python3 ./scripts/provision-firmware-rust-nvs.py
 
 secret-path-check:
@@ -47,8 +38,7 @@ secret-scan:
 diff-check:
 	git diff --check
 
-check: diff-check secret-path-check secret-scan agent-check firmware-build \
-	firmware-rust-build
+check: diff-check secret-path-check secret-scan agent-check firmware-build
 
 git-pre-commit: fmt-check secret-path-check diff-check
 

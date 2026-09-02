@@ -29,9 +29,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install PlatformIO
-        run: python -m pip install --upgrade platformio
-
       - name: Run quality gate
         run: make check
 
