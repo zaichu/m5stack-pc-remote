@@ -18,6 +18,7 @@ firmware/.vscode/
 
 # esp-idf / embuild generated files (Rust firmware).
 firmware-rust-poc/.embuild/
+firmware-rust-poc/.nvs-provisioning/
 firmware-rust-poc/sdkconfig
 firmware-rust-poc/managed_components/
 firmware-rust-poc/dependencies.lock
