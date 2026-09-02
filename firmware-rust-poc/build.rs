@@ -10,14 +10,10 @@ fn main() {
     generate_config();
 }
 
-/// Reads the git-ignored `config.toml` (see `config.example.toml`) and emits
-/// `$OUT_DIR/generated_config.rs`, which `src/main.rs` pulls in via
-/// `include!()` as the `config` module. Secrets never live in `src/` as Rust
-/// source, so a compiler warning (e.g. unused import) can no longer print a
-/// source line containing a real Wi-Fi password or Telegram bot token into
-/// the build log (Issue #21). Each generated const also carries
-/// `#[allow(dead_code)]` so an *unused* one still can't trigger that class of
-/// warning in the first place.
+/// Git管理外の `config.toml` を読み、`$OUT_DIR/generated_config.rs` を生成する。
+/// `src/main.rs` はこれを `config` moduleとして取り込む。secretを `src/` 配下の
+/// Rustソースに置かないことで、コンパイラ警告に実値が出る事故を避ける。
+/// 生成する定数には `#[allow(dead_code)]` を付け、未使用警告自体も出さない。
 fn generate_config() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let config_path = Path::new(&manifest_dir).join("config.toml");
@@ -25,15 +21,15 @@ fn generate_config() {
 
     if !config_path.exists() {
         panic!(
-            "firmware-rust-poc/config.toml not found. Copy config.example.toml to \
-             config.toml (same directory) and fill in real values; see \
-             firmware-rust-poc/README.md."
+            "firmware-rust-poc/config.toml が見つかりません。config.example.toml を同じ \
+             ディレクトリの config.toml へコピーし、実際の値を設定してください。詳細は \
+             firmware-rust-poc/README.md を参照してください。"
         );
     }
 
-    let raw = fs::read_to_string(&config_path).expect("failed to read config.toml");
+    let raw = fs::read_to_string(&config_path).expect("config.toml の読み込みに失敗しました");
     let table: toml::Table = raw.parse().expect(
-        "failed to parse config.toml as TOML (not printing its contents: it may hold secrets)",
+        "config.toml をTOMLとして解析できませんでした。secretを含む可能性があるため内容は表示しません",
     );
 
     let mut out = String::new();
@@ -77,14 +73,14 @@ fn generate_config() {
 
 fn require<'a>(table: &'a toml::Table, key: &str) -> &'a toml::Value {
     table.get(key).unwrap_or_else(|| {
-        panic!("config.toml is missing required key `{key}` (see config.example.toml)")
+        panic!("config.toml に必須key `{key}` がありません。config.example.toml を確認してください")
     })
 }
 
 fn push_str_const(out: &mut String, table: &toml::Table, key: &str, const_name: &str) {
     let value = require(table, key)
         .as_str()
-        .unwrap_or_else(|| panic!("config.toml: `{key}` must be a string"));
+        .unwrap_or_else(|| panic!("config.toml: `{key}` は文字列で指定してください"));
     out.push_str("#[allow(dead_code)]\n");
     out.push_str(&format!("pub const {const_name}: &str = {value:?};\n\n"));
 }
@@ -92,7 +88,7 @@ fn push_str_const(out: &mut String, table: &toml::Table, key: &str, const_name: 
 fn push_u16_const(out: &mut String, table: &toml::Table, key: &str, const_name: &str) {
     let value = require(table, key)
         .as_integer()
-        .unwrap_or_else(|| panic!("config.toml: `{key}` must be an integer"));
+        .unwrap_or_else(|| panic!("config.toml: `{key}` は整数で指定してください"));
     out.push_str("#[allow(dead_code)]\n");
     out.push_str(&format!("pub const {const_name}: u16 = {value};\n\n"));
 }
@@ -100,7 +96,7 @@ fn push_u16_const(out: &mut String, table: &toml::Table, key: &str, const_name: 
 fn push_u32_const(out: &mut String, table: &toml::Table, key: &str, const_name: &str) {
     let value = require(table, key)
         .as_integer()
-        .unwrap_or_else(|| panic!("config.toml: `{key}` must be an integer"));
+        .unwrap_or_else(|| panic!("config.toml: `{key}` は整数で指定してください"));
     out.push_str("#[allow(dead_code)]\n");
     out.push_str(&format!("pub const {const_name}: u32 = {value};\n\n"));
 }
@@ -108,7 +104,7 @@ fn push_u32_const(out: &mut String, table: &toml::Table, key: &str, const_name: 
 fn push_u64_const(out: &mut String, table: &toml::Table, key: &str, const_name: &str) {
     let value = require(table, key)
         .as_integer()
-        .unwrap_or_else(|| panic!("config.toml: `{key}` must be an integer"));
+        .unwrap_or_else(|| panic!("config.toml: `{key}` は整数で指定してください"));
     out.push_str("#[allow(dead_code)]\n");
     out.push_str(&format!("pub const {const_name}: u64 = {value};\n\n"));
 }

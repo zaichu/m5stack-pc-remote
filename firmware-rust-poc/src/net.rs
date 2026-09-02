@@ -1,4 +1,4 @@
-// Wi-Fi, Wake-on-LAN and the STATUS reachability check.
+// Wi-Fi、Wake-on-LAN、STATUS相当の疎通確認。
 
 use std::error::Error;
 use std::io;
@@ -10,32 +10,23 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
-/// Wi-Fi station handle. Must be kept alive for the connection to persist:
-/// dropping it tears the connection down.
+/// Wi-Fi stationハンドル。接続維持のためプログラム中で保持し続ける。
 pub struct Wifi {
     inner: BlockingWifi<EspWifi<'static>>,
 }
 
 impl Wifi {
-    /// Configures and starts the station interface, then blocks until the
-    /// interface is up. Takes the `Modem` obtained from `Peripherals::take()`;
-    /// use this for the initial connection attempt only. If it returns `Err`,
-    /// the `Modem` passed in is gone (moved into the failed `EspWifi::new()`
-    /// call and dropped with it) — retry with `connect_retry()` instead of
-    /// trying to reuse it.
+    /// station interfaceを設定して起動し、ネットワークが上がるまで待つ。
+    /// 初回接続専用。失敗時はModemが破棄されるため、再試行は `connect_retry()` を使う。
     pub fn connect(modem: Modem, ssid: &str, password: &str) -> Result<Self, Box<dyn Error>> {
         Self::connect_with_modem(modem, ssid, password)
     }
 
-    /// Retries a connection from scratch after a previous attempt failed and
-    /// its `Modem` was dropped along with it.
+    /// 前回の接続失敗でModemが破棄されたあと、最初から接続をやり直す。
     ///
-    /// # Safety (of the `Modem::new()` call inside)
-    /// Only call this while no other live `Wifi`/`Modem` instance exists —
-    /// i.e. when the caller's own `Option<Wifi>` is `None`. That is exactly
-    /// the situation this exists for: the initial `connect()` failed (so its
-    /// `Modem` was already dropped) or a previous `connect_retry()` failed the
-    /// same way.
+    /// # Safety
+    /// 生きている `Wifi` / `Modem` が他にない状態でだけ呼ぶ。初回 `connect()` 失敗後や、
+    /// 前回の `connect_retry()` 失敗後が該当する。
     pub fn connect_retry(ssid: &str, password: &str) -> Result<Self, Box<dyn Error>> {
         let modem = unsafe { Modem::new() };
         Self::connect_with_modem(modem, ssid, password)
@@ -76,10 +67,9 @@ impl Wifi {
         self.inner.is_up().unwrap_or(false)
     }
 
-    /// Re-associates after a drop-out. Mirrors the reconnect behaviour of the
-    /// C++ firmware's `connectWifi()`; callers rate-limit the retries.
+    /// 切断後に再接続する。呼び出し側で再試行間隔を制御する。
     pub fn reconnect(&mut self) -> Result<(), Box<dyn Error>> {
-        // `connect()` fails if the driver still considers itself connected.
+        // driverが接続中と認識している場合に備えて、先に切断してから接続する。
         let _ = self.inner.disconnect();
         self.associate()
     }
@@ -97,9 +87,8 @@ fn parse_mac(text: &str) -> Option<[u8; 6]> {
     Some(mac)
 }
 
-/// Sends a Wake-on-LAN magic packet to the limited broadcast address
-/// (255.255.255.255), matching firmware/src/power_controller.cpp: this keeps
-/// working regardless of the LAN's actual subnet prefix length.
+/// Wake-on-LAN magic packetをlimited broadcast(255.255.255.255)へ送る。
+/// LANの実subnet prefixに依存しない。
 pub fn send_wake_on_lan(mac_text: &str, port: u16) -> Result<(), Box<dyn Error>> {
     let mac = parse_mac(mac_text).ok_or("invalid PC_MAC_ADDRESS")?;
 
@@ -117,8 +106,8 @@ pub fn send_wake_on_lan(mac_text: &str, port: u16) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-/// STATUS-equivalent check. A fast connect or a connection refusal both mean
-/// the PC answered; a timeout means it is off or unreachable.
+/// STATUS相当の疎通確認。接続成功または即時refusedならPCは応答あり、
+/// timeoutなら電源OFFまたは到達不能として扱う。
 pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
     let Ok(mut addrs) = addr_text.to_socket_addrs() else {
         return false;
@@ -132,17 +121,13 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
     }
 }
 
-/// Starts SNTP so the system clock becomes real. The Windows Agent verifies
-/// the request timestamp against its own clock, so signed REBOOT/SHUTDOWN
-/// commands only work once this has synced. The returned handle must be kept
-/// alive; dropping it stops the client.
+/// SNTPを開始してシステム時刻を同期する。Agentはtimestampを検証するため、
+/// 署名付きREBOOT/SHUTDOWNは時刻同期後だけ成功する。返したhandleは保持する。
 pub fn start_sntp() -> Result<esp_idf_svc::sntp::EspSntp<'static>, Box<dyn Error>> {
     Ok(esp_idf_svc::sntp::EspSntp::new_default()?)
 }
 
-/// Blocks until the system clock looks NTP-synced, or `timeout` elapses.
-/// Mirrors the C++ firmware's waitForNtpSync(): best-effort, so callers
-/// continue even on timeout (the agent request itself refuses a bad clock).
+/// NTP同期済みに見えるまで待つ。timeoutした場合も呼び出し側は処理を続ける。
 pub fn wait_for_time_sync(timeout: Duration) -> bool {
     use std::time::{SystemTime, UNIX_EPOCH};
     const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;

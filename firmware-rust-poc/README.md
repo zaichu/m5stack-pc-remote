@@ -1,10 +1,10 @@
 # firmware-rust-poc
 
-M5Stack Core2 for AWS firmwareのRust実装。本線候補として実運用検証中。Issue #17参照。
+M5Stack Core2 for AWS firmwareのRust実装。本線として実運用検証中。
 
 `firmware/`(PlatformIO + Arduino Framework + M5Unified、C++)は安定版fallbackとして
 残す。Rust版は実機で主要機能(Wi-Fi / WOL / STATUS / UI / REBOOT / SHUTDOWN /
-Telegram)が動作確認済みで、今後の完全移植と切り替え判断はIssue #17で管理する。
+Telegram)が動作確認済み。
 ディレクトリ名 `firmware-rust-poc/` は履歴と差分を小さく保つため当面維持する。
 
 ## 技術構成
@@ -30,7 +30,7 @@ Telegram)が動作確認済みで、今後の完全移植と切り替え判断�
 実機動作までは確認できた。しかしM5UnifiedはESP-IDFの**旧I2Cドライバ**を使うため、
 Wi-Fi等でESP-IDFのモダンなドライバ(driver_ng)が同一バイナリにリンクされると、
 起動時に必ず `CONFLICT! driver_ng is not allowed to be used with this old driver` で
-abortする。切り分けの詳細はIssue #16のコメントを参照。
+abortするため採用しない。
 
 純Rustスタックにすることで、リンクされるI2Cドライバが1系統に揃い、この競合が
 構造的に発生しなくなる。
@@ -61,7 +61,7 @@ cargo build --release --target xtensa-esp32-espidf
 ```
 
 秘密情報は `config.toml`(Git管理外、TOML)にだけ書く。Rustソース(`src/`配下)へ
-secretを直接書かない(Issue #21): `build.rs` がビルド時に `config.toml` を読み、
+secretを直接書かない。`build.rs` がビルド時に `config.toml` を読み、
 `$OUT_DIR/generated_config.rs` を生成して `src/main.rs` が `include!()` で取り込む。
 生成した定数は未使用でも `#[allow(dead_code)]` により警告が出ないため、コンパイラの
 unused警告がソース行としてbot token等をビルドログへ出す事故が起きない。旧方式の
@@ -97,7 +97,7 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
 
 ## 現在のスコープと実機確認結果
 
-Issue #16のPoC成功条件は達成済み。現在はIssue #17の本線化判断に向けた実運用検証:
+初期検証条件は達成済み。現在は本線として実運用検証中:
 
 - [x] ESP32 / M5Stack Core2へRust firmwareをbuild/flashできる
 - [x] Wi-Fi接続できる
@@ -107,7 +107,7 @@ Issue #16のPoC成功条件は達成済み。現在はIssue #17の本線化判�
 - [x] タッチ操作でWAKEできる(実機タップで `touch: x=194 y=194 in_wake_button=true` →
       `WAKE tapped` → `WOL sent` を確認)
 - [x] 秘密情報をGitへ入れない構成を維持できる(`config.toml`はGit管理外。Rustソースへ
-      secretを直接書かない。Issue #21)
+      secretを直接書かない)
 - [x] `make check` にRust firmwareのbuild確認を追加(`make firmware-rust-build`。
       espツールチェーン/ldproxy/`config.toml` が無い環境では警告してスキップ)
 

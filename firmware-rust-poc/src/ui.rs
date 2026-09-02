@@ -1,9 +1,6 @@
-// Touch UI: status screen, WAKE / REBOOT / SHUTDOWN buttons and the
-// confirmation dialog for the two destructive actions.
+// タッチUI。STATUS画面、WAKE / REBOOT / SHUTDOWNボタン、危険操作の確認画面を描画する。
 //
-// Layout mirrors the C++ firmware (firmware/src/main.cpp): REBOOT and SHUTDOWN
-// only appear while the PC is reported ONLINE, and both require a second tap
-// on a confirmation screen before anything is sent to the Windows Agent.
+// REBOOTとSHUTDOWNはPCがONLINEのときだけ表示し、Windows Agentへ送る前に確認画面を挟む。
 
 use std::error::Error;
 
@@ -44,7 +41,7 @@ impl Button {
         .draw(display)
         .map_err(|e| format!("button fill failed: {e:?}"))?;
 
-        // Rough centring: FONT_6X10 is 6px per character.
+        // FONT_6X10は1文字6pxなので、概算で中央寄せする。
         let text_x = self.x + (self.w as i32 - label.len() as i32 * 6) / 2;
         let text_y = self.y + self.h as i32 / 2 + 4;
         Text::new(
@@ -58,8 +55,7 @@ impl Button {
     }
 }
 
-/// Main screen buttons. Y range 180..228 also covers taps on the physical
-/// button strip below the display (touch reports y up to 279).
+/// メイン画面のボタン。Core2は画面下の物理ボタン帯もタッチ座標として報告する。
 pub const WAKE_BUTTON: Button = Button {
     x: 10,
     y: 180,
@@ -79,7 +75,7 @@ pub const SHUTDOWN_BUTTON: Button = Button {
     h: 48,
 };
 
-/// Confirmation dialog buttons.
+/// 確認画面のボタン。
 pub const CANCEL_BUTTON: Button = Button {
     x: 20,
     y: 150,
@@ -188,8 +184,7 @@ pub fn draw_main(
     .map_err(|e| format!("draw failed: {e:?}"))?;
 
     WAKE_BUTTON.draw(display, "WAKE", Rgb565::CSS_DARK_GREEN)?;
-    // REBOOT / SHUTDOWN only make sense while the PC is up, and hiding them
-    // keeps a stray tap from firing a destructive action at an offline PC.
+    // REBOOT / SHUTDOWNはPC起動中だけ表示して、誤操作の入口を減らす。
     if status.pc_online {
         REBOOT_BUTTON.draw(display, "REBOOT", Rgb565::CSS_DARK_ORANGE)?;
         SHUTDOWN_BUTTON.draw(display, "SHUTDOWN", Rgb565::CSS_DARK_RED)?;
@@ -217,8 +212,8 @@ pub fn draw_confirm(
         .map_err(|e| format!("clear failed: {e:?}"))?;
 
     let title = match action {
-        PowerAction::Reboot => "Confirm REBOOT",
-        PowerAction::Shutdown => "Confirm SHUTDOWN",
+        PowerAction::Reboot => "REBOOT?",
+        PowerAction::Shutdown => "SHUTDOWN?",
     };
     let title_x = (DISPLAY_WIDTH as i32 - title.len() as i32 * 10) / 2;
     Text::new(
@@ -230,7 +225,7 @@ pub fn draw_confirm(
     .map_err(|e| format!("draw failed: {e:?}"))?;
 
     Text::new(
-        "tap OK to send the signed command",
+        "OKで署名付きコマンドを送信",
         Point::new(12, 100),
         MonoTextStyle::new(&FONT_6X10, Rgb565::CSS_LIGHT_GRAY),
     )

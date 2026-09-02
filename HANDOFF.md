@@ -12,8 +12,8 @@
   - Arduino Framework
   - M5Unified
   - Phase 1 は Wi-Fi、Wake-on-LAN、ICMP ping STATUS
-- M5Stack側(本線、Issue #17): `firmware-rust-poc/`
-  - 主要機能は実機確認済み。ディレクトリ名は当面維持するが、PoCではなく本線として扱う
+- M5Stack側(本線): `firmware-rust-poc/`
+  - 主要機能は実機確認済み。ディレクトリ名は当面維持するが、本線として扱う。
   - `firmware/` のC++版は安定確認が終わるまでfallbackとして残し、不要になった段階で一括削除する
   - esp-idf-sys/esp-idf-svc/esp-idf-hal(std)ベースの純Rustスタック
   - `m5unified` crateはESP-IDF I2C driver_ng競合のため不採用
@@ -25,7 +25,7 @@
 - ローカル秘密設定(Git管理外):
   - `firmware/include/config.h`
   - `windows-agent/config.toml`
-  - `firmware-rust-poc/config.toml`(secretをRustソースへ直接書かない。Issue #21)
+  - `firmware-rust-poc/config.toml`(secretをRustソースへ直接書かない)
 - 外部操作の経路:
   - `Smartphone -> Telegram Bot API (outbound HTTPS long polling) -> M5Stack Core2 -> Windows PC`
   - Windows Agentを直接インターネットへ公開しない

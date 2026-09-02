@@ -5,10 +5,9 @@ mod telegram;
 mod telegram_root_ca;
 mod ui;
 
-/// Generated at build time from the git-ignored `config.toml` (see
-/// `config.example.toml`), never written into `src/` as Rust source. See
-/// `build.rs` and Issue #21: a literal secret in `src/` could leak into
-/// build logs via a compiler warning printing the offending source line.
+/// Git管理外の `config.toml` からビルド時に生成する設定。
+/// secretを `src/` 配下のRustソースへ直接置かないことで、コンパイラ警告による
+/// ビルドログ漏えいを防ぐ。
 mod config {
     include!(concat!(env!("OUT_DIR"), "/generated_config.rs"));
 }
@@ -30,25 +29,17 @@ const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 const TOAST_TTL: Duration = Duration::from_secs(3);
 
-/// Which screen the touch UI is currently showing.
+/// タッチUIの現在画面。
 enum Screen {
     Main,
     Confirm(PowerAction),
 }
 
-/// Starts the services that only make sense once Wi-Fi is up (SNTP and the
-/// Telegram poller). Idempotent: safe to call every time the link comes up,
-/// including after a drop-and-reconnect, because `sntp`/`telegram_started`
-/// remember what has already been started. Called both right after the
-/// initial connection attempt and from the reconnect loop, so that Telegram
-/// still starts even when Wi-Fi was down at boot and only recovers later.
+/// Wi-Fi接続後にだけ意味があるサービス(SNTPとTelegram poller)を開始する。
+/// 既に開始済みなら何もしないため、再接続時に何度呼んでもよい。
 ///
-/// Does not wait for the NTP sync to complete: this runs on the touch UI
-/// loop's thread, which must keep polling touch/STATUS every ~20ms on this
-/// 24/7 device. `agent::send_command` already refuses to run on an unsynced
-/// clock, and the Telegram thread (`telegram::Client::run`) does its own
-/// bounded wait on its own thread before polling, so neither needs the UI
-/// loop to block here.
+/// NTP同期完了までは待たない。ここはUIループ上で動くため、STATUS更新やタッチ処理を
+/// 止めないことを優先する。電源操作側で未同期時計は拒否する。
 fn start_online_services(
     sntp: &mut Option<esp_idf_svc::sntp::EspSntp<'static>>,
     telegram_started: &mut bool,
@@ -56,10 +47,8 @@ fn start_online_services(
     telegram_state: &Arc<Mutex<telegram::State>>,
 ) {
     if sntp.is_none() {
-        // The Windows Agent rejects requests whose timestamp is outside its
-        // clock skew window, so the clock has to be real before
-        // REBOOT/SHUTDOWN work. Starting it here is enough; see the doc
-        // comment above for why we don't also wait for sync here.
+        // Windows Agentはtimestampを検証するため、電源操作前に時計同期が必要になる。
+        // ここではSNTP開始だけ行い、同期待ちは別スレッド側に任せる。
         match net::start_sntp() {
             Ok(started) => {
                 println!("SNTP started");
@@ -72,8 +61,7 @@ fn start_online_services(
     if !*telegram_started && telegram::is_configured() {
         let client = telegram::Client::new(Arc::clone(power_lock));
         let state_handle = Arc::clone(telegram_state);
-        // Own thread: a long poll blocks for TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
-        // which must never stall the touch UI or the STATUS refresh.
+        // long pollingでUIやSTATUS更新を止めないよう、Telegramは専用スレッドで動かす。
         match std::thread::Builder::new()
             .stack_size(12 * 1024)
             .spawn(move || client.run(state_handle))
@@ -95,7 +83,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let peripherals = Peripherals::take()?;
 
-    // AXP192 and the touch controller share one I2C bus.
+    // AXP192とタッチコントローラーは同じI2Cバスを共有する。
     let i2c = board::new_i2c(
         peripherals.i2c0,
         peripherals.pins.gpio21.into(),
@@ -139,8 +127,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     )?;
 
-    // Serializes power actions between this thread and the Telegram thread,
-    // the role the FreeRTOS mutex plays in the C++ PowerController.
+    // UI操作とTelegram操作からの電源操作を直列化する。
     let power_lock: telegram::PowerLock = Arc::new(Mutex::new(()));
     let telegram_state = Arc::new(Mutex::new(telegram::State::Disabled));
     let mut sntp: Option<esp_idf_svc::sntp::EspSntp<'static>> = None;
@@ -149,9 +136,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("telegram: disabled (token or user id is a placeholder)");
     }
 
-    // Held for the whole program: dropping it tears down the connection. If
-    // this fails, `wifi_check_at` below retries every WIFI_RECONNECT_INTERVAL
-    // instead of leaving the device offline for good.
+    // Wifiハンドルは接続維持に必要なのでプログラム終了まで保持する。
+    // 初回接続に失敗しても、下の再接続処理で定期的に復旧を試す。
     let mut wifi = match net::Wifi::connect(peripherals.modem, WIFI_SSID, WIFI_PASSWORD) {
         Ok(wifi) => {
             println!("Wi-Fi connected");
@@ -181,7 +167,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut touch_was_down = false;
 
     loop {
-        // Re-associate if the link dropped, rate-limited like the C++ firmware.
+        // Wi-Fi切断時は一定間隔で再接続を試す。
         if wifi_check_at.elapsed() >= WIFI_RECONNECT_INTERVAL {
             wifi_check_at = Instant::now();
             match wifi.as_mut() {
@@ -195,9 +181,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 None => {
-                    // The initial connect (or a previous retry) failed and
-                    // dropped its Modem; re-acquire one and try again so a
-                    // failed boot connection is not permanent.
+                    // 初回接続失敗時はModemも破棄されるため、再取得して接続を試す。
                     println!("Wi-Fi never connected; retrying");
                     match net::Wifi::connect_retry(WIFI_SSID, WIFI_PASSWORD) {
                         Ok(w) => {
@@ -253,7 +237,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        // Rising-edge detection so one tap triggers exactly one action.
+        // タッチの立ち上がりだけを見ることで、1回のタップで1回だけ実行する。
         let touch_point = match touch.get_touch_event() {
             Ok(event) => event.p1.map(|p| (p.x as i32, p.y as i32)),
             Err(_) => None,
@@ -271,11 +255,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 Some(match net::send_wake_on_lan(PC_MAC_ADDRESS, WOL_PORT) {
                                     Ok(()) => {
                                         println!("WOL sent");
-                                        "Magic Packet sent".to_string()
+                                        "Magic Packet送信".to_string()
                                     }
                                     Err(e) => {
                                         println!("WOL failed: {e}");
-                                        "WOL failed".to_string()
+                                        "WOL失敗".to_string()
                                     }
                                 });
                             toast_at = Instant::now();
@@ -298,11 +282,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                             println!("{} confirmed", action.slug());
                             let _guard = power_lock.lock().unwrap();
                             toast_text = Some(match agent::send_command(action) {
-                                Ok(code) if agent::is_accepted(code) => "Command accepted".into(),
-                                Ok(code) => format!("Command rejected ({code})"),
+                                Ok(code) if agent::is_accepted(code) => {
+                                    "操作を受け付けました".into()
+                                }
+                                Ok(code) => format!("操作が拒否されました ({code})"),
                                 Err(e) => {
                                     println!("agent command failed: {e}");
-                                    "Command failed".to_string()
+                                    "操作に失敗しました".to_string()
                                 }
                             });
                             toast_at = Instant::now();

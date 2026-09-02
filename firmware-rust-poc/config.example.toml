@@ -1,11 +1,8 @@
-# Copy this file to config.toml (same directory) and replace all sample
-# values. Do not commit config.toml -- it is listed in .gitignore.
+# このファイルを同じディレクトリの config.toml へコピーし、値を書き換える。
+# config.toml は .gitignore 対象なのでコミットしない。
 #
-# build.rs reads this file at build time and emits the actual `pub const`
-# declarations into $OUT_DIR/generated_config.rs, which src/main.rs pulls in
-# via include!() as the `config` module. Secrets never live in src/ as Rust
-# source, so a compiler warning can no longer print one into a build log
-# (see Issue #21).
+# build.rs がビルド時に読み、$OUT_DIR/generated_config.rs を生成する。
+# secretを src/ 配下のRustソースに直接置かないことで、警告ログへの漏えいを避ける。
 
 wifi_ssid = "your-wifi-ssid"
 wifi_password = "your-wifi-password"
@@ -13,21 +10,20 @@ wifi_password = "your-wifi-password"
 pc_mac_address = "AA:BB:CC:DD:EE:FF"
 wol_port = 9
 
-# STATUS check target. The Rust firmware does not have raw ICMP wired up yet (see
-# Issue #16), so this is a TCP connect probe instead: a fast connect or a
-# refusal both mean "the PC is on and reachable"; a timeout means "off or
-# unreachable". Nothing needs to be listening on the port.
+# STATUS確認先。TCP connect probeを使う。接続成功または即時refusedなら
+# 「PCは起動して到達可能」、timeoutなら「OFFまたは到達不能」と扱う。
+# このportで何かがlistenしている必要はない。
 pc_status_addr = "192.168.1.100:80"
 
-# Windows Agent (LAN, plain HTTP + HMAC-SHA256 signed requests).
+# Windows Agent。LAN内HTTP + HMAC-SHA256署名付きリクエスト。
 agent_port = 18080
 agent_shared_secret = "replace-with-the-same-secret-as-windows-agent"
 
-# The Windows Agent lives on the same PC as the STATUS target.
+# Windows AgentはSTATUS確認対象と同じPCで動かす。
 pc_ip_address = "192.168.1.100"
 
-# Telegram Bot API (outbound HTTPS long polling). Leave these as the
-# placeholders below to keep the Telegram client disabled.
+# Telegram Bot API。外向きHTTPS long pollingで使う。
+# placeholderのままならTelegram clientは無効になる。
 telegram_bot_token = "replace-with-your-telegram-bot-token"
 telegram_allowed_user_id = "replace-with-your-telegram-user-id"
 telegram_long_poll_timeout_seconds = 20

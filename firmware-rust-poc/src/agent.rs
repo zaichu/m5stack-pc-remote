@@ -1,15 +1,14 @@
-// HMAC-signed commands to the Windows Agent (REBOOT / SHUTDOWN).
+// Windows Agentへ送るHMAC署名付き電源操作(REBOOT / SHUTDOWN)。
 //
-// Port of firmware/src/power_controller.cpp's postAgentCommand(). The wire
-// format must stay byte-identical to the C++ implementation and to
-// windows-agent's verifier:
+// C++ fallbackのpostAgentCommand()と同じ通信形式を使う。Windows Agent側の検証処理と
+// バイト単位で一致している必要がある。
 //
 //   canonical = "POST\n" + path + "\n" + timestamp + "\n" + nonce + "\n"
 //               + sha256_hex(body)
 //   X-Signature = hmac_sha256_hex(AGENT_SHARED_SECRET, canonical)
 //
-// The body is always `{"confirm":true}`: the agent rejects requests without
-// it, so a stray signed request cannot trigger a power action on its own.
+// 本文は常に `{"confirm":true}`。Agent側もこれを必須にしているため、署名だけでは
+// 電源操作を実行できない。
 
 use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,9 +22,8 @@ use sha2::{Digest, Sha256};
 
 use crate::config::{AGENT_PORT, AGENT_SHARED_SECRET, PC_IP_ADDRESS};
 
-/// Rejects timestamps from before 2023-11-14, i.e. a clock that never got an
-/// NTP sync. The agent verifies the timestamp against its own clock, so a
-/// bogus one would be rejected anyway; failing early gives a clearer error.
+/// 2023-11-14より古い時刻は、NTP同期前の時計として扱って拒否する。
+/// Agent側でもtimestampを検証するが、送信前に止めた方が原因が分かりやすい。
 const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
@@ -52,8 +50,7 @@ impl PowerAction {
         }
     }
 
-    /// Slug used inside Telegram callback_data. Must stay a plain lowercase
-    /// word: the data is parsed by splitting on ':'.
+    /// Telegram callback_data内で使う識別子。`:` 区切りで解析するため小文字の単語にする。
     pub fn slug(self) -> &'static str {
         match self {
             PowerAction::Reboot => "reboot",
@@ -90,16 +87,14 @@ fn unix_now() -> Result<u64, Box<dyn Error>> {
     Ok(secs)
 }
 
-/// Nonce for replay protection. Uses the hardware RNG plus the monotonic clock,
-/// mirroring the C++ implementation's esp_random() + millis() pair.
+/// リプレイ防止用nonce。ハードウェア乱数と単調増加時刻を組み合わせる。
 fn nonce() -> String {
     let random = unsafe { esp_idf_sys::esp_random() };
     let uptime = unsafe { esp_idf_sys::esp_timer_get_time() };
     format!("{random:x}-{uptime:x}")
 }
 
-/// Sends a signed, confirmed power command and returns the HTTP status code.
-/// Only 2xx counts as accepted.
+/// 署名済みの電源操作を送り、HTTPステータスコードを返す。2xxだけを受理扱いにする。
 pub fn send_command(action: PowerAction) -> Result<u16, Box<dyn Error>> {
     let path = action.path();
     let timestamp = unix_now()?;
@@ -113,9 +108,8 @@ pub fn send_command(action: PowerAction) -> Result<u16, Box<dyn Error>> {
 
     let url = format!("http://{PC_IP_ADDRESS}:{AGENT_PORT}{path}");
 
-    // Keep this short: the caller holds the power lock, which also blocks the
-    // touch UI confirm flow and the Telegram task while a request is in flight,
-    // so a slow or unreachable agent must fail fast.
+    // 呼び出し元は電源操作ロックを保持している。Agent応答待ちでUIやTelegram処理を
+    // 長く止めないよう、短いtimeoutで失敗させる。
     let mut client = HttpClient::wrap(EspHttpConnection::new(&HttpConfiguration {
         timeout: Some(REQUEST_TIMEOUT),
         ..Default::default()
@@ -141,7 +135,7 @@ pub fn send_command(action: PowerAction) -> Result<u16, Box<dyn Error>> {
     Ok(status)
 }
 
-/// True when the agent accepted the command.
+/// Agentがコマンドを受理した場合にtrue。
 pub fn is_accepted(status: u16) -> bool {
     (200..300).contains(&status)
 }
