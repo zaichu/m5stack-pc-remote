@@ -2,7 +2,7 @@
 
 M5Stack Core2 for AWS を24時間常時稼働させ、自宅LAN上の Windows 11 Pro デスクトップPCの電源管理専用端末として使うプロジェクトです。
 
-現在のM5Stack firmware本線はRust実装です。C++/Arduino版は安定確認が終わるまでfallbackとして残し、不要になった段階で一括削除します。
+現在のM5Stack firmwareはRust実装です。
 
 ## 構成
 
@@ -38,19 +38,18 @@ Windows Agent のポートをインターネットへ直接公開しません。
 
 ## 技術選定
 
-- M5Stack firmware本線: Rust + esp-idf-sys / esp-idf-svc / esp-idf-hal
-- M5Stack firmware fallback: PlatformIO + Arduino Framework + M5Unified (`firmware/`)
+- M5Stack firmware: Rust + esp-idf-sys / esp-idf-svc / esp-idf-hal
 - STATUS: Rust版は TCP connect probe
 - WOL: Rust版は UDP Magic Packet送信
 - Windows Agent: Rust
 - 認証: HMAC-SHA256 + timestamp + nonce
 
-Rust版はWi-Fi / WOL / STATUS / タッチUI / REBOOT / SHUTDOWN / Telegram経由操作まで実機確認済みです。C++版は運用fallbackとして残しています。
+Rust版はWi-Fi / WOL / STATUS / タッチUI / REBOOT / SHUTDOWN / Telegram経由操作まで実機確認済みです。
 
 ## セットアップ: Rust firmware
 
 ```bash
-cd firmware-rust-poc
+cd firmware
 cp config.example.toml config.toml
 . ~/export-esp.sh
 cargo build --release --target xtensa-esp32-espidf
@@ -67,10 +66,10 @@ tokenやsecretをローテーションした時は、現時点では `config.tom
 NVSイメージだけを生成する場合:
 
 ```bash
-make firmware-rust-nvs-image
+make firmware-nvs-image
 ```
 
-生成先は `firmware-rust-poc/.nvs-provisioning/` です。secretを含むためGit管理外です。
+生成先は `firmware/.nvs-provisioning/` です。secretを含むためGit管理外です。
 実機NVSを書き換える場合は、NVS partition offset/sizeを確認した上で次のように明示実行します。
 
 ```bash
@@ -79,45 +78,6 @@ python3 scripts/provision-firmware-rust-nvs.py --write --yes --port /dev/ttyUSB0
 
 現行partition tableではNVSは offset `0x9000`、size `0x6000` です。partition tableを変えた
 場合は `--offset` と `--size` を指定してください。
-
-## セットアップ: C++ fallback firmware
-
-```bash
-cd firmware
-cp include/config.example.h include/config.h
-```
-
-`include/config.h` を編集します。
-
-```cpp
-#define WIFI_SSID "your-wifi-ssid"
-#define WIFI_PASSWORD "your-wifi-password"
-#define PC_HOSTNAME "desktop"
-#define PC_IP_ADDRESS "192.168.1.100"
-#define PC_MAC_ADDRESS "AA:BB:CC:DD:EE:FF"
-#define AGENT_PORT 18080
-#define AGENT_SHARED_SECRET "replace-with-the-same-secret-as-windows-agent"
-```
-
-Telegram経由のスマホ外部操作をC++ fallbackで使う場合は、`TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` も設定します(セットアップ手順は次節)。両方ともplaceholderのままか空の場合、Telegram機能は無効化され、既存のタッチUI・WOL・STATUSはそのまま動作します。
-
-ビルド:
-
-```bash
-pio run -d firmware
-```
-
-書き込み:
-
-```bash
-pio run -d firmware -t upload
-```
-
-Serial monitor:
-
-```bash
-pio device monitor -d firmware
-```
 
 ## セットアップ: Windows Agent
 
@@ -161,15 +121,15 @@ Windows起動時に自動起動するには、管理者PowerShellで以下を実
 1. Telegramで `@userinfobot` など、自分のuser idを教えてくれるbotとチャットする、またはBot APIの `getUpdates` を一度手動で呼んで自分の `from.id` を確認する。
 2. 数値のuser id (`123456789` のような形式) を控える。
 
-### 3. `config.h` に設定する
+### 3. Rust firmwareの `config.toml` に設定する
 
-`firmware/include/config.h` に以下を追加(または placeholder から変更)します。
+`firmware/config.toml` の以下を placeholder から変更します。
 
-```cpp
-#define TELEGRAM_BOT_TOKEN "123456789:your-real-bot-token"
-#define TELEGRAM_ALLOWED_USER_ID "123456789"
-#define TELEGRAM_LONG_POLL_TIMEOUT_SECONDS 20
-#define TELEGRAM_CONFIRM_TTL_MS 60000
+```toml
+telegram_bot_token = "123456789:your-real-bot-token"
+telegram_allowed_user_id = "123456789"
+telegram_long_poll_timeout_seconds = 20
+telegram_confirm_ttl_secs = 60
 ```
 
 `TELEGRAM_ALLOWED_USER_ID` と一致しない `from.id` からのメッセージはすべて無視され、返信もされません。`TELEGRAM_BOT_TOKEN` はWindows Agent用の `AGENT_SHARED_SECRET` とは別の秘密情報で、Windows Agentへは一切渡りません。
@@ -199,7 +159,7 @@ Telegramアプリから許可したuser idのアカウントで、bot宛てに�
 - `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
 - `/reboot` / `/shutdown`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」または「シャットダウン」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を手入力しても構いません(後方互換)。nonceは `TELEGRAM_CONFIRM_TTL_MS` の間だけ有効で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
 
-Telegram APIとのTLS通信は `firmware/src/telegram_root_ca.h` に埋め込んだルートCA証明書でサーバー証明書を検証します。Telegramが将来ルート認証局を切り替えた場合、画面が `Telegram: polling` から `Telegram: error` に変わります。その場合の証明書更新手順は [External Access Design](docs/external-access.md) の「CA証明書のローテーション運用」を参照してください。
+Telegram APIとのTLS通信は `firmware/src/telegram_root_ca.rs` に埋め込んだルートCA証明書でサーバー証明書を検証します。Telegramが将来ルート認証局を切り替えた場合、画面が `Telegram: polling` から `Telegram: error` に変わります。その場合の証明書更新手順は [External Access Design](docs/external-access.md) の「CA証明書のローテーション運用」を参照してください。
 
 ## ローカル品質チェック
 
@@ -217,10 +177,9 @@ make install-hooks
 
 Gitへ入れないファイル:
 
-- `firmware/include/config.h`
-- `firmware-rust-poc/config.toml`
-- `firmware-rust-poc/src/config.rs` (旧方式。ビルドログ漏えい防止のため使用禁止)
-- `firmware-rust-poc/src/_config.rs` (旧方式。ビルドログ漏えい防止のため使用禁止)
+- `firmware/config.toml`
+- `firmware/src/config.rs` (旧方式。ビルドログ漏えい防止のため使用禁止)
+- `firmware/src/_config.rs` (旧方式。ビルドログ漏えい防止のため使用禁止)
 - `windows-agent/config.toml`
 - `.env`
 - `*.pem`

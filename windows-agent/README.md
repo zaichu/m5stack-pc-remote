@@ -22,7 +22,7 @@ cargo build --release
 
 管理者PowerShellで実行します。`config.toml` が無い場合は `config.example.toml` から
 暗号論的乱数(`RandomNumberGenerator`、64文字)で生成した `shared_secret` を使って
-作成します(生成後、`firmware/include/config.h` の `AGENT_SHARED_SECRET` を
+作成します(生成後、`firmware/config.toml` の `agent_shared_secret` を
 同じ値に必ず合わせてください)。
 
 ```powershell

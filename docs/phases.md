@@ -2,7 +2,7 @@
 
 ## Phase 1: Wi-Fi -> WOL -> STATUS
 
-- Rust firmwareプロジェクトを本線として使う。C++/Arduino版はfallbackとして残す。
+- Rust firmwareプロジェクトを使う。
 - Wi-Fiへ接続する。
 - 設定ファイルからPCのMAC、IP、broadcast addressを読む。
 - Wake-on-LAN Magic Packetを送る。

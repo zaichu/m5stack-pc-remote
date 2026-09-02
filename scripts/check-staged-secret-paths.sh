@@ -4,7 +4,6 @@ set -euo pipefail
 secret_path_patterns=(
   '^\.env$'
   '^\.env\.[^/]+$'
-  '^firmware/include/config\.h$'
   '^windows-agent/config\.toml$'
   '(^|/)[^/]*secret[^/]*\.json$'
   '(^|/)[^/]*credential[^/]*\.json$'
@@ -16,7 +15,6 @@ secret_path_patterns=(
 allowed_templates=(
   ".env.example"
   ".env.local.example"
-  "firmware/include/config.example.h"
   "windows-agent/config.example.toml"
 )
 

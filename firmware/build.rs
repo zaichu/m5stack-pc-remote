@@ -21,9 +21,9 @@ fn generate_config() {
 
     if !config_path.exists() {
         panic!(
-            "firmware-rust-poc/config.toml が見つかりません。config.example.toml を同じ \
+            "firmware/config.toml が見つかりません。config.example.toml を同じ \
              ディレクトリの config.toml へコピーし、実際の値を設定してください。詳細は \
-             firmware-rust-poc/README.md を参照してください。"
+             firmware/README.md を参照してください。"
         );
     }
 

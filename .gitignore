@@ -1,9 +1,8 @@
 # Local firmware secrets.
-firmware/include/config.h
-firmware-rust-poc/config.toml
+firmware/config.toml
 # 旧方式ではsecretをRustソースへ置いていたため、残っていてもGitへ入れない。
-firmware-rust-poc/src/config.rs
-firmware-rust-poc/src/_config.rs
+firmware/src/config.rs
+firmware/src/_config.rs
 
 # Windows Agent local secrets.
 windows-agent/config.toml
@@ -12,16 +11,12 @@ windows-agent/config.toml
 target/
 windows-agent/target/
 
-# PlatformIO generated files.
-firmware/.pio/
-firmware/.vscode/
-
 # esp-idf / embuild generated files (Rust firmware).
-firmware-rust-poc/.embuild/
-firmware-rust-poc/.nvs-provisioning/
-firmware-rust-poc/sdkconfig
-firmware-rust-poc/managed_components/
-firmware-rust-poc/dependencies.lock
+firmware/.embuild/
+firmware/.nvs-provisioning/
+firmware/sdkconfig
+firmware/managed_components/
+firmware/dependencies.lock
 
 # Local env and secret files.
 .env

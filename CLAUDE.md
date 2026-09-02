@@ -22,7 +22,7 @@ make check
 bash -n scripts/*.sh
 ```
 
-PlatformIO CLI がない環境では `make firmware-build` は警告だけ出してスキップします。実機作業前には PlatformIO を入れた環境で `pio run -d firmware` を必ず実行してください。
+esp Rust toolchain やローカル `firmware/config.toml` がない環境では `make firmware-build` は警告だけ出してスキップします。実機作業前には esp toolchain を入れた環境で `cargo +esp build --release --target xtensa-esp32-espidf` を必ず実行してください。
 
 ## 秘密情報
 

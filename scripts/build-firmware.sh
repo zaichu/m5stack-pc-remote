@@ -6,11 +6,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-poc_dir="$repo_root/firmware-rust-poc"
+firmware_dir="$repo_root/firmware"
 target="xtensa-esp32-espidf"
 
-if [[ ! -d "$poc_dir" ]]; then
-  echo "WARNING: $poc_dir が見つからないため、Rust firmware buildをskipします。"
+if [[ ! -d "$firmware_dir" ]]; then
+  echo "WARNING: $firmware_dir が見つからないため、Rust firmware buildをskipします。"
   exit 0
 fi
 
@@ -33,8 +33,8 @@ if ! command -v ldproxy >/dev/null 2>&1; then
   exit 0
 fi
 
-if [[ ! -f "$poc_dir/config.toml" ]]; then
-  echo "WARNING: $poc_dir/config.toml が見つからないため、Rust firmware buildをskipします。"
+if [[ ! -f "$firmware_dir/config.toml" ]]; then
+  echo "WARNING: $firmware_dir/config.toml が見つからないため、Rust firmware buildをskipします。"
   exit 0
 fi
 
@@ -45,7 +45,7 @@ if [[ -f "$HOME/export-esp.sh" ]]; then
 fi
 
 echo "Rust firmwareをbuildします: $target"
-cd "$poc_dir"
+cd "$firmware_dir"
 
 build_log="$(mktemp)"
 cleanup() {
@@ -66,7 +66,7 @@ fi
 
 if command -v python3 >/dev/null 2>&1; then
   if python3 "$repo_root/scripts/check-firmware-rust-build-log-secrets.py" \
-    "$poc_dir/config.toml" "$build_log"; then
+    "$firmware_dir/config.toml" "$build_log"; then
     :
   else
     exit 1

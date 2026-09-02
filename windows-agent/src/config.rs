@@ -5,7 +5,9 @@ use serde::Deserialize;
 const PLACEHOLDER_SHARED_SECRET: &str = "replace-with-a-long-random-shared-secret";
 const MIN_SHARED_SECRET_LEN: usize = 32;
 
-#[derive(Debug, Clone, Deserialize)]
+// `shared_secret` を含むため `Debug` は手書きし、値を出力しない。
+// ログや panic メッセージへ `{:?}` で secret が漏れる事故を防ぐ。
+#[derive(Clone, Deserialize)]
 pub struct AgentConfig {
     pub bind: String,
     pub shared_secret: String,
@@ -13,6 +15,17 @@ pub struct AgentConfig {
     pub allowed_skew_seconds: i64,
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+}
+
+impl std::fmt::Debug for AgentConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentConfig")
+            .field("bind", &self.bind)
+            .field("shared_secret", &"[REDACTED]")
+            .field("allowed_skew_seconds", &self.allowed_skew_seconds)
+            .field("dry_run", &self.dry_run)
+            .finish()
+    }
 }
 
 fn default_allowed_skew_seconds() -> i64 {
