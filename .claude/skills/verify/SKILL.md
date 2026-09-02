@@ -17,7 +17,7 @@ bash -n scripts/*.sh
 `make check` は以下を実行します。
 
 - `git diff --check`
-- `bash scripts/check-local-firmware-rust-secrets.sh` (Rust firmware PoCの旧 `src/config.rs` が残っていれば内容を表示せず停止)
+- `bash scripts/check-local-firmware-rust-secrets.sh` (Rust firmwareの旧 `src/config.rs` が残っていれば内容を表示せず停止)
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
@@ -31,4 +31,4 @@ bash scripts/scan-secrets.sh
 ```
 
 実Wi-Fiパスワード、実PC MACアドレス、HMAC secret、Windows認証情報を出力やdocsへ残さないでください。
-Rust firmware PoCではsecretをRustソース(`firmware-rust-poc/src/`)へ直接書かず、Git管理外の `firmware-rust-poc/config.toml` を使ってください。旧 `firmware-rust-poc/src/config.rs` はビルドログ漏えい防止のため禁止です。
+Rust firmwareではsecretをRustソース(`firmware-rust-poc/src/`)へ直接書かず、Git管理外の `firmware-rust-poc/config.toml` を使ってください。旧 `firmware-rust-poc/src/config.rs` / `firmware-rust-poc/src/_config.rs` はビルドログ漏えい防止のため禁止です。

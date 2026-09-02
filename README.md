@@ -2,7 +2,7 @@
 
 M5Stack Core2 for AWS を24時間常時稼働させ、自宅LAN上の Windows 11 Pro デスクトップPCの電源管理専用端末として使うプロジェクトです。
 
-初期実装は **Wi-Fi接続 -> Wake-on-LAN -> STATUS** に絞っています。REBOOT / SHUTDOWN は Rust製 Windows Agent による認証付きAPIとして段階的に追加します。
+現在のM5Stack firmware本線はRust実装です。C++/Arduino版は安定確認が終わるまでfallbackとして残し、不要になった段階で一括削除します。
 
 ## 構成
 
@@ -10,7 +10,9 @@ M5Stack Core2 for AWS を24時間常時稼働させ、自宅LAN上の Windows 11
 M5Stack Core2 for AWS
   ├─ Wi-Fi接続
   ├─ Wake-on-LAN Magic Packet送信
-  └─ ICMP ping STATUS確認
+  ├─ TCP connect STATUS確認
+  ├─ タッチUI
+  └─ Telegram Bot API long polling
 
 Windows 11 Pro PC
   └─ Rust Windows Agent
@@ -36,15 +38,28 @@ Windows Agent のポートをインターネットへ直接公開しません。
 
 ## 技術選定
 
-- M5Stack firmware: PlatformIO + Arduino Framework + M5Unified
-- STATUS: 初期は ICMP ping
-- WOL: ESP32 Arduino標準の `WiFiUDP`
+- M5Stack firmware本線: Rust + esp-idf-sys / esp-idf-svc / esp-idf-hal
+- M5Stack firmware fallback: PlatformIO + Arduino Framework + M5Unified (`firmware/`)
+- STATUS: Rust版は TCP connect probe
+- WOL: Rust版は UDP Magic Packet送信
 - Windows Agent: Rust
 - 認証: HMAC-SHA256 + timestamp + nonce
 
-Core2の画面・タッチ・Wi-Fiまわりは Arduino + M5Unified が安定しており、PlatformIOで再現性を確保しやすいためこの構成を採用しています。RustはWindows Agent側で採用し、単一バイナリ配布と堅牢な認証処理を優先します。
+Rust版はWi-Fi / WOL / STATUS / タッチUI / REBOOT / SHUTDOWN / Telegram経由操作まで実機確認済みです。C++版は運用fallbackとして残しています。
 
-## セットアップ: firmware
+## セットアップ: Rust firmware
+
+```bash
+cd firmware-rust-poc
+cp config.example.toml config.toml
+. ~/export-esp.sh
+cargo build --release --target xtensa-esp32-espidf
+espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust
+```
+
+`config.toml` はGit管理外です。秘密情報をRustソース(`src/`配下)へ直接書かないでください。
+
+## セットアップ: C++ fallback firmware
 
 ```bash
 cd firmware
@@ -63,7 +78,7 @@ cp include/config.example.h include/config.h
 #define AGENT_SHARED_SECRET "replace-with-the-same-secret-as-windows-agent"
 ```
 
-Telegram経由のスマホ外部操作を使う場合は、`TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` も設定します(セットアップ手順は次節)。両方ともplaceholderのままか空の場合、Telegram機能は無効化され、既存のタッチUI・WOL・STATUSはそのまま動作します。
+Telegram経由のスマホ外部操作をC++ fallbackで使う場合は、`TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` も設定します(セットアップ手順は次節)。両方ともplaceholderのままか空の場合、Telegram機能は無効化され、既存のタッチUI・WOL・STATUSはそのまま動作します。
 
 ビルド:
 
@@ -184,6 +199,7 @@ Gitへ入れないファイル:
 - `firmware/include/config.h`
 - `firmware-rust-poc/config.toml`
 - `firmware-rust-poc/src/config.rs` (旧方式。ビルドログ漏えい防止のため使用禁止)
+- `firmware-rust-poc/src/_config.rs` (旧方式。ビルドログ漏えい防止のため使用禁止)
 - `windows-agent/config.toml`
 - `.env`
 - `*.pem`
@@ -191,7 +207,7 @@ Gitへ入れないファイル:
 - `*secret*.json`
 
 テンプレートだけをGit管理します。
-Rust firmware PoCでは、秘密情報をRustソースへ直接書かず、Git管理外のTOML設定を使います。
+Rust firmwareでは、秘密情報をRustソースへ直接書かず、Git管理外のTOML設定を使います。
 
 ## ドキュメント
 
