@@ -18,8 +18,13 @@ pub struct Wifi {
 impl Wifi {
     /// station interfaceを設定して起動し、ネットワークが上がるまで待つ。
     /// 初回接続専用。失敗時はModemが破棄されるため、再試行は `connect_retry()` を使う。
-    pub fn connect(modem: Modem, ssid: &str, password: &str) -> Result<Self, Box<dyn Error>> {
-        Self::connect_with_modem(modem, ssid, password)
+    pub fn connect(
+        modem: Modem,
+        nvs: EspDefaultNvsPartition,
+        ssid: &str,
+        password: &str,
+    ) -> Result<Self, Box<dyn Error>> {
+        Self::connect_with_modem(modem, nvs, ssid, password)
     }
 
     /// 前回の接続失敗でModemが破棄されたあと、最初から接続をやり直す。
@@ -27,18 +32,22 @@ impl Wifi {
     /// # Safety
     /// 生きている `Wifi` / `Modem` が他にない状態でだけ呼ぶ。初回 `connect()` 失敗後や、
     /// 前回の `connect_retry()` 失敗後が該当する。
-    pub fn connect_retry(ssid: &str, password: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn connect_retry(
+        nvs: EspDefaultNvsPartition,
+        ssid: &str,
+        password: &str,
+    ) -> Result<Self, Box<dyn Error>> {
         let modem = unsafe { Modem::new() };
-        Self::connect_with_modem(modem, ssid, password)
+        Self::connect_with_modem(modem, nvs, ssid, password)
     }
 
     fn connect_with_modem(
         modem: Modem,
+        nvs: EspDefaultNvsPartition,
         ssid: &str,
         password: &str,
     ) -> Result<Self, Box<dyn Error>> {
         let sys_loop = EspSystemEventLoop::take()?;
-        let nvs = EspDefaultNvsPartition::take()?;
 
         let mut inner =
             BlockingWifi::wrap(EspWifi::new(modem, sys_loop.clone(), Some(nvs))?, sys_loop)?;

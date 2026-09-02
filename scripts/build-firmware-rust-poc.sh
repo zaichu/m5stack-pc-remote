@@ -46,4 +46,34 @@ fi
 
 echo "Rust firmwareをbuildします: $target"
 cd "$poc_dir"
-cargo +esp build --release --target "$target"
+
+build_log="$(mktemp)"
+cleanup() {
+  rm -f "$build_log"
+}
+trap cleanup EXIT
+
+set +e
+cargo +esp build --release --target "$target" >"$build_log" 2>&1
+status=$?
+set -e
+
+if grep -E -q '[0-9]{6,}:[A-Za-z0-9_-]{20,}' "$build_log"; then
+  echo "ERROR: Rust firmware build logにTelegram bot tokenらしき文字列を検出しました。" >&2
+  echo "secretを含む可能性があるため、build log本文は表示しません。" >&2
+  exit 1
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  if python3 "$repo_root/scripts/check-firmware-rust-build-log-secrets.py" \
+    "$poc_dir/config.toml" "$build_log"; then
+    :
+  else
+    exit 1
+  fi
+else
+  echo "WARNING: python3 が見つからないため、config.toml値とのbuild log照合をskipします。" >&2
+fi
+
+cat "$build_log"
+exit "$status"
