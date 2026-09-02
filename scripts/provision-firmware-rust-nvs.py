@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-FIRMWARE_DIR = REPO_ROOT / "firmware-rust-poc"
+FIRMWARE_DIR = REPO_ROOT / "firmware"
 DEFAULT_CONFIG = FIRMWARE_DIR / "config.toml"
 DEFAULT_OUTDIR = FIRMWARE_DIR / ".nvs-provisioning"
 DEFAULT_NVS_SIZE = 0x6000
@@ -63,7 +63,7 @@ def find_generator() -> tuple[Path, Path]:
         )
         if not candidates:
             raise FileNotFoundError(
-                "nvs_partition_gen.py が見つかりません。先に `make firmware-rust-build` を実行してください。"
+                "nvs_partition_gen.py が見つかりません。先に `make firmware-build` を実行してください。"
             )
         generator = candidates[-1]
 

@@ -4,10 +4,21 @@ use time::OffsetDateTime;
 
 use crate::signing;
 
-#[derive(Debug, Clone)]
+// `secret` を含むため `Debug` は手書きし、値を出力しない。
+// ログや panic メッセージへ `{:?}` で secret が漏れる事故を防ぐ。
+#[derive(Clone)]
 pub struct AuthConfig {
     pub secret: Vec<u8>,
     pub allowed_skew_seconds: i64,
+}
+
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("secret", &"[REDACTED]")
+            .field("allowed_skew_seconds", &self.allowed_skew_seconds)
+            .finish()
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

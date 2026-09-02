@@ -1,11 +1,8 @@
-# firmware-rust-poc
+# firmware
 
-M5Stack Core2 for AWS firmwareのRust実装。本線として実運用検証中。
-
-`firmware/`(PlatformIO + Arduino Framework + M5Unified、C++)は安定版fallbackとして
-残す。Rust版は実機で主要機能(Wi-Fi / WOL / STATUS / UI / REBOOT / SHUTDOWN /
-Telegram)が動作確認済み。
-ディレクトリ名 `firmware-rust-poc/` は履歴と差分を小さく保つため当面維持する。
+M5Stack Core2 for AWS firmware(Rust実装)。旧C++/Arduino/M5Unified版は
+Rust版の実運用検証を経て削除済み(#24)。主要機能(Wi-Fi / WOL / STATUS / UI /
+REBOOT / SHUTDOWN / Telegram)は実機で動作確認済み。
 
 ## 技術構成
 
@@ -26,11 +23,11 @@ Telegram)が動作確認済み。
 
 ### なぜM5Unified(C++)を使わないか
 
-当初は `m5unified` crate(M5Unified C++ライブラリのRustラッパー)を使い、画面表示の
+当初は `m5unified` crate(M5Unified C++ライブラリのRustラッパー)を検討し、画面表示の
 実機動作までは確認できた。しかしM5UnifiedはESP-IDFの**旧I2Cドライバ**を使うため、
 Wi-Fi等でESP-IDFのモダンなドライバ(driver_ng)が同一バイナリにリンクされると、
 起動時に必ず `CONFLICT! driver_ng is not allowed to be used with this old driver` で
-abortするため採用しない。
+abortするため採用しない(詳細は #16)。
 
 純Rustスタックにすることで、リンクされるI2Cドライバが1系統に揃い、この競合が
 構造的に発生しなくなる。
@@ -54,7 +51,7 @@ espup install --targets esp32
 ## セットアップ
 
 ```bash
-cd firmware-rust-poc
+cd firmware
 cp config.example.toml config.toml   # Git管理外。実際の値に書き換える
 . ~/export-esp.sh
 cargo build --release --target xtensa-esp32-espidf
@@ -66,7 +63,7 @@ secretを直接書かない。`build.rs` がビルド時に `config.toml` を読
 生成した定数は未使用でも `#[allow(dead_code)]` により警告が出ないため、コンパイラの
 unused警告がソース行としてbot token等をビルドログへ出す事故が起きない。旧方式の
 `src/config.rs` が残っていると `scripts/check-local-firmware-rust-secrets.sh`
-(`make firmware-rust-poc-build` から自動実行)がbuildを止める。
+(`make firmware-build` から自動実行)がbuildを止める。
 
 起動時はESP-IDF NVSの `m5remote` namespaceを先に読み、存在するkeyだけ実行時設定へ
 反映する。NVSが未設定ならビルド時configをそのまま使うため、既存のbuild/flash運用は
@@ -100,10 +97,10 @@ NVSイメージ生成:
 
 ```bash
 cd ..
-make firmware-rust-nvs-image
+make firmware-nvs-image
 ```
 
-生成先は `firmware-rust-poc/.nvs-provisioning/m5remote-nvs.bin`。secretを含むため
+生成先は `firmware/.nvs-provisioning/m5remote-nvs.bin`。secretを含むため
 Git管理外にしている。
 
 実機NVSを書き換える場合:
@@ -145,7 +142,7 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
 
 ## 現在のスコープと実機確認結果
 
-初期検証条件は達成済み。現在は本線として実運用検証中:
+初期検証条件は達成済み。現在は実運用検証中:
 
 - [x] ESP32 / M5Stack Core2へRust firmwareをbuild/flashできる
 - [x] Wi-Fi接続できる
@@ -156,7 +153,7 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
       `WAKE tapped` → `WOL sent` を確認)
 - [x] 秘密情報をGitへ入れない構成を維持できる(`config.toml`はGit管理外。Rustソースへ
       secretを直接書かない)
-- [x] `make check` にRust firmwareのbuild確認を追加(`make firmware-rust-build`。
+- [x] `make check` にRust firmwareのbuild確認を追加(`make firmware-build`。
       espツールチェーン/ldproxy/`config.toml` が無い環境では警告してスキップ)
 
 2026-09-01時点の実機確認: AXP192初期化、ディスプレイ初期化、タッチコントローラー

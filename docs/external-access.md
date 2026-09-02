@@ -150,7 +150,7 @@ M5Stack IP: 192.168.1.50
 
 - BotFatherでbotを作る。
 - bot tokenと自分のTelegram user idを取得する。
-- Rust本線は `firmware-rust-poc/config.example.toml`、C++ fallbackは `firmware/include/config.example.h` にTelegram設定テンプレートを置く。
+- `firmware/config.example.toml` にTelegram設定テンプレートを置く。
 - READMEにセットアップ手順を書く。
 
 ### Phase 5B: M5Stack Telegram client (実装済み)
@@ -184,24 +184,23 @@ M5Stack IP: 192.168.1.50
 
 ## 実装済み範囲 (2026-09-01時点)
 
-- Rust本線は `firmware-rust-poc/src/telegram.rs` が `getUpdates` によるlong pollingを専用スレッドで実行する。タッチUI/STATUS更新のメインループを長時間ブロックしない。
-- C++ fallbackは `firmware/src/telegram_client.h` / `telegram_client.cpp` が `getUpdates` によるlong pollingを、`xTaskCreatePinnedToCore` でcore 0の専用FreeRTOSタスクとして実行する。
+- `firmware/src/telegram.rs` が `getUpdates` によるlong pollingを専用スレッドで実行する。タッチUI/STATUS更新のメインループを長時間ブロックしない。
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_ALLOWED_USER_ID` が未設定(placeholderまたは空)の場合はタスクを起動せず、画面表示は `Telegram: disabled` になる。既存のタッチUI・WOL・STATUSはそのまま動作する。
 - `from.id` が `TELEGRAM_ALLOWED_USER_ID` と一致しないupdateは無視し、返信しない。`update_id` は次回 `offset` として保持し、再処理しない。起動直後の最初の1バッチは、オフライン中に来たコマンドを実行しないよう、offset調整のみ行い実行はしない。
-- `/status` はPC ONLINE/OFFLINE、Wi-Fi状態、M5Stack local IPを返す。Rust本線はTCP connect probe、C++ fallbackは既存のSTATUS更新結果を使う。
-- `/wake` は既存の `sendWakeOnLan()` を呼び、成功/失敗を返信後にSTATUSを再取得する。
+- `/status` はPC ONLINE/OFFLINE、Wi-Fi状態、M5Stack local IPを返す。TCP connect probeを使う。
+- `/wake` はWake-on-LAN送信処理を呼び、成功/失敗を返信する。
 - `/reboot` / `/shutdown` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_MS` でTTL)を発行し、確定/キャンセルのインラインキーボード付きで `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を案内する。
-- 確定ボタン・キャンセルボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、既存の `postAgentCommand("/reboot")` / `postAgentCommand("/shutdown")` (HMAC署名付き)を呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
+- 確定ボタン・キャンセルボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、Windows AgentへのHMAC署名付きPOSTを呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
 - ボタンの `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの64byte制限内)。`callback_query` の `from.id` もメッセージと同様に `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、一致しない場合はpending確認を操作せず、Telegram仕様どおり `answerCallbackQuery` だけ短い拒否文言付きで返す(通常のメッセージ返信はしない)。
 - HTTP失敗時は5秒から60秒への指数バックオフを行い、画面状態を `Telegram: error` にする。
-- Telegram APIとの通信はTLS (`WiFiClientSecure::setCACert()`) でサーバー証明書チェーンを検証する。ルートCAは `firmware/src/telegram_root_ca.h` に埋め込んだ「Go Daddy Root Certificate Authority - G2」(2037-12-31まで有効な自己署名ルート)を使う。`api.telegram.org` の葉証明書自体はおよそ年1回更新されるが、ルートCAを固定していれば葉証明書の更新だけでは検証は壊れない。
-- Wake-on-LAN送信・Windows Agentへの署名付きPOST・PC状態確認はRust本線では `firmware-rust-poc/src/net.rs` / `agent.rs`、C++ fallbackでは `firmware/src/power_controller.h` / `power_controller.cpp` に置く。UIとTelegramからの電源操作は直列化し、Agentが応答しない場合でもUIやTelegram処理を長時間ブロックしないよう短いtimeoutを設定する。
+- Telegram APIとの通信はTLSでサーバー証明書チェーンを検証する。ルートCAは `firmware/src/telegram_root_ca.rs` に埋め込んだ「Go Daddy Root Certificate Authority - G2」(2037-12-31まで有効な自己署名ルート)を使う。`api.telegram.org` の葉証明書自体はおよそ年1回更新されるが、ルートCAを固定していれば葉証明書の更新だけでは検証は壊れない。
+- Wake-on-LAN送信・Windows Agentへの署名付きPOST・PC状態確認は `firmware/src/net.rs` / `agent.rs` に置く。UIとTelegramからの電源操作は直列化し、Agentが応答しない場合でもUIやTelegram処理を長時間ブロックしないよう短いtimeoutを設定する。
 
 ## CA証明書のローテーション運用
 
-- Rust本線の `firmware-rust-poc/src/telegram_root_ca.rs`、C++ fallbackの `firmware/src/telegram_root_ca.h` にピン留めしているのはリーフ証明書ではなくルートCA(有効期限2037-12-31)。Telegramがリーフ証明書だけを通常更新している間は、このファイルの更新は不要。
+- `firmware/src/telegram_root_ca.rs` にピン留めしているのはリーフ証明書ではなくルートCA(有効期限2037-12-31)。Telegramがリーフ証明書だけを通常更新している間は、このファイルの更新は不要。
 - ただし、Telegramが将来ルートCAごと切り替えた場合(認証局の変更、ルート更新など)、TLSハンドシェイクが失敗し始める。症状はM5Stackの画面が `Telegram: polling` から `Telegram: error` に変わり、Serialログに `telegram getUpdates failed` 系のメッセージが出ることで気づける。
-- 復旧手順: `openssl s_client -connect api.telegram.org:443 -servername api.telegram.org -showcerts` で現在のチェーンを取得し直し、新しいルート証明書のPEMでRust本線の `firmware-rust-poc/src/telegram_root_ca.rs` と、必要に応じてC++ fallbackの `firmware/src/telegram_root_ca.h` を差し替え、ファイル先頭のコメント(subject、有効期限、SHA-256 fingerprint、取得日)も更新したうえで再ビルド・再書き込みする。
+- 復旧手順: `openssl s_client -connect api.telegram.org:443 -servername api.telegram.org -showcerts` で現在のチェーンを取得し直し、新しいルート証明書のPEMで `firmware/src/telegram_root_ca.rs` を差し替え、ファイル先頭のコメント(subject、有効期限、SHA-256 fingerprint、取得日)も更新したうえで再ビルド・再書き込みする。
 - token自体はURLに埋め込まれるが、証明書検証によって経路上の第三者による通信内容の盗聴・改ざん耐性が確保される。
 
 ## 未実装 / 残リスク
@@ -212,7 +211,7 @@ M5Stack IP: 192.168.1.50
 - Bot tokenが漏れると第三者がbot APIへアクセスできる。BotFatherでrevokeし、M5Stackのconfigを更新する。
 - Telegramアカウントが乗っ取られると許可ユーザーとして操作される。スマホ側のロックとTelegramの二段階認証を有効にする。
 - M5StackがOFFLINEなら外部操作はできない。
-- `/status` のPC ONLINE/OFFLINEは実装ごとに判定方式が異なる。Rust本線はリクエスト時にTCP connect probeを実行し、C++ fallbackは既存のSTATUS更新間隔(`STATUS_INTERVAL_MS`)でキャッシュされた値を返す。
+- `/status` のPC ONLINE/OFFLINEはリクエスト時にTCP connect probeを実行して判定する。
 
 ## 参照
 

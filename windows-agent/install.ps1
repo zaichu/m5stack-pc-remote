@@ -49,7 +49,7 @@ if (-not (Test-Path $ConfigPath)) {
     $secret = -join ($randomBytes | ForEach-Object { $secretAlphabet[$_ -band 0x3F] })
     (Get-Content $examplePath) -replace 'replace-with-a-long-random-shared-secret', $secret |
         Set-Content $ConfigPath
-    Write-Host "shared_secret を暗号論的乱数(64文字)で新規生成しました。firmware/include/config.h の AGENT_SHARED_SECRET を同じ値に必ず合わせてください。"
+    Write-Host "shared_secret を暗号論的乱数(64文字)で新規生成しました。firmware/config.toml の agent_shared_secret を同じ値に必ず合わせてください。"
 }
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
