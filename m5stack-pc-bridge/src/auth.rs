@@ -49,8 +49,14 @@ impl NonceStore {
     }
 
     fn evict_expired(&self, now: i64, ttl_seconds: i64) {
+        // i64::abs_diff はu64を返しオーバーフローし得ないため使う。
+        // 以前は `saturating_sub(...).abs()` だったが、timestampに極端な値
+        // (例: i64::MAX)が入ると差がi64::MINへ飽和し、release buildでは
+        // `.abs()` がオーバーフローチェック無効でi64::MIN(負値)のまま返り、
+        // 「期限切れ」判定が意図せず反転する余地があった。
+        let ttl_seconds = ttl_seconds.max(0) as u64;
         self.seen
-            .retain(|_, timestamp| now.saturating_sub(*timestamp).abs() <= ttl_seconds);
+            .retain(|_, timestamp| now.abs_diff(*timestamp) <= ttl_seconds);
     }
 }
 
@@ -66,8 +72,13 @@ pub fn verify_request(
     signature_hex: &str,
     now: OffsetDateTime,
 ) -> Result<(), AuthError> {
-    let skew = now.unix_timestamp().saturating_sub(timestamp).abs();
-    if skew > config.allowed_skew_seconds {
+    // i64::abs_diff はu64を返しオーバーフローし得ない。以前の
+    // `saturating_sub(...).abs()` は、攻撃者が送るX-Timestampへ極端な値
+    // (例: i64::MAX)を入れると差がi64::MINへ飽和し、release buildでは
+    // `.abs()` がオーバーフローチェック無効でi64::MIN(負値)のまま返るため、
+    // `skew > allowed_skew_seconds` が常に偽になりチェックを迂回できた。
+    let skew = now.unix_timestamp().abs_diff(timestamp);
+    if skew > config.allowed_skew_seconds.max(0) as u64 {
         return Err(AuthError::TimestampSkew);
     }
 
