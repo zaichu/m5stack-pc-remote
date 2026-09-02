@@ -2,7 +2,7 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
-use pc_remote_agent::{app_config::AgentConfig, server::router};
+use m5stack_pc_bridge::{app_config::AgentConfig, server::router};
 use pc_remote_signing::sign_request;
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -51,7 +51,7 @@ async fn status_returns_online_agent_health() {
     let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["agent_online"], true);
-    assert_eq!(json["agent"], "pc-remote-agent");
+    assert_eq!(json["agent"], "m5stack-pc-bridge");
     assert_eq!(json["status"], "ok");
 }
 

@@ -4,12 +4,12 @@ firmware/config.toml
 firmware/src/config.rs
 firmware/src/_config.rs
 
-# Windows Agent local secrets.
-windows-agent/config.toml
+# m5stack-pc-bridge (Windows側) local secrets.
+m5stack-pc-bridge/config.toml
 
 # Rust generated files.
 target/
-windows-agent/target/
+m5stack-pc-bridge/target/
 
 # esp-idf / embuild generated files (Rust firmware).
 firmware/.embuild/

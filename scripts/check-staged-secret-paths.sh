@@ -4,7 +4,7 @@ set -euo pipefail
 secret_path_patterns=(
   '^\.env$'
   '^\.env\.[^/]+$'
-  '^windows-agent/config\.toml$'
+  '^m5stack-pc-bridge/config\.toml$'
   '(^|/)[^/]*secret[^/]*\.json$'
   '(^|/)[^/]*credential[^/]*\.json$'
   '(^|/)[^/]*service-account[^/]*\.json$'
@@ -15,7 +15,7 @@ secret_path_patterns=(
 allowed_templates=(
   ".env.example"
   ".env.local.example"
-  "windows-agent/config.example.toml"
+  "m5stack-pc-bridge/config.example.toml"
 )
 
 is_allowed_template() {

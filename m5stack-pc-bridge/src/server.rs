@@ -55,16 +55,27 @@ pub fn router(config: AgentConfig) -> Router {
 }
 
 pub async fn serve(config: AgentConfig) -> anyhow::Result<()> {
+    serve_with_shutdown(config, std::future::pending()).await
+}
+
+/// `shutdown` が完了すると、進行中のリクエストを終えてから止まる(graceful shutdown)。
+/// Windows Serviceとして動く場合、SCMのSTOP制御をこの`shutdown`へつなぐ。
+pub async fn serve_with_shutdown(
+    config: AgentConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
     let addr: SocketAddr = config.bind.parse()?;
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, router(config)).await?;
+    axum::serve(listener, router(config))
+        .with_graceful_shutdown(shutdown)
+        .await?;
     Ok(())
 }
 
 async fn status() -> Json<StatusResponse> {
     Json(StatusResponse {
         agent_online: true,
-        agent: "pc-remote-agent",
+        agent: "m5stack-pc-bridge",
         status: "ok",
     })
 }

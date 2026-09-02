@@ -16,13 +16,12 @@
 - WAKE、REBOOT、SHUTDOWNボタンを表示する。
 - REBOOT / SHUTDOWN は確認画面を必須にする。
 
-## Phase 3: Windows Agent
+## Phase 3: m5stack-pc-bridge
 
-- Rust AgentをWindows起動時に自動起動できるようにする。
+- Windows起動時にWindows Serviceとして自動起動できるようにする。
 - `/status`、`/reboot`、`/shutdown` を提供する。
 - HMAC-SHA256、timestamp、nonceでPOSTコマンドを認証する。
 - dry-runを初期値にし、設定変更なしで実電源操作を行わない。
-- 初期の自動起動はTask Schedulerで行い、必要になった時点でWindows Service化を検討する。
 
 ## Phase 4: M5Stack -> Agent連携
 
@@ -36,5 +35,5 @@
 - コストゼロを絶対条件にする。
 - ルーターVPNを前提にできないため、初期案はTelegram Bot API long polling方式にする。
 - M5Stackに `/status`、`/wake`、`/reboot`、`/shutdown` のTelegram command処理を追加する。
-- `TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` を追加し、Windows Agent用の `AGENT_SHARED_SECRET` と分離する。
+- `TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` を追加し、m5stack-pc-bridge用の `AGENT_SHARED_SECRET` と分離する。
 - 外部からも WAKE、STATUS、REBOOT、SHUTDOWN を扱えるようにする。

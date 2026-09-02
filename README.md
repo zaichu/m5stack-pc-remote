@@ -15,7 +15,7 @@ M5Stack Core2 for AWS
   └─ Telegram Bot API long polling
 
 Windows 11 Pro PC
-  └─ Rust Windows Agent
+  └─ Rust m5stack-pc-bridge
        ├─ GET /status
        ├─ POST /reboot
        └─ POST /shutdown
@@ -33,7 +33,7 @@ M5Stack Core2
 Windows PC
 ```
 
-Windows Agent のポートをインターネットへ直接公開しません。賃貸無料回線などでルーターVPNを前提にできない場合は、M5StackがTelegram Bot APIを外向きHTTPSでlong pollingしてコマンドを受け取ります。
+m5stack-pc-bridge のポートをインターネットへ直接公開しません。賃貸無料回線などでルーターVPNを前提にできない場合は、M5StackがTelegram Bot APIを外向きHTTPSでlong pollingしてコマンドを受け取ります。
 外部操作経路はコストゼロを絶対条件にし、月額課金・従量課金・無料枠超過リスクのある構成を運用必須経路にしません。
 
 ## 技術選定
@@ -41,7 +41,7 @@ Windows Agent のポートをインターネットへ直接公開しません。
 - M5Stack firmware: Rust + esp-idf-sys / esp-idf-svc / esp-idf-hal
 - STATUS: Rust版は TCP connect probe
 - WOL: Rust版は UDP Magic Packet送信
-- Windows Agent: Rust
+- m5stack-pc-bridge: Rust
 - 認証: HMAC-SHA256 + timestamp + nonce
 
 Rust版はWi-Fi / WOL / STATUS / タッチUI / REBOOT / SHUTDOWN / Telegram経由操作まで実機確認済みです。
@@ -79,28 +79,29 @@ python3 scripts/provision-firmware-rust-nvs.py --write --yes --port /dev/ttyUSB0
 現行partition tableではNVSは offset `0x9000`、size `0x6000` です。partition tableを変えた
 場合は `--offset` と `--size` を指定してください。
 
-## セットアップ: Windows Agent
+## セットアップ: m5stack-pc-bridge (Windows側)
 
 ```powershell
-cd windows-agent
+cd m5stack-pc-bridge
 copy config.example.toml config.toml
 cargo build --release
 ```
 
-`config.toml` の `shared_secret` を32文字以上の長いランダム値に変更してください。`config.example.toml` のプレースホルダー値や短すぎる値のままではAgentは起動しません。初期値の `dry_run = true` では実際のshutdown/rebootは実行されません。
+`config.toml` の `shared_secret` を32文字以上の長いランダム値に変更してください。`config.example.toml` のプレースホルダー値や短すぎる値のままでは起動しません。初期値の `dry_run = true` では実際のshutdown/rebootは実行されません。
 
 M5Stackからの `POST /reboot` / `POST /shutdown` は、HMAC署名に加えてJSON本文の `{"confirm":true}` が必須です。
-Windows Agentの `GET /status` はAgentプロセス自体のヘルスチェックであり、PCの電源状態判定にはM5Stack firmware側のICMP ping STATUSを使います。
+`GET /status` はm5stack-pc-bridgeプロセス自体のヘルスチェックであり、PCの電源状態判定にはM5Stack firmware側のICMP ping STATUSを使います。
 
-起動:
+対話実行での動作確認:
 
 ```powershell
-.\target\release\pc-remote-agent.exe --config .\config.toml
+.\target\release\m5stack-pc-bridge.exe --config .\config.toml
 ```
 
-Windows起動時に自動起動するには、管理者PowerShellで以下を実行します。
-バイナリ配置・設定ファイル生成・Windows Firewall受信許可ルール作成・Scheduled Task登録を
-まとめて行います(詳細は `windows-agent/README.md` 参照)。
+Windows Serviceとして常駐させるには、管理者PowerShellで以下を実行します。
+バイナリ配置・設定ファイル生成・Windows Firewall受信許可ルール作成・Windows Service登録
+(スタートアップ種類: 自動、異常終了時は自動再起動)をまとめて行います
+(詳細は `m5stack-pc-bridge/README.md` 参照)。
 
 ```powershell
 .\install.ps1
@@ -132,7 +133,7 @@ telegram_long_poll_timeout_seconds = 20
 telegram_confirm_ttl_secs = 60
 ```
 
-`TELEGRAM_ALLOWED_USER_ID` と一致しない `from.id` からのメッセージはすべて無視され、返信もされません。`TELEGRAM_BOT_TOKEN` はWindows Agent用の `AGENT_SHARED_SECRET` とは別の秘密情報で、Windows Agentへは一切渡りません。
+`TELEGRAM_ALLOWED_USER_ID` と一致しない `from.id` からのメッセージはすべて無視され、返信もされません。`TELEGRAM_BOT_TOKEN` はm5stack-pc-bridge用の `AGENT_SHARED_SECRET` とは別の秘密情報で、m5stack-pc-bridgeへは一切渡りません。
 
 ### 4. Telegramのコマンド候補を登録する
 
@@ -180,7 +181,7 @@ Gitへ入れないファイル:
 - `firmware/config.toml`
 - `firmware/src/config.rs` (旧方式。ビルドログ漏えい防止のため使用禁止)
 - `firmware/src/_config.rs` (旧方式。ビルドログ漏えい防止のため使用禁止)
-- `windows-agent/config.toml`
+- `m5stack-pc-bridge/config.toml`
 - `.env`
 - `*.pem`
 - `*.key`

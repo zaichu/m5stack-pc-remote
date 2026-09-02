@@ -21,6 +21,7 @@ bash -n scripts/*.sh
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
+- `cargo build --release --target x86_64-pc-windows-gnu`(m5stack-pc-bridge)。Windows Service連携(`windows-service` crate)は`cfg(windows)`なので通常のtest/clippyには含まれず、これで実際にコンパイルを確認する。mingw-w64 toolchain / `x86_64-pc-windows-gnu` targetがない環境では警告のみ。
 - `cargo +esp build --release --target xtensa-esp32-espidf`。esp toolchain / `firmware/config.toml` がない環境では警告のみ。
 
 ## secret パターン検査

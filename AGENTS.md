@@ -5,13 +5,13 @@
 - 目的は M5Stack Core2 for AWS を常時稼働させ、自宅LAN上の Windows 11 Pro デスクトップPCの電源管理専用端末にすること。
 - 実装はフェーズごとに動作確認できる状態を維持する。最初の正本は `Wi-Fi接続 -> Wake-on-LAN -> STATUS`。
 - M5Stack firmware は `firmware/` のRust実装のみとする。旧C++/Arduino/M5Unified版は実運用検証を経て削除済み(#24)。
-- Windows Agent は `windows-agent/` に閉じる。Rustで単一バイナリ配布できる構成を維持する。
-- 外部スマートフォン操作は直接 Windows Agent へ到達させない。ルーターVPNを前提にできない環境では `Smartphone -> Telegram Bot API -> M5Stack -> Windows PC` を基本経路にする。
+- Windows側は `m5stack-pc-bridge/` に閉じる。Rustで単一バイナリ配布できる構成を維持する。
+- 外部スマートフォン操作は直接 m5stack-pc-bridge へ到達させない。ルーターVPNを前提にできない環境では `Smartphone -> Telegram Bot API -> M5Stack -> Windows PC` を基本経路にする。
 - 外部操作経路はコストゼロを絶対条件にする。月額課金、従量課金、無料枠超過で課金される可能性があるサービスを運用必須経路にしない。
-- Windows Agent の管理ポートをインターネットへ直接公開しない。
+- m5stack-pc-bridge の管理ポートをインターネットへ直接公開しない。
 - `REBOOT` / `SHUTDOWN` は HMAC-SHA256、timestamp、nonceで認証する。認証を弱めたり、LAN内だからという理由で無認証APIを追加しない。
 - 秘密鍵、Wi-Fiパスワード、PCの実MACアドレス、実LAN構成はGitへ入れない。
-- `windows-agent/config.toml` はローカル専用で、テンプレートだけをGit管理する。
+- `m5stack-pc-bridge/config.toml` はローカル専用で、テンプレートだけをGit管理する。
 - `firmware/config.toml` はローカル専用にし、テンプレート(`config.example.toml`)だけをGit管理する。secretをRustソース(`src/`配下)へ直接 `pub const` として書かない。コンパイラの unused警告がソース行を出力してビルドログへ秘密情報が漏れる事故があったため、`build.rs` がビルド時に `config.toml` を読み込む方式にしている。Rust firmwareは起動時にESP-IDF NVSの `m5remote` namespaceを先に読み、未設定ならビルド時configへfallbackする。
 - 設定を追加したら、対応する `*.example.*`、README、関連docsを同じ変更で更新する。
 - テストで実ネットワーク、実PCのshutdown/reboot、実Wi-Fi認証情報を使わない。Agentの認証や設定処理は純粋関数またはループバックでテストする。

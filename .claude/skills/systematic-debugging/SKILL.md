@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging
-description: Use when firmware, Windows Agent, CI, or local tests fail unexpectedly.
+description: Use when firmware, m5stack-pc-bridge, CI, or local tests fail unexpectedly.
 ---
 
 # Systematic Debugging
@@ -17,8 +17,8 @@ description: Use when firmware, Windows Agent, CI, or local tests fail unexpecte
    - firmware Wi-Fi
    - firmware WOL
    - firmware STATUS
-   - Windows Agent auth
-   - Windows Agent power command
+   - m5stack-pc-bridge auth
+   - m5stack-pc-bridge power command
    - future external relay
 4. 期待設定と実設定を比較する。
 5. 仮説を1つ立て、根拠を書く。
