@@ -4,7 +4,7 @@
 
 use std::error::Error;
 
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_9X18_BOLD};
+use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
@@ -235,6 +235,5 @@ pub fn draw_confirm(
     CANCEL_BUTTON.draw(display, "CANCEL", Rgb565::CSS_DIM_GRAY)?;
     OK_BUTTON.draw(display, "OK", Rgb565::CSS_DARK_RED)?;
 
-    let _ = FONT_9X18_BOLD;
     Ok(())
 }
