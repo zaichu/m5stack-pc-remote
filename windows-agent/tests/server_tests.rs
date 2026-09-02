@@ -2,7 +2,8 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
-use pc_remote_agent::{config::AgentConfig, server::router, signing::sign_request};
+use pc_remote_agent::{app_config::AgentConfig, server::router};
+use pc_remote_signing::sign_request;
 use serde_json::Value;
 use time::OffsetDateTime;
 use tower::ServiceExt;

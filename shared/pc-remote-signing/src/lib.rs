@@ -1,3 +1,13 @@
+//! M5Stack firmware(署名側)とWindows Agent(検証側)が共有するHMAC署名wire protocol。
+//!
+//! canonical文字列は次の形式で固定する。片方だけを変更すると署名が一致しなくなるため、
+//! 実装を1箇所にまとめてある。
+//!
+//! ```text
+//! METHOD + "\n" + PATH + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + SHA256(BODY)
+//! X-Signature = hmac_sha256_hex(shared_secret, canonical)
+//! ```
+
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
@@ -24,6 +34,7 @@ pub fn canonical_string(
     )
 }
 
+/// M5Stack firmware側(署名する側)が使う。
 pub fn sign_request(
     secret: &[u8],
     method: &str,
@@ -39,6 +50,7 @@ pub fn sign_request(
     hex::encode(mac.finalize().into_bytes())
 }
 
+/// Windows Agent側(検証する側)が使う。
 pub fn verify_signature(
     secret: &[u8],
     method: &str,

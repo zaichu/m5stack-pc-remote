@@ -1,14 +1,8 @@
 // Windows Agentへ送るHMAC署名付き電源操作(REBOOT / SHUTDOWN)。
 //
-// C++ fallbackのpostAgentCommand()と同じ通信形式を使う。Windows Agent側の検証処理と
-// バイト単位で一致している必要がある。
-//
-//   canonical = "POST\n" + path + "\n" + timestamp + "\n" + nonce + "\n"
-//               + sha256_hex(body)
-//   X-Signature = hmac_sha256_hex(AGENT_SHARED_SECRET, canonical)
-//
-// 本文は常に `{"confirm":true}`。Agent側もこれを必須にしているため、署名だけでは
-// 電源操作を実行できない。
+// 署名のcanonical文字列とHMAC計算は `pc-remote-signing` (shared/) に実装があり、
+// Windows Agent側の検証処理と同じ実装を使う。本文は常に `{"confirm":true}`。
+// Agent側もこれを必須にしているため、署名だけでは電源操作を実行できない。
 
 use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,8 +11,6 @@ use embedded_svc::http::client::Client as HttpClient;
 use embedded_svc::http::Method;
 use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
 use esp_idf_svc::io::Write;
-use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256};
 
 use crate::app_config::AppConfig;
 
@@ -67,18 +59,6 @@ impl PowerAction {
     }
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hex::encode(hasher.finalize())
-}
-
-fn hmac_sha256_hex(secret: &[u8], message: &str) -> Result<String, Box<dyn Error>> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret).map_err(|e| e.to_string())?;
-    mac.update(message.as_bytes());
-    Ok(hex::encode(mac.finalize().into_bytes()))
-}
-
 fn unix_now() -> Result<u64, Box<dyn Error>> {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     if secs < MIN_VALID_UNIX_TIME {
@@ -100,11 +80,14 @@ pub fn send_command(action: PowerAction, config: &AppConfig) -> Result<u16, Box<
     let timestamp = unix_now()?;
     let request_nonce = nonce();
 
-    let canonical = format!(
-        "POST\n{path}\n{timestamp}\n{request_nonce}\n{}",
-        sha256_hex(BODY.as_bytes())
+    let signature = pc_remote_signing::sign_request(
+        config.agent_shared_secret.as_bytes(),
+        "POST",
+        path,
+        timestamp as i64,
+        &request_nonce,
+        BODY.as_bytes(),
     );
-    let signature = hmac_sha256_hex(config.agent_shared_secret.as_bytes(), &canonical)?;
 
     let url = format!(
         "http://{}:{}{path}",

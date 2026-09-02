@@ -8,8 +8,11 @@ mod ui;
 
 /// Git管理外の `config.toml` からビルド時に生成する設定。
 /// secretを `src/` 配下のRustソースへ直接置かないことで、コンパイラ警告による
-/// ビルドログ漏えいを防ぐ。
-mod config {
+/// ビルドログ漏えいを防ぐ。`app_config` module(実行時設定、NVS優先)とは別物。
+/// このcrateでは `src/config.rs` というファイル名は使わない(旧方式でsecretを
+/// 直接書いていたファイル名と同じにすると、`scripts/check-local-firmware-rust-secrets.sh`
+/// の再発防止チェックと衝突するため)。
+mod build_config {
     include!(concat!(env!("OUT_DIR"), "/generated_config.rs"));
 }
 

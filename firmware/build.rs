@@ -11,7 +11,7 @@ fn main() {
 }
 
 /// Git管理外の `config.toml` を読み、`$OUT_DIR/generated_config.rs` を生成する。
-/// `src/main.rs` はこれを `config` moduleとして取り込む。secretを `src/` 配下の
+/// `src/main.rs` はこれを `build_config` moduleとして取り込む。secretを `src/` 配下の
 /// Rustソースに置かないことで、コンパイラ警告に実値が出る事故を避ける。
 /// 生成する定数には `#[allow(dead_code)]` を付け、未使用警告自体も出さない。
 fn generate_config() {

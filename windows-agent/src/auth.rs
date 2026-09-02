@@ -2,8 +2,6 @@ use dashmap::DashMap;
 use thiserror::Error;
 use time::OffsetDateTime;
 
-use crate::signing;
-
 // `secret` を含むため `Debug` は手書きし、値を出力しない。
 // ログや panic メッセージへ `{:?}` で secret が漏れる事故を防ぐ。
 #[derive(Clone)]
@@ -73,7 +71,7 @@ pub fn verify_request(
         return Err(AuthError::TimestampSkew);
     }
 
-    if !signing::verify_signature(
+    if !pc_remote_signing::verify_signature(
         &config.secret,
         method,
         path,
