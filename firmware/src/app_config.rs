@@ -5,7 +5,7 @@
 
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 
-use crate::config;
+use crate::build_config;
 
 const NAMESPACE: &str = "m5remote";
 const MAX_STRING_LEN: usize = 512;
@@ -45,18 +45,18 @@ impl AppConfig {
 
     fn from_build_config() -> Self {
         Self {
-            wifi_ssid: config::WIFI_SSID.to_string(),
-            wifi_password: config::WIFI_PASSWORD.to_string(),
-            pc_mac_address: config::PC_MAC_ADDRESS.to_string(),
-            wol_port: config::WOL_PORT,
-            pc_status_addr: config::PC_STATUS_ADDR.to_string(),
-            agent_port: config::AGENT_PORT,
-            agent_shared_secret: config::AGENT_SHARED_SECRET.to_string(),
-            pc_ip_address: config::PC_IP_ADDRESS.to_string(),
-            telegram_bot_token: config::TELEGRAM_BOT_TOKEN.to_string(),
-            telegram_allowed_user_id: config::TELEGRAM_ALLOWED_USER_ID.to_string(),
-            telegram_long_poll_timeout_seconds: config::TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
-            telegram_confirm_ttl_secs: config::TELEGRAM_CONFIRM_TTL_SECS,
+            wifi_ssid: build_config::WIFI_SSID.to_string(),
+            wifi_password: build_config::WIFI_PASSWORD.to_string(),
+            pc_mac_address: build_config::PC_MAC_ADDRESS.to_string(),
+            wol_port: build_config::WOL_PORT,
+            pc_status_addr: build_config::PC_STATUS_ADDR.to_string(),
+            agent_port: build_config::AGENT_PORT,
+            agent_shared_secret: build_config::AGENT_SHARED_SECRET.to_string(),
+            pc_ip_address: build_config::PC_IP_ADDRESS.to_string(),
+            telegram_bot_token: build_config::TELEGRAM_BOT_TOKEN.to_string(),
+            telegram_allowed_user_id: build_config::TELEGRAM_ALLOWED_USER_ID.to_string(),
+            telegram_long_poll_timeout_seconds: build_config::TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
+            telegram_confirm_ttl_secs: build_config::TELEGRAM_CONFIRM_TTL_SECS,
         }
     }
 

@@ -617,11 +617,9 @@ dependencies = [
  "base64",
  "clap",
  "dashmap",
- "hex",
- "hmac",
+ "pc-remote-signing",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror",
  "time",
@@ -630,6 +628,15 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "pc-remote-signing"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hmac",
+ "sha2",
 ]
 
 [[package]]

@@ -10,11 +10,10 @@ axum = "0.7"
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive", "env"] }
 dashmap = "6.1"
-hex = "0.4"
-hmac = "0.12"
+# firmware/と共有するHMAC署名wire protocol実装。
+pc-remote-signing = { path = "../shared/pc-remote-signing" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.10"
 thiserror = "1.0"
 time = { version = "0.3", features = ["serde", "formatting"] }
 tokio = { version = "1.39", features = ["macros", "net", "rt-multi-thread", "signal"] }

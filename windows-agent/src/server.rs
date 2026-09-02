@@ -13,8 +13,8 @@ use time::OffsetDateTime;
 use tokio::net::TcpListener;
 
 use crate::{
+    app_config::AgentConfig,
     auth::{verify_request, AuthConfig, AuthError, NonceStore},
-    config::AgentConfig,
     power::{run_power_action, PowerAction},
 };
 

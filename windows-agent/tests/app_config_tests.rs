@@ -1,4 +1,4 @@
-use pc_remote_agent::config::AgentConfig;
+use pc_remote_agent::app_config::AgentConfig;
 
 #[test]
 fn loads_minimal_toml_config() {

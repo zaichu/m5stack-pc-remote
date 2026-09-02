@@ -1,5 +1,5 @@
 use clap::Parser;
-use pc_remote_agent::{config::AgentConfig, server};
+use pc_remote_agent::{app_config::AgentConfig, server};
 
 #[derive(Debug, Parser)]
 struct Args {
