@@ -1,12 +1,12 @@
 [package]
-name = "m5remote-rust-poc"
+name = "m5remote-rust"
 version = "0.1.0"
 edition = "2021"
 resolver = "2"
 publish = false
 
 [[bin]]
-name = "m5remote-rust-poc"
+name = "m5remote-rust"
 path = "src/main.rs"
 
 [dependencies]

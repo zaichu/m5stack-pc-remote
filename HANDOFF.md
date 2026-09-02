@@ -7,13 +7,14 @@
 ## 恒久構成
 
 - リポジトリ: `m5stack-pc-remote`
-- M5Stack側(本線): `firmware/`
+- M5Stack側(安定版fallback): `firmware/`
   - PlatformIO
   - Arduino Framework
   - M5Unified
   - Phase 1 は Wi-Fi、Wake-on-LAN、ICMP ping STATUS
-- M5Stack側(Rust化PoC、Issue #16): `firmware-rust-poc/`
-  - `firmware/` の即時置き換えではない。完全移植と切り替え判断はIssue #17で管理する
+- M5Stack側(本線、Issue #17): `firmware-rust-poc/`
+  - 主要機能は実機確認済み。ディレクトリ名は当面維持するが、PoCではなく本線として扱う
+  - `firmware/` のC++版は安定確認が終わるまでfallbackとして残し、不要になった段階で一括削除する
   - esp-idf-sys/esp-idf-svc/esp-idf-hal(std)ベースの純Rustスタック
   - `m5unified` crateはESP-IDF I2C driver_ng競合のため不採用
 - Windows側: `windows-agent/`
@@ -28,8 +29,8 @@
 - 外部操作の経路:
   - `Smartphone -> Telegram Bot API (outbound HTTPS long polling) -> M5Stack Core2 -> Windows PC`
   - Windows Agentを直接インターネットへ公開しない
-  - `firmware/src/telegram_client.h` / `telegram_client.cpp` (Telegram long polling、core 0の専用FreeRTOSタスク)
-  - `firmware/src/power_controller.h` / `power_controller.cpp` (WOL送信、Windows AgentへのHMAC署名付きPOST、PC ping状態。タッチUIとTelegramタスクの共有ロジック)
+  - Rust本線: `firmware-rust-poc/src/telegram.rs` / `agent.rs` / `net.rs`
+  - C++ fallback: `firmware/src/telegram_client.h` / `telegram_client.cpp`、`firmware/src/power_controller.h` / `power_controller.cpp`
   - 設計の正本: `docs/external-access.md`、`docs/cost.md`(コストゼロが絶対条件)
 
 ## 次のセッションへの依頼例

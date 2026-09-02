@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Rust firmware PoC (Issue #16) when the environment can.
+# Builds the Rust firmware candidate (Issue #17) when the environment can.
 #
 # Skips with a warning instead of failing when the Xtensa Rust toolchain or the
 # local secrets file is missing, mirroring how `make firmware-build` behaves
@@ -12,7 +12,7 @@ poc_dir="$repo_root/firmware-rust-poc"
 target="xtensa-esp32-espidf"
 
 if [[ ! -d "$poc_dir" ]]; then
-  echo "WARNING: $poc_dir not found; skipping Rust firmware PoC build."
+  echo "WARNING: $poc_dir not found; skipping Rust firmware build."
   exit 0
 fi
 
@@ -22,22 +22,22 @@ fi
 bash "$repo_root/scripts/check-local-firmware-rust-secrets.sh"
 
 if ! command -v cargo >/dev/null 2>&1; then
-  echo "WARNING: cargo not found; skipping Rust firmware PoC build."
+  echo "WARNING: cargo not found; skipping Rust firmware build."
   exit 0
 fi
 
 if ! rustup toolchain list 2>/dev/null | grep -q '^esp'; then
-  echo "WARNING: 'esp' Rust toolchain not installed (see espup); skipping Rust firmware PoC build."
+  echo "WARNING: 'esp' Rust toolchain not installed (see espup); skipping Rust firmware build."
   exit 0
 fi
 
 if ! command -v ldproxy >/dev/null 2>&1; then
-  echo "WARNING: ldproxy not found (cargo install ldproxy); skipping Rust firmware PoC build."
+  echo "WARNING: ldproxy not found (cargo install ldproxy); skipping Rust firmware build."
   exit 0
 fi
 
 if [[ ! -f "$poc_dir/config.toml" ]]; then
-  echo "WARNING: $poc_dir/config.toml not found (copy config.example.toml); skipping Rust firmware PoC build."
+  echo "WARNING: $poc_dir/config.toml not found (copy config.example.toml); skipping Rust firmware build."
   exit 0
 fi
 
@@ -48,6 +48,6 @@ if [[ -f "$HOME/export-esp.sh" ]]; then
   source "$HOME/export-esp.sh" >/dev/null 2>&1 || true
 fi
 
-echo "Building Rust firmware PoC for $target"
+echo "Building Rust firmware for $target"
 cd "$poc_dir"
 cargo +esp build --release --target "$target"

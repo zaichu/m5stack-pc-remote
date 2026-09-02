@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     esp_idf_sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    println!("m5remote-rust-poc boot (pure Rust stack)");
+    println!("m5remote-rust boot (pure Rust stack)");
 
     let peripherals = Peripherals::take()?;
 

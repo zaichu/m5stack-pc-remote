@@ -134,7 +134,7 @@ pub fn draw_main(
         .map_err(|e| format!("clear failed: {e:?}"))?;
 
     Text::new(
-        "m5remote-rust-poc",
+        "m5remote-rust",
         Point::new(12, 14),
         MonoTextStyle::new(&FONT_6X10, Rgb565::CSS_LIGHT_GRAY),
     )

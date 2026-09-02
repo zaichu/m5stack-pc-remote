@@ -2,11 +2,11 @@
 
 ## Phase 1: Wi-Fi -> WOL -> STATUS
 
-- PlatformIOプロジェクトを作る。
+- Rust firmwareプロジェクトを本線として使う。C++/Arduino版はfallbackとして残す。
 - Wi-Fiへ接続する。
 - 設定ファイルからPCのMAC、IP、broadcast addressを読む。
 - Wake-on-LAN Magic Packetを送る。
-- ICMP pingでONLINE/OFFLINEを判定する。
+- TCP connect probeでONLINE/OFFLINEを判定する。
 - 画面には最低限のSTATUSとWAKEボタンを表示する。
 
 ## Phase 2: M5Stack UI
