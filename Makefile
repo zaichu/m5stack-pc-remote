@@ -1,6 +1,6 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-check firmware-build \
-	firmware-rust-build firmware-rust-poc-build secret-path-check secret-scan diff-check check \
-	git-pre-commit git-pre-push
+	firmware-rust-build firmware-rust-poc-build firmware-rust-nvs-image \
+	secret-path-check secret-scan diff-check check git-pre-commit git-pre-push
 
 install: install-hooks
 
@@ -34,6 +34,9 @@ firmware-rust-build:
 	bash ./scripts/build-firmware-rust-poc.sh
 
 firmware-rust-poc-build: firmware-rust-build
+
+firmware-rust-nvs-image:
+	python3 ./scripts/provision-firmware-rust-nvs.py
 
 secret-path-check:
 	bash ./scripts/check-staged-secret-paths.sh

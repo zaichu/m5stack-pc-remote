@@ -62,29 +62,21 @@ impl AppConfig {
 
     fn apply_nvs(&mut self, nvs: &EspNvs<NvsDefault>) {
         replace_string(nvs, "wifi_ssid", &mut self.wifi_ssid);
-        replace_string(nvs, "wifi_password", &mut self.wifi_password);
-        replace_string(nvs, "pc_mac_address", &mut self.pc_mac_address);
+        replace_string(nvs, "wifi_pass", &mut self.wifi_password);
+        replace_string(nvs, "pc_mac", &mut self.pc_mac_address);
         replace_number(nvs, "wol_port", &mut self.wol_port);
-        replace_string(nvs, "pc_status_addr", &mut self.pc_status_addr);
+        replace_string(nvs, "status_addr", &mut self.pc_status_addr);
         replace_number(nvs, "agent_port", &mut self.agent_port);
-        replace_string(nvs, "agent_shared_secret", &mut self.agent_shared_secret);
-        replace_string(nvs, "pc_ip_address", &mut self.pc_ip_address);
-        replace_string(nvs, "telegram_bot_token", &mut self.telegram_bot_token);
-        replace_string(
-            nvs,
-            "telegram_allowed_user_id",
-            &mut self.telegram_allowed_user_id,
-        );
+        replace_string(nvs, "agent_secret", &mut self.agent_shared_secret);
+        replace_string(nvs, "pc_ip", &mut self.pc_ip_address);
+        replace_string(nvs, "tg_token", &mut self.telegram_bot_token);
+        replace_string(nvs, "tg_user_id", &mut self.telegram_allowed_user_id);
         replace_number(
             nvs,
-            "telegram_long_poll_timeout_seconds",
+            "tg_poll_secs",
             &mut self.telegram_long_poll_timeout_seconds,
         );
-        replace_number(
-            nvs,
-            "telegram_confirm_ttl_secs",
-            &mut self.telegram_confirm_ttl_secs,
-        );
+        replace_number(nvs, "tg_ttl_secs", &mut self.telegram_confirm_ttl_secs);
     }
 }
 
