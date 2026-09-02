@@ -103,8 +103,16 @@ fn run_service() -> anyhow::Result<()> {
 
     // 成功・失敗どちらの経路でも、SCMへ必ずStoppedを報告する。ここを怠ると、
     // 起動処理中のエラーなどでSCMへの応答が途絶え、「応答なし」という原因の
-    // 分かりにくい汎用エラーになる。
-    let _ = set_status(&status_handle, ServiceState::Stopped, false);
+    // 分かりにくい汎用エラーになる。exit_codeは成功時のみ0とし、起動失敗や
+    // server::serve_with_shutdownのErrはinstall.ps1のfailure action(自動再起動)を
+    // 発動させるため非0で報告する。STOP/SHUTDOWN要求による通常停止はOk(())になるため
+    // ここでは0のまま。
+    let exit_code = if result.is_ok() {
+        ServiceExitCode::Win32(0)
+    } else {
+        ServiceExitCode::Win32(1)
+    };
+    let _ = set_status(&status_handle, ServiceState::Stopped, false, exit_code);
     result
 }
 
@@ -112,7 +120,12 @@ fn run_and_report_status(
     status_handle: &service_control_handler::ServiceStatusHandle,
     stop_rx: mpsc::Receiver<()>,
 ) -> anyhow::Result<()> {
-    set_status(status_handle, ServiceState::StartPending, false)?;
+    set_status(
+        status_handle,
+        ServiceState::StartPending,
+        false,
+        ServiceExitCode::Win32(0),
+    )?;
 
     let config_path = crate::default_config_path();
     let config = AgentConfig::from_path(&config_path)
@@ -127,11 +140,21 @@ fn run_and_report_status(
         let _ = stop_rx.recv();
         // graceful shutdown中もRunningのまま報告し続けると、SCMが規定時間内に
         // 応答がないと判断することがあるため、停止処理に入ったことを即座に伝える。
-        let _ = set_status(&status_handle_for_stop, ServiceState::StopPending, false);
+        let _ = set_status(
+            &status_handle_for_stop,
+            ServiceState::StopPending,
+            false,
+            ServiceExitCode::Win32(0),
+        );
         let _ = graceful_tx.send(());
     });
 
-    set_status(status_handle, ServiceState::Running, true)?;
+    set_status(
+        status_handle,
+        ServiceState::Running,
+        true,
+        ServiceExitCode::Win32(0),
+    )?;
 
     runtime.block_on(server::serve_with_shutdown(config, async {
         let _ = graceful_rx.await;
@@ -142,6 +165,7 @@ fn set_status(
     status_handle: &service_control_handler::ServiceStatusHandle,
     state: ServiceState,
     accept_stop: bool,
+    exit_code: ServiceExitCode,
 ) -> anyhow::Result<()> {
     let controls_accepted = if accept_stop {
         ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN
@@ -153,7 +177,7 @@ fn set_status(
         service_type: SERVICE_TYPE,
         current_state: state,
         controls_accepted,
-        exit_code: ServiceExitCode::Win32(0),
+        exit_code,
         checkpoint: 0,
         wait_hint: Duration::from_secs(5),
         process_id: None,
