@@ -58,6 +58,11 @@ espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust
 ```
 
 `config.toml` はGit管理外です。秘密情報をRustソース(`src/`配下)へ直接書かないでください。
+起動時はNVSの `m5remote` namespaceを先に読み、値があればそれを使います。NVSが未設定の
+場合は `config.toml` からビルド時生成した設定をfallbackとして使います。
+tokenやsecretをローテーションした時は、現時点では `config.toml` を更新して再build/flashする
+運用を正本にします。NVS provisioningだけで差し替える手順は、実機で安全に確認できてから
+運用手順に昇格します。
 
 ## セットアップ: C++ fallback firmware
 
@@ -208,6 +213,9 @@ Gitへ入れないファイル:
 
 テンプレートだけをGit管理します。
 Rust firmwareでは、秘密情報をRustソースへ直接書かず、Git管理外のTOML設定を使います。
+Rust firmware buildはログを一度ローカル一時ファイルへ捕捉し、Telegram token形式や
+`config.toml` の秘密値が出ていないか確認してから表示します。漏えいの疑いがある場合は
+ログ本文を表示せず停止します。
 
 ## ドキュメント
 

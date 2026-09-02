@@ -1,4 +1,5 @@
 mod agent;
+mod app_config;
 mod board;
 mod net;
 mod telegram;
@@ -18,10 +19,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use esp_idf_hal::peripherals::Peripherals;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
 use agent::PowerAction;
+use app_config::AppConfig;
 use board::{DisplayPins, DISPLAY_HEIGHT, DISPLAY_WIDTH};
-use config::{PC_MAC_ADDRESS, PC_STATUS_ADDR, WIFI_PASSWORD, WIFI_SSID, WOL_PORT};
 use ui::{Status, TelegramState};
 
 const STATUS_INTERVAL: Duration = Duration::from_secs(10);
@@ -45,6 +47,7 @@ fn start_online_services(
     telegram_started: &mut bool,
     power_lock: &telegram::PowerLock,
     telegram_state: &Arc<Mutex<telegram::State>>,
+    app_config: &Arc<AppConfig>,
 ) {
     if sntp.is_none() {
         // Windows Agentはtimestampを検証するため、電源操作前に時計同期が必要になる。
@@ -58,8 +61,8 @@ fn start_online_services(
         }
     }
 
-    if !*telegram_started && telegram::is_configured() {
-        let client = telegram::Client::new(Arc::clone(power_lock));
+    if !*telegram_started && telegram::is_configured(app_config.as_ref()) {
+        let client = telegram::Client::new(Arc::clone(power_lock), Arc::clone(app_config));
         let state_handle = Arc::clone(telegram_state);
         // long pollingでUIやSTATUS更新を止めないよう、Telegramは専用スレッドで動かす。
         match std::thread::Builder::new()
@@ -82,6 +85,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("m5remote-rust boot (pure Rust stack)");
 
     let peripherals = Peripherals::take()?;
+    let nvs_partition = EspDefaultNvsPartition::take()?;
+    let app_config = Arc::new(AppConfig::load(nvs_partition.clone()));
 
     // AXP192とタッチコントローラーは同じI2Cバスを共有する。
     let i2c = board::new_i2c(
@@ -132,13 +137,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let telegram_state = Arc::new(Mutex::new(telegram::State::Disabled));
     let mut sntp: Option<esp_idf_svc::sntp::EspSntp<'static>> = None;
     let mut telegram_started = false;
-    if !telegram::is_configured() {
+    if !telegram::is_configured(app_config.as_ref()) {
         println!("telegram: disabled (token or user id is a placeholder)");
     }
 
     // Wifiハンドルは接続維持に必要なのでプログラム終了まで保持する。
     // 初回接続に失敗しても、下の再接続処理で定期的に復旧を試す。
-    let mut wifi = match net::Wifi::connect(peripherals.modem, WIFI_SSID, WIFI_PASSWORD) {
+    let mut wifi = match net::Wifi::connect(
+        peripherals.modem,
+        nvs_partition.clone(),
+        &app_config.wifi_ssid,
+        &app_config.wifi_password,
+    ) {
         Ok(wifi) => {
             println!("Wi-Fi connected");
             Some(wifi)
@@ -155,6 +165,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &mut telegram_started,
             &power_lock,
             &telegram_state,
+            &app_config,
         );
     }
 
@@ -183,7 +194,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 None => {
                     // 初回接続失敗時はModemも破棄されるため、再取得して接続を試す。
                     println!("Wi-Fi never connected; retrying");
-                    match net::Wifi::connect_retry(WIFI_SSID, WIFI_PASSWORD) {
+                    match net::Wifi::connect_retry(
+                        nvs_partition.clone(),
+                        &app_config.wifi_ssid,
+                        &app_config.wifi_password,
+                    ) {
                         Ok(w) => {
                             println!("Wi-Fi connected");
                             wifi = Some(w);
@@ -209,6 +224,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &mut telegram_started,
                     &power_lock,
                     &telegram_state,
+                    &app_config,
                 );
             }
         }
@@ -227,7 +243,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
-            let now_online = net::check_pc_online(PC_STATUS_ADDR, STATUS_PROBE_TIMEOUT);
+            let now_online = net::check_pc_online(&app_config.pc_status_addr, STATUS_PROBE_TIMEOUT);
             if now_online != status.pc_online {
                 status.pc_online = now_online;
                 println!("PC status changed: online={}", status.pc_online);
@@ -251,8 +267,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         if ui::WAKE_BUTTON.contains(x, y) {
                             println!("WAKE tapped at x={x} y={y}");
                             let _guard = power_lock.lock().unwrap();
-                            toast_text =
-                                Some(match net::send_wake_on_lan(PC_MAC_ADDRESS, WOL_PORT) {
+                            toast_text = Some(
+                                match net::send_wake_on_lan(
+                                    &app_config.pc_mac_address,
+                                    app_config.wol_port,
+                                ) {
                                     Ok(()) => {
                                         println!("WOL sent");
                                         "Magic Packet送信".to_string()
@@ -261,7 +280,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         println!("WOL failed: {e}");
                                         "WOL失敗".to_string()
                                     }
-                                });
+                                },
+                            );
                             toast_at = Instant::now();
                             ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
                         } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
@@ -281,16 +301,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                         } else if ui::OK_BUTTON.contains(x, y) {
                             println!("{} confirmed", action.slug());
                             let _guard = power_lock.lock().unwrap();
-                            toast_text = Some(match agent::send_command(action) {
-                                Ok(code) if agent::is_accepted(code) => {
-                                    "操作を受け付けました".into()
-                                }
-                                Ok(code) => format!("操作が拒否されました ({code})"),
-                                Err(e) => {
-                                    println!("agent command failed: {e}");
-                                    "操作に失敗しました".to_string()
-                                }
-                            });
+                            toast_text =
+                                Some(match agent::send_command(action, app_config.as_ref()) {
+                                    Ok(code) if agent::is_accepted(code) => {
+                                        "操作を受け付けました".into()
+                                    }
+                                    Ok(code) => format!("操作が拒否されました ({code})"),
+                                    Err(e) => {
+                                        println!("agent command failed: {e}");
+                                        "操作に失敗しました".to_string()
+                                    }
+                                });
                             toast_at = Instant::now();
                             screen = Screen::Main;
                             ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
