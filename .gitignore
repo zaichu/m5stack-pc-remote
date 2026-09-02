@@ -36,6 +36,7 @@ firmware-rust-poc/dependencies.lock
 
 # Local caches and logs.
 .venv/
+__pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
