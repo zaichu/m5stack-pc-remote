@@ -28,9 +28,8 @@ firmware-build:
 		echo "WARNING: PlatformIO CLI 'pio' not found; skipping firmware build."; \
 	fi
 
-# Rust firmware (Issue #17). Needs the Xtensa Rust toolchain from espup and
-# a local config.toml, so it skips with a warning when either is missing
-# (same policy as firmware-build without PlatformIO).
+# Rust firmware。espupのXtensa Rust toolchainとローカルconfig.tomlが必要。
+# どちらかが無い環境では、firmware-buildと同じく警告だけ出してskipする。
 firmware-rust-build:
 	bash ./scripts/build-firmware-rust-poc.sh
 

@@ -1,16 +1,12 @@
-// Telegram Bot API client: outbound HTTPS long polling, so a phone can drive
-// the PC from outside the LAN without opening any inbound port.
+// Telegram Bot APIクライアント。外向きHTTPS long pollingで、受信portを開けずに
+// スマホ操作を受け取る。
 //
-// Port of firmware/src/telegram_client.cpp. Behaviour that must not drift:
-//   - only updates whose `from.id` equals TELEGRAM_ALLOWED_USER_ID are acted on
-//   - /reboot and /shutdown never act directly; they hand out a single-use
-//     nonce with a TTL, confirmed by an inline-keyboard tap or the legacy
-//     /confirm_reboot|/confirm_shutdown <nonce> text command
-//   - the confirmation is consumed on every attempt (match, mismatch or
-//     expiry), so it cannot be replayed or brute-forced
-//   - the first getUpdates batch after boot only advances the offset, so
-//     commands sent while the device was offline are skipped, not replayed
-//   - the bot token and message content never reach the log
+// 守るべき挙動:
+//   - `from.id` が許可ユーザーIDと一致するupdateだけ処理する
+//   - /reboot と /shutdown は即実行せず、単回使用の確認nonceを発行する
+//   - 確認は成功・失敗・期限切れのいずれでも消費し、再利用させない
+//   - 起動直後の最初のgetUpdates結果はoffset更新だけにし、オフライン中の古い命令を実行しない
+//   - bot tokenとメッセージ内容をログへ出さない
 
 use std::error::Error;
 use std::sync::{Arc, Mutex};
@@ -36,7 +32,7 @@ const BACKOFF_MIN: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPONSE_BUFFER: usize = 4096;
 
-/// Shared with the UI thread so the screen can show the polling state.
+/// UIスレッドへ共有するTelegram状態。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
     Disabled,
@@ -44,8 +40,7 @@ pub enum State {
     Error,
 }
 
-/// Serializes power actions between the touch UI and the Telegram thread, the
-/// same role the FreeRTOS mutex plays in the C++ PowerController.
+/// タッチUIとTelegramスレッドからの電源操作を直列化するロック。
 pub type PowerLock = Arc<Mutex<()>>;
 
 pub fn is_configured() -> bool {
@@ -55,9 +50,8 @@ pub fn is_configured() -> bool {
         && TELEGRAM_ALLOWED_USER_ID != PLACEHOLDER_USER_ID
 }
 
-/// Installs the pinned root CA into esp-tls' global CA store. Must run once
-/// before the first HTTPS request; `use_global_ca_store` then makes the HTTP
-/// client verify against it.
+/// ピン留めしたルートCAをesp-tlsのglobal CA storeへ登録する。
+/// HTTPSリクエスト前に1回だけ実行する。
 fn install_root_ca() -> Result<(), Box<dyn Error>> {
     let pem = TELEGRAM_ROOT_CA_PEM.as_bytes();
     esp_idf_sys::esp!(unsafe { esp_idf_sys::esp_tls_init_global_ca_store() })?;
@@ -90,7 +84,7 @@ impl Client {
         }
     }
 
-    /// Never logged: the URL embeds the bot token.
+    /// URLにはbot tokenが入るため、絶対にログへ出さない。
     fn api_url(method: &str) -> String {
         format!("https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}")
     }
@@ -108,8 +102,7 @@ impl Client {
         )?))
     }
 
-    /// Posts JSON to a Bot API method. Never logs `body` or the URL: both can
-    /// carry the bot token or chat content.
+    /// Bot APIへJSONをPOSTする。URLとbodyはtokenや本文を含み得るためログへ出さない。
     fn post_json(method: &str, body: &Value) -> Result<(), Box<dyn Error>> {
         use esp_idf_svc::io::Write;
 
@@ -283,14 +276,12 @@ impl Client {
             "/shutdown" => self.request_confirmation(chat_id, PowerAction::Shutdown),
             "/confirm_reboot" => self.handle_confirmation(chat_id, PowerAction::Reboot, args),
             "/confirm_shutdown" => self.handle_confirmation(chat_id, PowerAction::Shutdown, args),
-            // Unrecognized commands are ignored silently.
+            // 未知のコマンドは静かに無視する。
             _ => {}
         }
     }
 
-    /// Parses callback_data of the form "confirm:<reboot|shutdown>:<nonce>" or
-    /// "cancel:<reboot|shutdown>:<nonce>". Anything else (old or foreign
-    /// buttons, malformed data) is rejected.
+    /// callback_dataを解析する。形式外、古いボタン、別bot由来の値は拒否する。
     fn parse_callback_data(data: &str) -> Option<(bool, PowerAction, String)> {
         let mut parts = data.splitn(3, ':');
         let kind = parts.next()?;
@@ -311,8 +302,7 @@ impl Client {
         let id = callback["id"].as_str().unwrap_or_default().to_string();
         let from_id = callback["from"]["id"].as_i64().unwrap_or_default();
         if from_id.to_string() != TELEGRAM_ALLOWED_USER_ID {
-            // Unauthorized: don't touch the pending confirmation, but still
-            // close out the client's loading state per the Bot API contract.
+            // 権限がない場合はpending確認を触らず、Telegram側の読み込み状態だけ終わらせる。
             Self::answer_callback_query(&id, "権限がありません");
             return;
         }
@@ -374,7 +364,7 @@ impl Client {
     fn handle_message(&mut self, message: &Value) {
         let from_id = message["from"]["id"].as_i64().unwrap_or_default();
         if from_id.to_string() != TELEGRAM_ALLOWED_USER_ID {
-            // Unauthorized user: ignore without replying.
+            // 権限がないユーザーには返信しない。
             return;
         }
         let chat_id = message["chat"]["id"].as_i64().unwrap_or_default();
@@ -387,7 +377,7 @@ impl Client {
             Some((c, a)) => (c, a.trim()),
             None => (text, ""),
         };
-        // Strip the "@botname" suffix Telegram adds in group chats.
+        // グループチャットでTelegramが付ける `@botname` suffixを外す。
         let command = command.split('@').next().unwrap_or(command);
         self.dispatch_command(chat_id, command, args);
     }
@@ -399,7 +389,7 @@ impl Client {
                 self.last_update_id = update_id + 1;
             }
             if !dispatch {
-                // First batch after boot: only advance the offset.
+                // 起動直後の最初のバッチはoffset更新だけ行う。
                 continue;
             }
 
@@ -450,7 +440,7 @@ impl Client {
         Ok(())
     }
 
-    /// Long-polls forever. Intended to own a dedicated thread.
+    /// 専用スレッドでlong pollingを継続する。
     pub fn run(mut self, state: Arc<Mutex<State>>) {
         if let Err(e) = install_root_ca() {
             println!("telegram: root CA install failed: {e}");
@@ -458,8 +448,7 @@ impl Client {
             return;
         }
 
-        // Best-effort: proceed even if NTP never syncs. agent::send_command
-        // refuses to run without a valid clock anyway.
+        // NTP同期を短時間だけ待つ。未同期なら電源操作の送信側で拒否する。
         net::wait_for_time_sync(Duration::from_secs(10));
 
         let mut backoff = BACKOFF_MIN;

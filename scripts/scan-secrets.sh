@@ -6,15 +6,13 @@ if command -v gitleaks >/dev/null 2>&1; then
   exit 0
 fi
 
-echo "WARNING: gitleaks not found; using fallback pattern scan." >&2
+echo "WARNING: gitleaks が見つからないため、fallback pattern scanを使います。" >&2
 
-# rg is not always installed (it is absent from the GitHub Actions runner and
-# from a plain Debian/WSL setup). Falling through silently would have made the
-# whole gate a no-op, so pick grep -E when rg is missing.
+# rgが無い環境でも検査を無効化しないため、無ければgrep -Eへfallbackする。
 if command -v rg >/dev/null 2>&1; then
   scan() { rg -n -- "$1" "${@:2}"; }
 else
-  echo "WARNING: rg not found; using grep -E instead." >&2
+  echo "WARNING: rg が見つからないため、grep -Eを使います。" >&2
   scan() { grep -n -E -- "$1" "${@:2}"; }
 fi
 
@@ -36,6 +34,6 @@ fi
 if scan \
   '-----BEGIN|AIza|ghp_|ghs_|xox[baprs]-|[0-9]{6,}:[A-Za-z0-9_-]{20,}|https://discord\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+' \
   "${tracked_files[@]}"; then
-  echo "ERROR: fallback secret scan found suspicious content." >&2
+  echo "ERROR: fallback secret scanが疑わしい内容を検出しました。" >&2
   exit 1
 fi
