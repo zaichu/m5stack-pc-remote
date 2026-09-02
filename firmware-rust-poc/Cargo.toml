@@ -10,11 +10,8 @@ name = "m5remote-rust"
 path = "src/main.rs"
 
 [dependencies]
-# Pure-Rust hardware stack. Deliberately does NOT use the `m5unified` crate
-# (a wrapper around the M5Unified C++ library): that library uses ESP-IDF's
-# legacy I2C driver, which cannot be linked alongside the modern driver_ng
-# I2C support that the rest of the ESP-IDF Rust ecosystem pulls in. See
-# Issue #16 for the investigation.
+# 純Rustハードウェアスタック。m5unified crateは使わない。
+# m5unifiedはESP-IDFの旧I2C driverを使うため、driver_ng系と同時linkできない。
 axp192 = "0.2"
 embedded-graphics = "0.8"
 embedded-hal = "1.0"
@@ -35,8 +32,7 @@ esp-idf-hal = "0.45"
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }
-# Parses the git-ignored config.toml at build time (Issue #21); runs on the
-# host, so it does not need the esp-idf toolchain.
+# Git管理外のconfig.tomlをビルド時に読む。host側で動くためesp-idf toolchainは不要。
 toml = "0.8"
 
 [package.metadata.esp-idf-sys]

@@ -1,8 +1,7 @@
-// M5Stack Core2 (1st gen, AXP192) hardware bring-up in pure Rust.
+// M5Stack Core2(初代、AXP192)のハードウェア初期化。
 //
-// Pin assignments and the AXP192 power sequence are taken from M5GFX's own
-// Core2 autodetect path (M5GFX.cpp) and the axp192 crate's m5stack-core2
-// example:
+// ピン配置とAXP192の電源投入手順は、M5GFXのCore2 autodetect実装と
+// axp192 crateのm5stack-core2 exampleを基準にしている。
 //   LCD (ILI9342C, 320x240): MOSI=23, MISO=38, SCLK=18, DC=15, CS=5
 //   LCD reset:     AXP192 GPIO4
 //   LCD power:     AXP192 LDO2  @ 3300mV
@@ -26,27 +25,22 @@ use mipidsi::models::ILI9342CRgb565;
 use mipidsi::options::{ColorInversion, Orientation, Rotation};
 use mipidsi::Builder;
 
-/// Pixel batching buffer for mipidsi's SPI interface. 320px * 2 bytes covers
-/// a full display row per SPI transaction.
+/// mipidsiのSPI転送バッファ。320px * 2bytesで1行分をまとめて送れる。
 const SPI_BUFFER_SIZE: usize = DISPLAY_WIDTH as usize * 2;
 
 pub const DISPLAY_WIDTH: u16 = 320;
 pub const DISPLAY_HEIGHT: u16 = 240;
 
-/// The Core2 touch panel is taller than the display: y 0..239 maps 1:1 onto
-/// the screen, and y 240..279 is the physical button strip below it (M5GFX
-/// configures the same range: x_max=319, y_max=279).
+/// Core2のタッチ範囲は画面より縦に広い。y=0..239が画面、y=240..279が
+/// 画面下の物理ボタン帯に対応する。
 pub const TOUCH_WIDTH: u16 = 320;
 pub const TOUCH_HEIGHT: u16 = 280;
 
-// The axp192 and ft6x36 drivers hold their own device addresses (0x34 and
-// 0x38); both sit on the same internal I2C bus.
+// axp192とft6x36は各ドライバ側でI2Cアドレスを持つ。同じ内部I2Cバスを共有する。
 
 pub type SharedI2c<'d> = RefCell<I2cDriver<'d>>;
 
-/// Runs the AXP192 power-up sequence required before the LCD and touch
-/// controller respond. Mirrors the sequence in the axp192 crate's
-/// m5stack-core2 example.
+/// LCDとタッチコントローラーを使う前に必要なAXP192電源投入手順。
 pub fn init_power<I2C, E>(axp: &mut Axp192<I2C>) -> Result<(), E>
 where
     I2C: embedded_hal::i2c::I2c<Error = E>,
@@ -79,7 +73,7 @@ where
     axp.set_acin_current_adc_enable(true)?;
     axp.set_acin_voltage_adc_enable(true)?;
 
-    // Pulse the LCD reset line.
+    // LCDリセット線をパルスする。
     axp.set_gpio4_output(false)?;
     FreeRtos::delay_ms(100);
     axp.set_gpio4_output(true)?;
@@ -101,16 +95,14 @@ pub type Core2Display<'d> = mipidsi::Display<
     mipidsi::NoResetPin,
 >;
 
-/// Initializes the ILI9342C over SPI. The panel's reset line hangs off the
-/// AXP192 (GPIO4), so `init_power` must have run first and mipidsi is built
-/// without a reset pin.
+/// SPI経由でILI9342Cを初期化する。LCDリセットはAXP192 GPIO4側で行うため、
+/// 先に `init_power` を実行しておく。
 pub fn init_display<'d>(
     spi: SPI2,
     pins: DisplayPins,
 ) -> Result<Core2Display<'d>, Box<dyn std::error::Error>> {
-    // MISO is deliberately left unconfigured: the panel is write-only here, and
-    // configuring it puts the SPI peripheral in full-duplex mode, which caps the
-    // usable clock at 26.7MHz ("device cannot read correct data" from spi_hal).
+    // MISOは使わない。設定するとfull-duplex扱いになり、利用可能なSPI clockが
+    // 26.7MHzに制限される。
     let spi_driver = SpiDriver::new(
         spi,
         pins.sclk,
@@ -119,9 +111,8 @@ pub fn init_display<'d>(
         &DriverConfig::new(),
     )?;
 
-    // Half-duplex/write-only: the panel is never read here, and full-duplex
-    // caps the usable clock at 26.7MHz. M5GFX drives this panel the same way
-    // (spi_3wire = true, 40MHz write clock).
+    // 画面からの読み取りはしないためhalf-duplex/write-onlyで駆動する。
+    // M5GFXも同じ方針で40MHz書き込みを使う。
     let spi_config = SpiConfig::new()
         .baudrate(40.MHz().into())
         .write_only(true)
@@ -129,8 +120,7 @@ pub fn init_display<'d>(
     let spi_device = SpiDeviceDriver::new(spi_driver, Some(pins.cs), &spi_config)?;
 
     let dc = PinDriver::output(pins.dc)?;
-    // Leaked so the interface can hold a 'static buffer; the display lives for
-    // the whole program anyway.
+    // displayはプログラム全体で生存するため、SPIバッファもstaticとして保持する。
     let buffer: &'static mut [u8] = Box::leak(Box::new([0u8; SPI_BUFFER_SIZE]));
     let di = SpiInterface::new(spi_device, dc, buffer);
 
@@ -159,9 +149,7 @@ pub fn new_axp<'a, 'd>(bus: &'a SharedI2c<'d>) -> Axp192<RefCellDevice<'a, I2cDr
 }
 
 pub fn new_touch<'a, 'd>(bus: &'a SharedI2c<'d>) -> Ft6x36<RefCellDevice<'a, I2cDriver<'d>>> {
-    // Orientation::Portrait (the driver default) is the identity transform,
-    // which is what Core2 needs: the panel already reports coordinates in the
-    // display's frame.
+    // Core2のタッチ座標は画面座標と一致するため、デフォルト向きのまま使う。
     Ft6x36::new(
         RefCellDevice::new(bus),
         ft6x36::Dimension(TOUCH_WIDTH, TOUCH_HEIGHT),

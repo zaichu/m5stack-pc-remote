@@ -1,12 +1,10 @@
-// Root CA pinned for https://api.telegram.org.
+// https://api.telegram.org 用にピン留めするルートCA。
 //
-// Copied verbatim from firmware/src/telegram_root_ca.h, which Codex added when
-// enabling real certificate validation (the C++ client previously used
-// setInsecure()). We pin the root rather than the leaf or intermediate because
-// the root has a long validity window while the leaf rotates yearly.
+// リーフ証明書や中間証明書ではなく、有効期間が長いルートCAを固定する。
+// Telegramのリーフ証明書が通常更新されても、このファイルの更新は不要にするため。
 //
-// The trailing NUL matters: esp_tls_set_global_ca_store() takes the PEM as a
-// NUL-terminated buffer and counts the terminator in its length argument.
+// 末尾NULは必要。esp_tls_set_global_ca_store() はNUL終端PEMとして受け取り、
+// 長さにも終端文字を含める。
 
 pub const TELEGRAM_ROOT_CA_PEM: &str = concat!(
     "-----BEGIN CERTIFICATE-----\n",

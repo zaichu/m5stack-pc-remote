@@ -1,8 +1,7 @@
 # Local firmware secrets.
 firmware/include/config.h
 firmware-rust-poc/config.toml
-# Legacy location (Issue #21): secrets used to be a Rust source file here.
-# Still ignored in case one lingers on an older checkout.
+# 旧方式ではsecretをRustソースへ置いていたため、残っていてもGitへ入れない。
 firmware-rust-poc/src/config.rs
 firmware-rust-poc/src/_config.rs
 
@@ -17,7 +16,7 @@ windows-agent/target/
 firmware/.pio/
 firmware/.vscode/
 
-# esp-idf / embuild generated files (Rust firmware PoC).
+# esp-idf / embuild generated files (Rust firmware).
 firmware-rust-poc/.embuild/
 firmware-rust-poc/sdkconfig
 firmware-rust-poc/managed_components/
