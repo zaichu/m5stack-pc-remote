@@ -4,6 +4,7 @@ set -euo pipefail
 secret_path_patterns=(
   '^\.env$'
   '^\.env\.[^/]+$'
+  '^firmware/config\.toml$'
   '^m5stack-pc-bridge/config\.toml$'
   '(^|/)[^/]*secret[^/]*\.json$'
   '(^|/)[^/]*credential[^/]*\.json$'
@@ -15,7 +16,6 @@ secret_path_patterns=(
 allowed_templates=(
   ".env.example"
   ".env.local.example"
-  "m5stack-pc-bridge/config.example.toml"
 )
 
 is_allowed_template() {
