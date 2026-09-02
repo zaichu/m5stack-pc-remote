@@ -17,8 +17,8 @@ use embedded_svc::http::Method;
 use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
 use serde_json::{json, Value};
 
-use crate::agent::{self, PowerAction};
 use crate::app_config::AppConfig;
+use crate::bridge_client::{self, PowerAction};
 use crate::net;
 use crate::telegram_root_ca::TELEGRAM_ROOT_CA_PEM;
 
@@ -229,13 +229,13 @@ impl Client {
 
     fn run_power_action(&self, action: PowerAction) -> String {
         let _guard = self.power_lock.lock();
-        match agent::send_command(action, self.config.as_ref()) {
-            Ok(code) if agent::is_accepted(code) => {
+        match bridge_client::send_command(action, self.config.as_ref()) {
+            Ok(code) if bridge_client::is_accepted(code) => {
                 format!("{}を受け付けました。", action.label_ja())
             }
             Ok(code) => format!("{}に失敗しました。({code})", action.label_ja()),
             Err(e) => {
-                println!("agent command failed: {e}");
+                println!("bridge command failed: {e}");
                 format!("{}に失敗しました。", action.label_ja())
             }
         }

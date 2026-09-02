@@ -21,6 +21,7 @@ SENSITIVE_KEYS = {
     "wifi_password",
     "pc_mac_address",
     "agent_shared_secret",
+    "bridge_shared_secret",
     "pc_ip_address",
     "pc_status_addr",
     "telegram_bot_token",
@@ -33,7 +34,7 @@ TOKEN_PATTERN = re.compile(r"[0-9]{6,}:[A-Za-z0-9_-]{20,}")
 def main() -> int:
     if len(sys.argv) != 3:
         print(
-            "usage: check-firmware-rust-build-log-secrets.py <config.toml> <build.log>",
+            "usage: check-firmware-build-log-secrets.py <config.toml> <build.log>",
             file=sys.stderr,
         )
         return 2

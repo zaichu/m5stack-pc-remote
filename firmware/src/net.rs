@@ -130,7 +130,7 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
     }
 }
 
-/// SNTPを開始してシステム時刻を同期する。Agentはtimestampを検証するため、
+/// SNTPを開始してシステム時刻を同期する。m5stack-pc-bridgeはtimestampを検証するため、
 /// 署名付きREBOOT/SHUTDOWNは時刻同期後だけ成功する。返したhandleは保持する。
 pub fn start_sntp() -> Result<esp_idf_svc::sntp::EspSntp<'static>, Box<dyn Error>> {
     Ok(esp_idf_svc::sntp::EspSntp::new_default()?)

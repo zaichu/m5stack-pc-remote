@@ -3,8 +3,8 @@
 
 bind = "0.0.0.0:18080"
 
-# firmware/config.toml の agent_shared_secret と同じ値にする(HMAC-SHA256署名の検証に使う)。
-# 32文字以上の長いランダム値にする。placeholderのままではAgentは起動しない。
+# firmware/config.toml の bridge_shared_secret と同じ値にする(HMAC-SHA256署名の検証に使う)。
+# 32文字以上の長いランダム値にする。placeholderのままでは起動しない。
 shared_secret = "replace-with-a-long-random-shared-secret"
 
 allowed_skew_seconds = 60

@@ -73,7 +73,7 @@ make firmware-nvs-image
 実機NVSを書き換える場合は、NVS partition offset/sizeを確認した上で次のように明示実行します。
 
 ```bash
-python3 scripts/provision-firmware-rust-nvs.py --write --yes --port /dev/ttyUSB0
+python3 scripts/provision-firmware-nvs.py --write --yes --port /dev/ttyUSB0
 ```
 
 現行partition tableではNVSは offset `0x9000`、size `0x6000` です。partition tableを変えた
@@ -90,7 +90,7 @@ cargo build --release
 `config.toml` の `shared_secret` を32文字以上の長いランダム値に変更してください。`config.example.toml` のプレースホルダー値や短すぎる値のままでは起動しません。初期値の `dry_run = true` では実際のshutdown/rebootは実行されません。
 
 M5Stackからの `POST /reboot` / `POST /shutdown` は、HMAC署名に加えてJSON本文の `{"confirm":true}` が必須です。
-`GET /status` はm5stack-pc-bridgeプロセス自体のヘルスチェックであり、PCの電源状態判定にはM5Stack firmware側のICMP ping STATUSを使います。
+`GET /status` はm5stack-pc-bridgeプロセス自体のヘルスチェックであり、PCの電源状態判定にはM5Stack firmware側のTCP connect STATUSを使います。
 
 対話実行での動作確認:
 
@@ -133,7 +133,7 @@ telegram_long_poll_timeout_seconds = 20
 telegram_confirm_ttl_secs = 60
 ```
 
-`TELEGRAM_ALLOWED_USER_ID` と一致しない `from.id` からのメッセージはすべて無視され、返信もされません。`TELEGRAM_BOT_TOKEN` はm5stack-pc-bridge用の `AGENT_SHARED_SECRET` とは別の秘密情報で、m5stack-pc-bridgeへは一切渡りません。
+`TELEGRAM_ALLOWED_USER_ID` と一致しない `from.id` からのメッセージはすべて無視され、返信もされません。`TELEGRAM_BOT_TOKEN` はm5stack-pc-bridge用の `BRIDGE_SHARED_SECRET` とは別の秘密情報で、m5stack-pc-bridgeへは一切渡りません。
 
 ### 4. Telegramのコマンド候補を登録する
 

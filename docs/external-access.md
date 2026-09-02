@@ -77,16 +77,16 @@ M5Stackのローカル設定に以下を追加します。
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ALLOWED_USER_ID`
 
-既存の `AGENT_SHARED_SECRET` とは分離します。
+既存の `BRIDGE_SHARED_SECRET` とは分離します。
 
 - `TELEGRAM_BOT_TOKEN`: M5StackとTelegram Bot APIの間で使う。
-- `AGENT_SHARED_SECRET`: M5Stackとm5stack-pc-bridgeの間だけで使う。
+- `BRIDGE_SHARED_SECRET`: M5Stackとm5stack-pc-bridgeの間だけで使う。
 
-Telegramや外部中継先には `AGENT_SHARED_SECRET` を渡しません。
+Telegramや外部中継先には `BRIDGE_SHARED_SECRET` を渡しません。
 
 ## STATUS
 
-外部STATUSはM5Stackがその場でPCへICMP pingし、結果をTelegramへ返します。
+外部STATUSはM5Stackがその場でPCへTCP connect probeし、結果をTelegramへ返します。
 
 応答例:
 
@@ -194,7 +194,7 @@ M5Stack IP: 192.168.1.50
 - ボタンの `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの64byte制限内)。`callback_query` の `from.id` もメッセージと同様に `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、一致しない場合はpending確認を操作せず、Telegram仕様どおり `answerCallbackQuery` だけ短い拒否文言付きで返す(通常のメッセージ返信はしない)。
 - HTTP失敗時は5秒から60秒への指数バックオフを行い、画面状態を `Telegram: error` にする。
 - Telegram APIとの通信はTLSでサーバー証明書チェーンを検証する。ルートCAは `firmware/src/telegram_root_ca.rs` に埋め込んだ「Go Daddy Root Certificate Authority - G2」(2037-12-31まで有効な自己署名ルート)を使う。`api.telegram.org` の葉証明書自体はおよそ年1回更新されるが、ルートCAを固定していれば葉証明書の更新だけでは検証は壊れない。
-- Wake-on-LAN送信・m5stack-pc-bridgeへの署名付きPOST・PC状態確認は `firmware/src/net.rs` / `agent.rs` に置く。UIとTelegramからの電源操作は直列化し、Agentが応答しない場合でもUIやTelegram処理を長時間ブロックしないよう短いtimeoutを設定する。
+- Wake-on-LAN送信・m5stack-pc-bridgeへの署名付きPOST・PC状態確認は `firmware/src/net.rs` / `bridge_client.rs` に置く。UIとTelegramからの電源操作は直列化し、m5stack-pc-bridgeが応答しない場合でもUIやTelegram処理を長時間ブロックしないよう短いtimeoutを設定する。
 
 ## CA証明書のローテーション運用
 

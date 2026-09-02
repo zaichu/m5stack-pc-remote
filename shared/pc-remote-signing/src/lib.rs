@@ -1,4 +1,4 @@
-//! M5Stack firmware(署名側)とWindows Agent(検証側)が共有するHMAC署名wire protocol。
+//! M5Stack firmware(署名側)とm5stack-pc-bridge(検証側)が共有するHMAC署名wire protocol。
 //!
 //! canonical文字列は次の形式で固定する。片方だけを変更すると署名が一致しなくなるため、
 //! 実装を1箇所にまとめてある。
@@ -50,7 +50,7 @@ pub fn sign_request(
     hex::encode(mac.finalize().into_bytes())
 }
 
-/// Windows Agent側(検証する側)が使う。
+/// m5stack-pc-bridge側(検証する側)が使う。
 pub fn verify_signature(
     secret: &[u8],
     method: &str,

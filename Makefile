@@ -34,7 +34,7 @@ firmware-build:
 	bash ./scripts/build-firmware.sh
 
 firmware-nvs-image:
-	python3 ./scripts/provision-firmware-rust-nvs.py
+	python3 ./scripts/provision-firmware-nvs.py
 
 secret-path-check:
 	bash ./scripts/check-staged-secret-paths.sh

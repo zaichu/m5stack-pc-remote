@@ -34,8 +34,8 @@ CONFIG_TO_NVS_KEYS = [
     ("pc_mac_address", "pc_mac"),
     ("wol_port", "wol_port"),
     ("pc_status_addr", "status_addr"),
-    ("agent_port", "agent_port"),
-    ("agent_shared_secret", "agent_secret"),
+    ("bridge_port", "bridge_port"),
+    ("bridge_shared_secret", "bridge_secret"),
     ("pc_ip_address", "pc_ip"),
     ("telegram_bot_token", "tg_token"),
     ("telegram_allowed_user_id", "tg_user_id"),
@@ -74,11 +74,19 @@ def find_generator() -> tuple[Path, Path]:
 
 def load_config(path: Path) -> dict[str, object]:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
+    migrate_legacy_keys(data)
     missing = [key for key, _ in CONFIG_TO_NVS_KEYS if key not in data]
     if missing:
         raise ValueError("configに不足があります: " + ", ".join(missing))
     validate_config(data)
     return data
+
+
+def migrate_legacy_keys(data: dict[str, object]) -> None:
+    if "bridge_port" not in data and "agent_port" in data:
+        data["bridge_port"] = data["agent_port"]
+    if "bridge_shared_secret" not in data and "agent_shared_secret" in data:
+        data["bridge_shared_secret"] = data["agent_shared_secret"]
 
 
 def validate_config(data: dict[str, object]) -> None:
@@ -87,14 +95,14 @@ def validate_config(data: dict[str, object]) -> None:
         "wifi_password",
         "pc_mac_address",
         "pc_status_addr",
-        "agent_shared_secret",
+        "bridge_shared_secret",
         "pc_ip_address",
     ]
     empty = [key for key in non_empty if not str(data[key]).strip()]
     if empty:
         raise ValueError("空にできないconfigがあります: " + ", ".join(empty))
 
-    for key in ("wol_port", "agent_port"):
+    for key in ("wol_port", "bridge_port"):
         value = int(data[key])
         if value < 1 or value > 65535:
             raise ValueError(f"{key} は1..65535で指定してください")
@@ -112,6 +120,8 @@ def write_csv(path: Path, config: dict[str, object]) -> None:
         writer.writerow(["m5remote", "namespace", "", ""])
         for config_key, nvs_key in CONFIG_TO_NVS_KEYS:
             writer.writerow([nvs_key, "data", "string", str(config[config_key])])
+        writer.writerow(["agent_port", "data", "string", str(config["bridge_port"])])
+        writer.writerow(["agent_secret", "data", "string", str(config["bridge_shared_secret"])])
 
 
 def generate_image(

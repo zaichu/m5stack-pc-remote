@@ -35,5 +35,5 @@
 - コストゼロを絶対条件にする。
 - ルーターVPNを前提にできないため、初期案はTelegram Bot API long polling方式にする。
 - M5Stackに `/status`、`/wake`、`/reboot`、`/shutdown` のTelegram command処理を追加する。
-- `TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` を追加し、m5stack-pc-bridge用の `AGENT_SHARED_SECRET` と分離する。
+- `TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` を追加し、m5stack-pc-bridge用の `BRIDGE_SHARED_SECRET` と分離する。
 - 外部からも WAKE、STATUS、REBOOT、SHUTDOWN を扱えるようにする。

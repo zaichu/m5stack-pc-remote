@@ -38,12 +38,13 @@ fn generate_config() {
     push_str_const(&mut out, &table, "pc_mac_address", "PC_MAC_ADDRESS");
     push_u16_const(&mut out, &table, "wol_port", "WOL_PORT");
     push_str_const(&mut out, &table, "pc_status_addr", "PC_STATUS_ADDR");
-    push_u16_const(&mut out, &table, "agent_port", "AGENT_PORT");
-    push_str_const(
+    push_u16_const_alias(&mut out, &table, "bridge_port", "agent_port", "BRIDGE_PORT");
+    push_str_const_alias(
         &mut out,
         &table,
+        "bridge_shared_secret",
         "agent_shared_secret",
-        "AGENT_SHARED_SECRET",
+        "BRIDGE_SHARED_SECRET",
     );
     push_str_const(&mut out, &table, "pc_ip_address", "PC_IP_ADDRESS");
     push_str_const(&mut out, &table, "telegram_bot_token", "TELEGRAM_BOT_TOKEN");
@@ -77,6 +78,14 @@ fn require<'a>(table: &'a toml::Table, key: &str) -> &'a toml::Value {
     })
 }
 
+fn require_alias<'a>(table: &'a toml::Table, key: &str, fallback_key: &str) -> &'a toml::Value {
+    table.get(key).or_else(|| table.get(fallback_key)).unwrap_or_else(|| {
+        panic!(
+            "config.toml に必須key `{key}` がありません。旧key `{fallback_key}` も未設定です。config.example.toml を確認してください"
+        )
+    })
+}
+
 fn push_str_const(out: &mut String, table: &toml::Table, key: &str, const_name: &str) {
     let value = require(table, key)
         .as_str()
@@ -85,8 +94,36 @@ fn push_str_const(out: &mut String, table: &toml::Table, key: &str, const_name: 
     out.push_str(&format!("pub const {const_name}: &str = {value:?};\n\n"));
 }
 
+fn push_str_const_alias(
+    out: &mut String,
+    table: &toml::Table,
+    key: &str,
+    fallback_key: &str,
+    const_name: &str,
+) {
+    let value = require_alias(table, key, fallback_key)
+        .as_str()
+        .unwrap_or_else(|| panic!("config.toml: `{key}` は文字列で指定してください"));
+    out.push_str("#[allow(dead_code)]\n");
+    out.push_str(&format!("pub const {const_name}: &str = {value:?};\n\n"));
+}
+
 fn push_u16_const(out: &mut String, table: &toml::Table, key: &str, const_name: &str) {
     let value = require(table, key)
+        .as_integer()
+        .unwrap_or_else(|| panic!("config.toml: `{key}` は整数で指定してください"));
+    out.push_str("#[allow(dead_code)]\n");
+    out.push_str(&format!("pub const {const_name}: u16 = {value};\n\n"));
+}
+
+fn push_u16_const_alias(
+    out: &mut String,
+    table: &toml::Table,
+    key: &str,
+    fallback_key: &str,
+    const_name: &str,
+) {
+    let value = require_alias(table, key, fallback_key)
         .as_integer()
         .unwrap_or_else(|| panic!("config.toml: `{key}` は整数で指定してください"));
     out.push_str("#[allow(dead_code)]\n");
