@@ -1,4 +1,4 @@
-use pc_remote_agent::auth::{verify_request, AuthConfig, AuthError, NonceStore};
+use m5stack_pc_bridge::auth::{verify_request, AuthConfig, AuthError, NonceStore};
 use pc_remote_signing::sign_request;
 use serde_json::json;
 use time::OffsetDateTime;

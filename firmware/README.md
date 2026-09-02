@@ -78,9 +78,9 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 | `pc_mac` | `pc_mac_address` | Wake-on-LAN送信先MACアドレス |
 | `wol_port` | `wol_port` | Wake-on-LAN送信先port |
 | `status_addr` | `pc_status_addr` | STATUS確認先TCP address |
-| `agent_port` | `agent_port` | Windows Agent port |
-| `agent_secret` | `agent_shared_secret` | Windows Agent HMAC secret |
-| `pc_ip` | `pc_ip_address` | Windows Agent接続先IP |
+| `agent_port` | `agent_port` | m5stack-pc-bridge port |
+| `agent_secret` | `agent_shared_secret` | m5stack-pc-bridge HMAC secret |
+| `pc_ip` | `pc_ip_address` | m5stack-pc-bridge接続先IP |
 | `tg_token` | `telegram_bot_token` | Telegram bot token |
 | `tg_user_id` | `telegram_allowed_user_id` | 許可するTelegram user id |
 | `tg_poll_secs` | `telegram_long_poll_timeout_seconds` | Telegram long polling timeout |
@@ -126,7 +126,7 @@ WSL2から書き込む場合はusbipd-winでUSBデバイスをアタッチして
 Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の設計を移植した
 以下を実装済み:
 
-- **REBOOT / SHUTDOWN**(`src/agent.rs`): Windows AgentへのHMAC-SHA256署名付きPOST。
+- **REBOOT / SHUTDOWN**(`src/agent.rs`): m5stack-pc-bridgeへのHMAC-SHA256署名付きPOST。
   canonical文字列 `POST\n{path}\n{timestamp}\n{nonce}\n{sha256hex(body)}` と
   本文 `{"confirm":true}` 必須をC++版と揃えてある。NTP未同期のクロックでは送信前に弾く。
   画面上はPCがONLINEのときだけボタンが出て、確認画面(CANCEL/OK)を必ず経由する。

@@ -1,4 +1,4 @@
-use pc_remote_agent::app_config::AgentConfig;
+use m5stack_pc_bridge::app_config::AgentConfig;
 
 #[test]
 fn loads_minimal_toml_config() {

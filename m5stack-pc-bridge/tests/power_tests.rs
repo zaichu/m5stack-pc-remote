@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use pc_remote_agent::power::{run_power_action_with_executor, PowerAction};
+use m5stack_pc_bridge::power::{run_power_action_with_executor, PowerAction};
 
 #[test]
 fn dry_run_does_not_execute_shutdown_command() {

@@ -18,7 +18,7 @@ M5Stack Core2
 Windows PC
 ```
 
-自宅側でポート開放は不要です。Windows Agentの管理ポートもLAN内限定のままです。Cloudflare Worker、VPS、課金型キュー、課金型DBは使いません。
+自宅側でポート開放は不要です。m5stack-pc-bridgeの管理ポートもLAN内限定のままです。Cloudflare Worker、VPS、課金型キュー、課金型DBは使いません。
 
 ## なぜ中継が必要か
 
@@ -32,8 +32,8 @@ Windows PC
 - 従量課金サービスを使わない。
 - 支払い方法登録が必要なサービスを運用必須経路にしない。
 - 無料枠を超えると課金されるサービスを運用必須経路にしない。
-- Windows Agentをインターネットへ直接公開しない。
-- M5StackまたはWindows Agentの認証を弱めない。
+- m5stack-pc-bridgeをインターネットへ直接公開しない。
+- M5Stackまたはm5stack-pc-bridgeの認証を弱めない。
 - スマホ外部操作でもREBOOT/SHUTDOWNは確認操作を必須にする。
 
 ## 採用案: Telegram Bot API long polling
@@ -80,7 +80,7 @@ M5Stackのローカル設定に以下を追加します。
 既存の `AGENT_SHARED_SECRET` とは分離します。
 
 - `TELEGRAM_BOT_TOKEN`: M5StackとTelegram Bot APIの間で使う。
-- `AGENT_SHARED_SECRET`: M5StackとWindows Agentの間だけで使う。
+- `AGENT_SHARED_SECRET`: M5Stackとm5stack-pc-bridgeの間だけで使う。
 
 Telegramや外部中継先には `AGENT_SHARED_SECRET` を渡しません。
 
@@ -108,9 +108,9 @@ M5Stack IP: 192.168.1.50
 1. Telegramで操作要求を受ける。
 2. M5Stackが確認nonce付きメッセージを、インラインキーボード(確定ボタン/キャンセルボタン)付きで返す。
 3. 許可ユーザーが確定ボタンをタップするか、`/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を送る。
-4. M5StackがWindows Agentへ既存のHMAC署名付きPOSTを送る。
+4. M5Stackがm5stack-pc-bridgeへ既存のHMAC署名付きPOSTを送る。
 
-キャンセルボタンをタップした場合はpending確認だけを消費し、Windows Agentへは何も送りません。ボタン経由(`callback_query`)でも `from.id` を `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、Telegram仕様に従って `answerCallbackQuery` を必ず呼びます。Windows Agent側の `confirm: true` 必須条件は維持します。
+キャンセルボタンをタップした場合はpending確認だけを消費し、m5stack-pc-bridgeへは何も送りません。ボタン経由(`callback_query`)でも `from.id` を `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、Telegram仕様に従って `answerCallbackQuery` を必ず呼びます。m5stack-pc-bridge側の `confirm: true` 必須条件は維持します。
 
 ## poll間隔
 
@@ -140,7 +140,7 @@ M5Stack IP: 192.168.1.50
 
 採用しません。無料で試せますが、public topic前提では操作コマンドの秘匿と認可を別途自前で強く作る必要があります。REBOOT/SHUTDOWN用途ではTelegramのユーザーID allow-listの方が扱いやすいです。
 
-### Windows Agentの直接公開
+### m5stack-pc-bridgeの直接公開
 
 採用しません。HMAC認証があっても、shutdown/rebootを実行する管理ポートをインターネットへ直接置く必要はありません。
 
@@ -165,7 +165,7 @@ M5Stack IP: 192.168.1.50
 - `/reboot` と `/shutdown` で確認nonceを発行する。
 - `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を実装する。
 - nonceは短時間で期限切れにする。
-- Windows Agentへの既存HMAC署名付きPOSTを呼ぶ。
+- m5stack-pc-bridgeへの既存HMAC署名付きPOSTを呼ぶ。
 
 ### Phase 5D: 実機確認 (確認済み)
 
@@ -190,11 +190,11 @@ M5Stack IP: 192.168.1.50
 - `/status` はPC ONLINE/OFFLINE、Wi-Fi状態、M5Stack local IPを返す。TCP connect probeを使う。
 - `/wake` はWake-on-LAN送信処理を呼び、成功/失敗を返信する。
 - `/reboot` / `/shutdown` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_MS` でTTL)を発行し、確定/キャンセルのインラインキーボード付きで `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を案内する。
-- 確定ボタン・キャンセルボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、Windows AgentへのHMAC署名付きPOSTを呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
+- 確定ボタン・キャンセルボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、m5stack-pc-bridgeへのHMAC署名付きPOSTを呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
 - ボタンの `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの64byte制限内)。`callback_query` の `from.id` もメッセージと同様に `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、一致しない場合はpending確認を操作せず、Telegram仕様どおり `answerCallbackQuery` だけ短い拒否文言付きで返す(通常のメッセージ返信はしない)。
 - HTTP失敗時は5秒から60秒への指数バックオフを行い、画面状態を `Telegram: error` にする。
 - Telegram APIとの通信はTLSでサーバー証明書チェーンを検証する。ルートCAは `firmware/src/telegram_root_ca.rs` に埋め込んだ「Go Daddy Root Certificate Authority - G2」(2037-12-31まで有効な自己署名ルート)を使う。`api.telegram.org` の葉証明書自体はおよそ年1回更新されるが、ルートCAを固定していれば葉証明書の更新だけでは検証は壊れない。
-- Wake-on-LAN送信・Windows Agentへの署名付きPOST・PC状態確認は `firmware/src/net.rs` / `agent.rs` に置く。UIとTelegramからの電源操作は直列化し、Agentが応答しない場合でもUIやTelegram処理を長時間ブロックしないよう短いtimeoutを設定する。
+- Wake-on-LAN送信・m5stack-pc-bridgeへの署名付きPOST・PC状態確認は `firmware/src/net.rs` / `agent.rs` に置く。UIとTelegramからの電源操作は直列化し、Agentが応答しない場合でもUIやTelegram処理を長時間ブロックしないよう短いtimeoutを設定する。
 
 ## CA証明書のローテーション運用
 
