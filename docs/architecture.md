@@ -6,8 +6,9 @@
 M5Stack Core2 for AWS
   ├─ Wi-Fi STA
   ├─ WOL packet sender
-  ├─ ICMP ping status checker
-  └─ Touch display UI
+  ├─ TCP connect status checker
+  ├─ Touch display UI
+  └─ Telegram Bot API long polling
 
 Windows 11 Pro Desktop
   ├─ BIOS/UEFI Wake-on-LAN
@@ -15,7 +16,7 @@ Windows 11 Pro Desktop
   └─ Rust Agent
 ```
 
-Phase 1では Windows Agent を使わず、M5Stack から Magic Packet を送信し、PCの固定IPへ ping してONLINE/OFFLINEを判定します。
+M5Stack firmwareの本線は `firmware-rust-poc/` のRust実装です。Wi-Fi / WOL / STATUS / UI / REBOOT / SHUTDOWN / Telegram経由操作まで実機確認済みです。`firmware/` のC++/Arduino版は安定確認が終わるまでfallbackとして残します。
 
 ## 将来の外部操作
 
@@ -35,7 +36,8 @@ Windows AgentはLAN内限定です。外部公開が必要な場合でも、Wind
 
 ## 境界
 
-- `firmware/`: M5Stack実機で動くコード
+- `firmware-rust-poc/`: M5Stack実機で動くRust本線firmware
+- `firmware/`: C++/Arduino fallback firmware
 - `windows-agent/`: Windows上で常駐するRust Agent
 - `docs/`: 設計、フェーズ、セキュリティ
 - `.claude/skills/`: Codex/Claude運用の正本

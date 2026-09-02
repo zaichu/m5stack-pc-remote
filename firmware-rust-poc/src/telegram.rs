@@ -184,7 +184,7 @@ impl Client {
         let online =
             net::check_pc_online(crate::config::PC_STATUS_ADDR, Duration::from_millis(800));
         format!(
-            "PC: {}\nM5Stack: Rust firmware (PoC)",
+            "PC: {}\nM5Stack: Rust firmware",
             if online {
                 "オンライン"
             } else {

@@ -13,7 +13,7 @@ wifi_password = "your-wifi-password"
 pc_mac_address = "AA:BB:CC:DD:EE:FF"
 wol_port = 9
 
-# STATUS check target. The PoC does not have raw ICMP wired up yet (see
+# STATUS check target. The Rust firmware does not have raw ICMP wired up yet (see
 # Issue #16), so this is a TCP connect probe instead: a fast connect or a
 # refusal both mean "the PC is on and reachable"; a timeout means "off or
 # unreachable". Nothing needs to be listening on the port.

@@ -11,14 +11,19 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-legacy_config="firmware-rust-poc/src/config.rs"
+legacy_configs=(
+  "firmware-rust-poc/src/config.rs"
+  "firmware-rust-poc/src/_config.rs"
+)
 
-if [[ -e "$repo_root/$legacy_config" ]]; then
-  echo "ERROR: $legacy_config still exists." >&2
-  echo "This file put secrets directly into Rust source, where a compiler warning could print them into build logs (Issue #21)." >&2
-  echo "Migrate its values into firmware-rust-poc/config.toml (see firmware-rust-poc/config.example.toml), then delete this file." >&2
-  echo "Its contents are not shown here because they may contain real secrets." >&2
-  exit 1
-fi
+for legacy_config in "${legacy_configs[@]}"; do
+  if [[ -e "$repo_root/$legacy_config" ]]; then
+    echo "ERROR: $legacy_config still exists." >&2
+    echo "This file may put secrets directly into Rust source, where a compiler warning could print them into build logs (Issue #21)." >&2
+    echo "Migrate its values into firmware-rust-poc/config.toml (see firmware-rust-poc/config.example.toml), then delete this file." >&2
+    echo "Its contents are not shown here because they may contain real secrets." >&2
+    exit 1
+  fi
+done
 
 exit 0

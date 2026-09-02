@@ -1,10 +1,11 @@
 # firmware-rust-poc
 
-M5Stack Core2 for AWS firmwareをRustで書けるか検証するPoC。Issue #16参照。
+M5Stack Core2 for AWS firmwareのRust実装。本線候補として実運用検証中。Issue #17参照。
 
-`firmware/`(PlatformIO + Arduino Framework + M5Unified、C++)が本線。このディレクトリは
-その置き換えではなく、実現性を確かめるための独立したcargoプロジェクト。PoCが
-Issue #16の成功条件を満たすまで、`firmware/` は変更しない。
+`firmware/`(PlatformIO + Arduino Framework + M5Unified、C++)は安定版fallbackとして
+残す。Rust版は実機で主要機能(Wi-Fi / WOL / STATUS / UI / REBOOT / SHUTDOWN /
+Telegram)が動作確認済みで、今後の完全移植と切り替え判断はIssue #17で管理する。
+ディレクトリ名 `firmware-rust-poc/` は履歴と差分を小さく保つため当面維持する。
 
 ## 技術構成
 
@@ -70,7 +71,7 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 ## 書き込み・モニタ
 
 ```bash
-espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust-poc
+espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust
 ```
 
 WSL2から書き込む場合はusbipd-winでUSBデバイスをアタッチしてから実行する。
@@ -96,7 +97,7 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
 
 ## 現在のスコープと実機確認結果
 
-Issue #16のPoC成功条件に対する進捗:
+Issue #16のPoC成功条件は達成済み。現在はIssue #17の本線化判断に向けた実運用検証:
 
 - [x] ESP32 / M5Stack Core2へRust firmwareをbuild/flashできる
 - [x] Wi-Fi接続できる
@@ -107,7 +108,7 @@ Issue #16のPoC成功条件に対する進捗:
       `WAKE tapped` → `WOL sent` を確認)
 - [x] 秘密情報をGitへ入れない構成を維持できる(`config.toml`はGit管理外。Rustソースへ
       secretを直接書かない。Issue #21)
-- [x] `make check` にRust firmware PoCのbuild確認を追加(`make firmware-rust-poc-build`。
+- [x] `make check` にRust firmwareのbuild確認を追加(`make firmware-rust-build`。
       espツールチェーン/ldproxy/`config.toml` が無い環境では警告してスキップ)
 
 2026-09-01時点の実機確認: AXP192初期化、ディスプレイ初期化、タッチコントローラー

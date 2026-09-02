@@ -4,7 +4,7 @@
 
 - 目的は M5Stack Core2 for AWS を常時稼働させ、自宅LAN上の Windows 11 Pro デスクトップPCの電源管理専用端末にすること。
 - 実装はフェーズごとに動作確認できる状態を維持する。最初の正本は `Wi-Fi接続 -> Wake-on-LAN -> STATUS`。
-- M5Stack firmware は `firmware/` に閉じる。原則として PlatformIO + Arduino Framework + M5Unified を使う。
+- M5Stack firmware の本線は `firmware-rust-poc/` のRust実装とする。ディレクトリ名は当面維持するが、扱いはPoCではなく本線。`firmware/` のC++/Arduino/M5Unified版は安定確認が終わるまでfallbackとして残し、不要になった段階で一括削除する。
 - Windows Agent は `windows-agent/` に閉じる。Rustで単一バイナリ配布できる構成を維持する。
 - 外部スマートフォン操作は直接 Windows Agent へ到達させない。ルーターVPNを前提にできない環境では `Smartphone -> Telegram Bot API -> M5Stack -> Windows PC` を基本経路にする。
 - 外部操作経路はコストゼロを絶対条件にする。月額課金、従量課金、無料枠超過で課金される可能性があるサービスを運用必須経路にしない。
@@ -12,7 +12,7 @@
 - `REBOOT` / `SHUTDOWN` は HMAC-SHA256、timestamp、nonceで認証する。認証を弱めたり、LAN内だからという理由で無認証APIを追加しない。
 - 秘密鍵、Wi-Fiパスワード、PCの実MACアドレス、実LAN構成はGitへ入れない。
 - `firmware/include/config.h` と `windows-agent/config.toml` はローカル専用で、テンプレートだけをGit管理する。
-- `firmware-rust-poc/` も同様に `config.toml` をローカル専用にし、テンプレート(`config.example.toml`)だけをGit管理する。secretをRustソース(`src/`配下)へ直接 `pub const` として書かない。コンパイラの unused警告がソース行を出力してビルドログへ秘密情報が漏れる事故があったため(Issue #21)、`build.rs` がビルド時に `config.toml` を読み込む方式にしている。
+- `firmware-rust-poc/config.toml` はローカル専用にし、テンプレート(`config.example.toml`)だけをGit管理する。secretをRustソース(`src/`配下)へ直接 `pub const` として書かない。コンパイラの unused警告がソース行を出力してビルドログへ秘密情報が漏れる事故があったため(Issue #21)、`build.rs` がビルド時に `config.toml` を読み込む方式にしている。
 - 設定を追加したら、対応する `*.example.*`、README、関連docsを同じ変更で更新する。
 - テストで実ネットワーク、実PCのshutdown/reboot、実Wi-Fi認証情報を使わない。Agentの認証や設定処理は純粋関数またはループバックでテストする。
 - firmwareの実機動作確認結果は、対応するGitHub IssueまたはPRに日時と確認範囲を明記して残す。`HANDOFF.md`は変わりにくい恒久構成のみを書き、日時付きの実装履歴は書かない。

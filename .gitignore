@@ -4,6 +4,7 @@ firmware-rust-poc/config.toml
 # Legacy location (Issue #21): secrets used to be a Rust source file here.
 # Still ignored in case one lingers on an older checkout.
 firmware-rust-poc/src/config.rs
+firmware-rust-poc/src/_config.rs
 
 # Windows Agent local secrets.
 windows-agent/config.toml
