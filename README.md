@@ -64,6 +64,22 @@ tokenやsecretをローテーションした時は、現時点では `config.tom
 運用を正本にします。NVS provisioningだけで差し替える手順は、実機で安全に確認できてから
 運用手順に昇格します。
 
+NVSイメージだけを生成する場合:
+
+```bash
+make firmware-rust-nvs-image
+```
+
+生成先は `firmware-rust-poc/.nvs-provisioning/` です。secretを含むためGit管理外です。
+実機NVSを書き換える場合は、NVS partition offset/sizeを確認した上で次のように明示実行します。
+
+```bash
+python3 scripts/provision-firmware-rust-nvs.py --write --yes --port /dev/ttyUSB0
+```
+
+現行partition tableではNVSは offset `0x9000`、size `0x6000` です。partition tableを変えた
+場合は `--offset` と `--size` を指定してください。
+
 ## セットアップ: C++ fallback firmware
 
 ```bash
