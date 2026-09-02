@@ -25,7 +25,7 @@ Serviceとしてインストールする前に、コンソールから直接動�
 
 Windowsバイナリは、Service Control Manager経由の起動ではない場合(=手元で直接実行した場合)は自動的にforeground実行にフォールバックするため、上記コマンドはインストール後の`m5stack-pc-bridge.exe`をそのまま実行しても動きます。
 
-## インストール(Windows Serviceとして常駐)
+## Windows Serviceとして常駐
 
 管理者PowerShellで実行します。`config.toml` が無い場合は `config.example.toml` から
 暗号論的乱数(`RandomNumberGenerator`、64文字)で生成した `shared_secret` を使って
@@ -43,10 +43,10 @@ Windowsバイナリは、Service Control Manager経由の起動ではない場�
 Windows Firewall受信許可ルールも作成します(Windows Firewallは既定でこの種の
 未知のアプリへの受信を静かにブロックするため、実機確認で必須と分かりました)。
 
-インストール先ディレクトリのACLは、`icacls` でAdministratorsとSYSTEMのみに
-読み取り・書き込みを制限します。`config.toml` はREBOOT/SHUTDOWNの認証に使う
-shared_secretを平文で含むため、ローカルの一般ユーザーから読めないようにする
-ためです。
+インストール先ディレクトリのACLは `%ProgramData%` からの既定の継承のままです。
+`config.toml` はREBOOT/SHUTDOWNの認証に使うshared_secretを平文で含むため、
+このPCを他のローカルアカウントと共有している場合は注意してください(詳細は
+`docs/security.md` を参照)。
 
 インストール直後にServiceを起動する場合は `-Start` を付けます。
 

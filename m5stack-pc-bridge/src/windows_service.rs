@@ -55,7 +55,31 @@ fn service_main(_arguments: Vec<OsString>) {
     // service_mainはWindows側の規約でResultを返せない。失敗はプロセスの異常終了として
     // SCMへ伝わり、install.ps1が設定するrecovery(自動再起動)に任せる。
     if let Err(e) = run_service() {
-        eprintln!("m5stack-pc-bridge service error: {e}");
+        // Windows Serviceにはコンソールが無く、eprintln!はどこにも表示されない。
+        // 実行ファイルと同じディレクトリのログファイルへ書き、起動失敗の原因を
+        // 追えるようにする(secretは書かない: エラーメッセージにconfig.tomlの値は含まれない)。
+        log_startup_error(&e);
+    }
+}
+
+fn log_startup_error(err: &anyhow::Error) {
+    use std::io::Write;
+
+    let log_path = crate::default_config_path()
+        .parent()
+        .map(|dir| dir.join("service-error.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("service-error.log"));
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(file, "[{now}] m5stack-pc-bridge service error: {err}");
     }
 }
 
@@ -74,7 +98,21 @@ fn run_service() -> anyhow::Result<()> {
     };
 
     let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
-    set_status(&status_handle, ServiceState::StartPending, false)?;
+
+    let result = run_and_report_status(&status_handle, stop_rx);
+
+    // 成功・失敗どちらの経路でも、SCMへ必ずStoppedを報告する。ここを怠ると、
+    // 起動処理中のエラーなどでSCMへの応答が途絶え、「応答なし」という原因の
+    // 分かりにくい汎用エラーになる。
+    let _ = set_status(&status_handle, ServiceState::Stopped, false);
+    result
+}
+
+fn run_and_report_status(
+    status_handle: &service_control_handler::ServiceStatusHandle,
+    stop_rx: mpsc::Receiver<()>,
+) -> anyhow::Result<()> {
+    set_status(status_handle, ServiceState::StartPending, false)?;
 
     let config_path = crate::default_config_path();
     let config = AgentConfig::from_path(&config_path)
@@ -84,19 +122,20 @@ fn run_service() -> anyhow::Result<()> {
     let (graceful_tx, graceful_rx) = tokio::sync::oneshot::channel::<()>();
 
     // mpsc(同期)側のSTOP通知をtokio側のgraceful shutdown signalへ橋渡しする。
+    let status_handle_for_stop = status_handle.clone();
     std::thread::spawn(move || {
         let _ = stop_rx.recv();
+        // graceful shutdown中もRunningのまま報告し続けると、SCMが規定時間内に
+        // 応答がないと判断することがあるため、停止処理に入ったことを即座に伝える。
+        let _ = set_status(&status_handle_for_stop, ServiceState::StopPending, false);
         let _ = graceful_tx.send(());
     });
 
-    set_status(&status_handle, ServiceState::Running, true)?;
+    set_status(status_handle, ServiceState::Running, true)?;
 
-    let result = runtime.block_on(server::serve_with_shutdown(config, async {
+    runtime.block_on(server::serve_with_shutdown(config, async {
         let _ = graceful_rx.await;
-    }));
-
-    set_status(&status_handle, ServiceState::Stopped, false)?;
-    result
+    }))
 }
 
 fn set_status(
