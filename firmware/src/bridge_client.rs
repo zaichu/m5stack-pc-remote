@@ -1,8 +1,8 @@
-// Windows Agentへ送るHMAC署名付き電源操作(REBOOT / SHUTDOWN)。
+// m5stack-pc-bridgeへ送るHMAC署名付き電源操作(REBOOT / SHUTDOWN)。
 //
 // 署名のcanonical文字列とHMAC計算は `pc-remote-signing` (shared/) に実装があり、
-// Windows Agent側の検証処理と同じ実装を使う。本文は常に `{"confirm":true}`。
-// Agent側もこれを必須にしているため、署名だけでは電源操作を実行できない。
+// m5stack-pc-bridge側の検証処理と同じ実装を使う。本文は常に `{"confirm":true}`。
+// m5stack-pc-bridgeもこれを必須にしているため、署名だけでは電源操作を実行できない。
 
 use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -15,7 +15,7 @@ use esp_idf_svc::io::Write;
 use crate::app_config::AppConfig;
 
 /// 2023-11-14より古い時刻は、NTP同期前の時計として扱って拒否する。
-/// Agent側でもtimestampを検証するが、送信前に止めた方が原因が分かりやすい。
+/// m5stack-pc-bridgeでもtimestampを検証するが、送信前に止めた方が原因が分かりやすい。
 const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
@@ -81,7 +81,7 @@ pub fn send_command(action: PowerAction, config: &AppConfig) -> Result<u16, Box<
     let request_nonce = nonce();
 
     let signature = pc_remote_signing::sign_request(
-        config.agent_shared_secret.as_bytes(),
+        config.bridge_shared_secret.as_bytes(),
         "POST",
         path,
         timestamp as i64,
@@ -91,10 +91,10 @@ pub fn send_command(action: PowerAction, config: &AppConfig) -> Result<u16, Box<
 
     let url = format!(
         "http://{}:{}{path}",
-        config.pc_ip_address, config.agent_port
+        config.pc_ip_address, config.bridge_port
     );
 
-    // 呼び出し元は電源操作ロックを保持している。Agent応答待ちでUIやTelegram処理を
+    // 呼び出し元は電源操作ロックを保持している。m5stack-pc-bridge応答待ちでUIやTelegram処理を
     // 長く止めないよう、短いtimeoutで失敗させる。
     let mut client = HttpClient::wrap(EspHttpConnection::new(&HttpConfiguration {
         timeout: Some(REQUEST_TIMEOUT),
@@ -117,11 +117,11 @@ pub fn send_command(action: PowerAction, config: &AppConfig) -> Result<u16, Box<
     let response = request.submit()?;
     let status = response.status();
 
-    println!("agent {path} -> {status}");
+    println!("bridge {path} -> {status}");
     Ok(status)
 }
 
-/// Agentがコマンドを受理した場合にtrue。
+/// m5stack-pc-bridgeがコマンドを受理した場合にtrue。
 pub fn is_accepted(status: u16) -> bool {
     (200..300).contains(&status)
 }

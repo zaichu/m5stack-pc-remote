@@ -15,11 +15,11 @@ wol_port = 9
 # このportで何かがlistenしている必要はない。
 pc_status_addr = "192.168.1.100:80"
 
-# Windows Agent。LAN内HTTP + HMAC-SHA256署名付きリクエスト。
-agent_port = 18080
-agent_shared_secret = "replace-with-the-same-secret-as-m5stack-pc-bridge"
+# m5stack-pc-bridge。LAN内HTTP + HMAC-SHA256署名付きリクエスト。
+bridge_port = 18080
+bridge_shared_secret = "replace-with-the-same-secret-as-m5stack-pc-bridge"
 
-# Windows AgentはSTATUS確認対象と同じPCで動かす。
+# m5stack-pc-bridgeはSTATUS確認対象と同じPCで動かす。
 pc_ip_address = "192.168.1.100"
 
 # Telegram Bot API。外向きHTTPS long pollingで使う。

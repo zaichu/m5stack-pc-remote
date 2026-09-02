@@ -1,6 +1,6 @@
-mod agent;
 mod app_config;
 mod board;
+mod bridge_client;
 mod net;
 mod telegram;
 mod telegram_root_ca;
@@ -10,7 +10,7 @@ mod ui;
 /// secretを `src/` 配下のRustソースへ直接置かないことで、コンパイラ警告による
 /// ビルドログ漏えいを防ぐ。`app_config` module(実行時設定、NVS優先)とは別物。
 /// このcrateでは `src/config.rs` というファイル名は使わない(旧方式でsecretを
-/// 直接書いていたファイル名と同じにすると、`scripts/check-local-firmware-rust-secrets.sh`
+/// 直接書いていたファイル名と同じにすると、`scripts/check-local-firmware-secrets.sh`
 /// の再発防止チェックと衝突するため)。
 mod build_config {
     include!(concat!(env!("OUT_DIR"), "/generated_config.rs"));
@@ -24,9 +24,9 @@ use std::time::{Duration, Instant};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
-use agent::PowerAction;
 use app_config::AppConfig;
 use board::{DisplayPins, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use bridge_client::PowerAction;
 use ui::{Status, TelegramState};
 
 const STATUS_INTERVAL: Duration = Duration::from_secs(10);
@@ -53,7 +53,7 @@ fn start_online_services(
     app_config: &Arc<AppConfig>,
 ) {
     if sntp.is_none() {
-        // Windows Agentはtimestampを検証するため、電源操作前に時計同期が必要になる。
+        // m5stack-pc-bridgeはtimestampを検証するため、電源操作前に時計同期が必要になる。
         // ここではSNTP開始だけ行い、同期待ちは別スレッド側に任せる。
         match net::start_sntp() {
             Ok(started) => {
@@ -304,17 +304,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                         } else if ui::OK_BUTTON.contains(x, y) {
                             println!("{} confirmed", action.slug());
                             let _guard = power_lock.lock().unwrap();
-                            toast_text =
-                                Some(match agent::send_command(action, app_config.as_ref()) {
-                                    Ok(code) if agent::is_accepted(code) => {
+                            toast_text = Some(
+                                match bridge_client::send_command(action, app_config.as_ref()) {
+                                    Ok(code) if bridge_client::is_accepted(code) => {
                                         "操作を受け付けました".into()
                                     }
                                     Ok(code) => format!("操作が拒否されました ({code})"),
                                     Err(e) => {
-                                        println!("agent command failed: {e}");
+                                        println!("bridge command failed: {e}");
                                         "操作に失敗しました".to_string()
                                     }
-                                });
+                                },
+                            );
                             toast_at = Instant::now();
                             screen = Screen::Main;
                             ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;

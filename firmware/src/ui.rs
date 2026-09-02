@@ -1,6 +1,6 @@
 // タッチUI。STATUS画面、WAKE / REBOOT / SHUTDOWNボタン、危険操作の確認画面を描画する。
 //
-// REBOOTとSHUTDOWNはPCがONLINEのときだけ表示し、Windows Agentへ送る前に確認画面を挟む。
+// REBOOTとSHUTDOWNはPCがONLINEのときだけ表示し、m5stack-pc-bridgeへ送る前に確認画面を挟む。
 
 use std::error::Error;
 
@@ -11,8 +11,8 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, RoundedRectangle};
 use embedded_graphics::text::Text;
 
-use crate::agent::PowerAction;
 use crate::board::{Core2Display, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::bridge_client::PowerAction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Button {

@@ -62,7 +62,7 @@ secretを直接書かない。`build.rs` がビルド時に `config.toml` を読
 `$OUT_DIR/generated_config.rs` を生成して `src/main.rs` が `include!()` で取り込む。
 生成した定数は未使用でも `#[allow(dead_code)]` により警告が出ないため、コンパイラの
 unused警告がソース行としてbot token等をビルドログへ出す事故が起きない。旧方式の
-`src/config.rs` が残っていると `scripts/check-local-firmware-rust-secrets.sh`
+`src/config.rs` が残っていると `scripts/check-local-firmware-secrets.sh`
 (`make firmware-build` から自動実行)がbuildを止める。
 
 起動時はESP-IDF NVSの `m5remote` namespaceを先に読み、存在するkeyだけ実行時設定へ
@@ -78,16 +78,17 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 | `pc_mac` | `pc_mac_address` | Wake-on-LAN送信先MACアドレス |
 | `wol_port` | `wol_port` | Wake-on-LAN送信先port |
 | `status_addr` | `pc_status_addr` | STATUS確認先TCP address |
-| `agent_port` | `agent_port` | m5stack-pc-bridge port |
-| `agent_secret` | `agent_shared_secret` | m5stack-pc-bridge HMAC secret |
+| `bridge_port` | `bridge_port` | m5stack-pc-bridge port |
+| `bridge_secret` | `bridge_shared_secret` | m5stack-pc-bridge HMAC secret |
 | `pc_ip` | `pc_ip_address` | m5stack-pc-bridge接続先IP |
 | `tg_token` | `telegram_bot_token` | Telegram bot token |
 | `tg_user_id` | `telegram_allowed_user_id` | 許可するTelegram user id |
 | `tg_poll_secs` | `telegram_long_poll_timeout_seconds` | Telegram long polling timeout |
 | `tg_ttl_secs` | `telegram_confirm_ttl_secs` | 再起動/シャットダウン確認TTL |
 
-NVS上では全keyを文字列として保存する。`wol_port`、`agent_port`、
+NVS上では全keyを文字列として保存する。`wol_port`、`bridge_port`、
 `telegram_long_poll_timeout_seconds`、`telegram_confirm_ttl_secs` は起動時に数値へ変換する。
+既存NVSに残る `agent_port` / `agent_secret` は移行互換として読み込む。
 
 現時点の正本運用は `config.toml` 更新後に再build/flashする方式。NVS provisioningのみで
 secretを差し替える手順は、NVS partitionを書き換えてもWi-Fiや実機起動に影響しないことを
@@ -106,7 +107,7 @@ Git管理外にしている。
 実機NVSを書き換える場合:
 
 ```bash
-python3 scripts/provision-firmware-rust-nvs.py --write --yes --port /dev/ttyUSB0
+python3 scripts/provision-firmware-nvs.py --write --yes --port /dev/ttyUSB0
 ```
 
 デフォルトは現行partition tableのNVS offset `0x9000`、size `0x6000`。partition tableを
@@ -126,7 +127,7 @@ WSL2から書き込む場合はusbipd-winでUSBデバイスをアタッチして
 Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の設計を移植した
 以下を実装済み:
 
-- **REBOOT / SHUTDOWN**(`src/agent.rs`): m5stack-pc-bridgeへのHMAC-SHA256署名付きPOST。
+- **REBOOT / SHUTDOWN**(`src/bridge_client.rs`): m5stack-pc-bridgeへのHMAC-SHA256署名付きPOST。
   canonical文字列 `POST\n{path}\n{timestamp}\n{nonce}\n{sha256hex(body)}` と
   本文 `{"confirm":true}` 必須をC++版と揃えてある。NTP未同期のクロックでは送信前に弾く。
   画面上はPCがONLINEのときだけボタンが出て、確認画面(CANCEL/OK)を必ず経由する。
@@ -146,7 +147,7 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
 
 - [x] ESP32 / M5Stack Core2へRust firmwareをbuild/flashできる
 - [x] Wi-Fi接続できる
-- [x] STATUS相当の疎通確認ができる(ICMPではなくTCP connectプローブ)
+- [x] STATUS相当の疎通確認ができる(TCP connectプローブ)
 - [x] Core2画面にONLINE/OFFLINEとWi-Fi状態を表示できる
 - [x] Wake-on-LAN Magic Packetを送信できる(実機のタッチ操作から送信を確認)
 - [x] タッチ操作でWAKEできる(実機タップで `touch: x=194 y=194 in_wake_button=true` →

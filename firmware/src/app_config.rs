@@ -17,8 +17,8 @@ pub struct AppConfig {
     pub pc_mac_address: String,
     pub wol_port: u16,
     pub pc_status_addr: String,
-    pub agent_port: u16,
-    pub agent_shared_secret: String,
+    pub bridge_port: u16,
+    pub bridge_shared_secret: String,
     pub pc_ip_address: String,
     pub telegram_bot_token: String,
     pub telegram_allowed_user_id: String,
@@ -50,8 +50,8 @@ impl AppConfig {
             pc_mac_address: build_config::PC_MAC_ADDRESS.to_string(),
             wol_port: build_config::WOL_PORT,
             pc_status_addr: build_config::PC_STATUS_ADDR.to_string(),
-            agent_port: build_config::AGENT_PORT,
-            agent_shared_secret: build_config::AGENT_SHARED_SECRET.to_string(),
+            bridge_port: build_config::BRIDGE_PORT,
+            bridge_shared_secret: build_config::BRIDGE_SHARED_SECRET.to_string(),
             pc_ip_address: build_config::PC_IP_ADDRESS.to_string(),
             telegram_bot_token: build_config::TELEGRAM_BOT_TOKEN.to_string(),
             telegram_allowed_user_id: build_config::TELEGRAM_ALLOWED_USER_ID.to_string(),
@@ -66,8 +66,13 @@ impl AppConfig {
         replace_string(nvs, "pc_mac", &mut self.pc_mac_address);
         replace_number(nvs, "wol_port", &mut self.wol_port);
         replace_string(nvs, "status_addr", &mut self.pc_status_addr);
-        replace_number(nvs, "agent_port", &mut self.agent_port);
-        replace_string(nvs, "agent_secret", &mut self.agent_shared_secret);
+        replace_number_with_fallback(nvs, "bridge_port", "agent_port", &mut self.bridge_port);
+        replace_string_with_fallback(
+            nvs,
+            "bridge_secret",
+            "agent_secret",
+            &mut self.bridge_shared_secret,
+        );
         replace_string(nvs, "pc_ip", &mut self.pc_ip_address);
         replace_string(nvs, "tg_token", &mut self.telegram_bot_token);
         replace_string(nvs, "tg_user_id", &mut self.telegram_allowed_user_id);
@@ -86,11 +91,38 @@ fn replace_string(nvs: &EspNvs<NvsDefault>, key: &str, target: &mut String) {
     }
 }
 
+fn replace_string_with_fallback(
+    nvs: &EspNvs<NvsDefault>,
+    key: &str,
+    fallback_key: &str,
+    target: &mut String,
+) {
+    if let Some(value) = read_string(nvs, key).or_else(|| read_string(nvs, fallback_key)) {
+        *target = value;
+    }
+}
+
 fn replace_number<T>(nvs: &EspNvs<NvsDefault>, key: &str, target: &mut T)
 where
     T: std::str::FromStr,
 {
     if let Some(value) = read_string(nvs, key).and_then(|raw| raw.parse().ok()) {
+        *target = value;
+    }
+}
+
+fn replace_number_with_fallback<T>(
+    nvs: &EspNvs<NvsDefault>,
+    key: &str,
+    fallback_key: &str,
+    target: &mut T,
+) where
+    T: std::str::FromStr,
+{
+    if let Some(value) = read_string(nvs, key)
+        .or_else(|| read_string(nvs, fallback_key))
+        .and_then(|raw| raw.parse().ok())
+    {
         *target = value;
     }
 }

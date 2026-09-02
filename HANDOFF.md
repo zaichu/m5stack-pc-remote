@@ -24,7 +24,7 @@
 - 外部操作の経路:
   - `Smartphone -> Telegram Bot API (outbound HTTPS long polling) -> M5Stack Core2 -> Windows PC`
   - m5stack-pc-bridgeを直接インターネットへ公開しない
-  - `firmware/src/telegram.rs` / `agent.rs` / `net.rs`
+  - `firmware/src/telegram.rs` / `bridge_client.rs` / `net.rs`
   - 設計の正本: `docs/external-access.md`、`docs/cost.md`(コストゼロが絶対条件)
 
 ## 次のセッションへの依頼例

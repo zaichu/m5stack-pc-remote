@@ -66,7 +66,7 @@ if (-not (Test-Path $ConfigPath)) {
     $templateContent = Get-Content -Path $examplePath -Raw -Encoding UTF8
     $generatedContent = $templateContent -replace 'replace-with-a-long-random-shared-secret', $secret
     [System.IO.File]::WriteAllText($ConfigPath, $generatedContent, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "shared_secret を暗号論的乱数(64文字)で新規生成しました。firmware/config.toml の agent_shared_secret を同じ値に必ず合わせてください。"
+    Write-Host "shared_secret を暗号論的乱数(64文字)で新規生成しました。firmware/config.toml の bridge_shared_secret を同じ値に必ず合わせてください。"
 }
 
 # 旧版(Task Schedulerで常駐)からの移行: 同じポートを両方が使おうとすると起動に失敗するため、

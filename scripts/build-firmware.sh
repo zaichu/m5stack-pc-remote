@@ -16,7 +16,7 @@ fi
 
 # 旧方式のsecret入りRustソースが残っていないか、内容を表示せず先に確認する。
 # esp toolchainが無い端末でもこの検査だけは実行する。
-bash "$repo_root/scripts/check-local-firmware-rust-secrets.sh"
+bash "$repo_root/scripts/check-local-firmware-secrets.sh"
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "WARNING: cargo が見つからないため、Rust firmware buildをskipします。"
@@ -65,7 +65,7 @@ if grep -E -q '[0-9]{6,}:[A-Za-z0-9_-]{20,}' "$build_log"; then
 fi
 
 if command -v python3 >/dev/null 2>&1; then
-  if python3 "$repo_root/scripts/check-firmware-rust-build-log-secrets.py" \
+  if python3 "$repo_root/scripts/check-firmware-build-log-secrets.py" \
     "$firmware_dir/config.toml" "$build_log"; then
     :
   else
