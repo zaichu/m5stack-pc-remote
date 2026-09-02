@@ -68,6 +68,34 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 `src/config.rs` が残っていると `scripts/check-local-firmware-rust-secrets.sh`
 (`make firmware-rust-poc-build` から自動実行)がbuildを止める。
 
+起動時はESP-IDF NVSの `m5remote` namespaceを先に読み、存在するkeyだけ実行時設定へ
+反映する。NVSが未設定ならビルド時configをそのまま使うため、既存のbuild/flash運用は
+維持される。
+
+対応するNVS key:
+
+| key | 用途 |
+|---|---|
+| `wifi_ssid` | Wi-Fi SSID |
+| `wifi_password` | Wi-Fi password |
+| `pc_mac_address` | Wake-on-LAN送信先MACアドレス |
+| `wol_port` | Wake-on-LAN送信先port |
+| `pc_status_addr` | STATUS確認先TCP address |
+| `agent_port` | Windows Agent port |
+| `agent_shared_secret` | Windows Agent HMAC secret |
+| `pc_ip_address` | Windows Agent接続先IP |
+| `telegram_bot_token` | Telegram bot token |
+| `telegram_allowed_user_id` | 許可するTelegram user id |
+| `telegram_long_poll_timeout_seconds` | Telegram long polling timeout |
+| `telegram_confirm_ttl_secs` | 再起動/シャットダウン確認TTL |
+
+NVS上では全keyを文字列として保存する。`wol_port`、`agent_port`、
+`telegram_long_poll_timeout_seconds`、`telegram_confirm_ttl_secs` は起動時に数値へ変換する。
+
+現時点の正本運用は `config.toml` 更新後に再build/flashする方式。NVS provisioningのみで
+secretを差し替える手順は、NVS partitionを書き換えてもWi-Fiや実機起動に影響しないことを
+確認してから運用手順に昇格する。
+
 ## 書き込み・モニタ
 
 ```bash

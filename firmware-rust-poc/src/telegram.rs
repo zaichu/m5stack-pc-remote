@@ -18,10 +18,7 @@ use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConne
 use serde_json::{json, Value};
 
 use crate::agent::{self, PowerAction};
-use crate::config::{
-    PC_MAC_ADDRESS, TELEGRAM_ALLOWED_USER_ID, TELEGRAM_BOT_TOKEN, TELEGRAM_CONFIRM_TTL_SECS,
-    TELEGRAM_LONG_POLL_TIMEOUT_SECONDS, WOL_PORT,
-};
+use crate::app_config::AppConfig;
 use crate::net;
 use crate::telegram_root_ca::TELEGRAM_ROOT_CA_PEM;
 
@@ -43,11 +40,11 @@ pub enum State {
 /// タッチUIとTelegramスレッドからの電源操作を直列化するロック。
 pub type PowerLock = Arc<Mutex<()>>;
 
-pub fn is_configured() -> bool {
-    !TELEGRAM_BOT_TOKEN.is_empty()
-        && TELEGRAM_BOT_TOKEN != PLACEHOLDER_TOKEN
-        && !TELEGRAM_ALLOWED_USER_ID.is_empty()
-        && TELEGRAM_ALLOWED_USER_ID != PLACEHOLDER_USER_ID
+pub fn is_configured(config: &AppConfig) -> bool {
+    !config.telegram_bot_token.is_empty()
+        && config.telegram_bot_token != PLACEHOLDER_TOKEN
+        && !config.telegram_allowed_user_id.is_empty()
+        && config.telegram_allowed_user_id != PLACEHOLDER_USER_ID
 }
 
 /// ピン留めしたルートCAをesp-tlsのglobal CA storeへ登録する。
@@ -72,29 +69,34 @@ pub struct Client {
     initial_sync_done: bool,
     pending: Option<Pending>,
     power_lock: PowerLock,
+    config: Arc<AppConfig>,
 }
 
 impl Client {
-    pub fn new(power_lock: PowerLock) -> Self {
+    pub fn new(power_lock: PowerLock, config: Arc<AppConfig>) -> Self {
         Self {
             last_update_id: 0,
             initial_sync_done: false,
             pending: None,
             power_lock,
+            config,
         }
     }
 
     /// URLにはbot tokenが入るため、絶対にログへ出さない。
-    fn api_url(method: &str) -> String {
-        format!("https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}")
+    fn api_url(&self, method: &str) -> String {
+        format!(
+            "https://api.telegram.org/bot{}/{method}",
+            self.config.telegram_bot_token
+        )
     }
 
-    fn http_client() -> Result<HttpClient<EspHttpConnection>, Box<dyn Error>> {
+    fn http_client(&self) -> Result<HttpClient<EspHttpConnection>, Box<dyn Error>> {
         Ok(HttpClient::wrap(EspHttpConnection::new(
             &HttpConfiguration {
                 use_global_ca_store: true,
                 timeout: Some(Duration::from_secs(
-                    TELEGRAM_LONG_POLL_TIMEOUT_SECONDS as u64 + 10,
+                    self.config.telegram_long_poll_timeout_seconds as u64 + 10,
                 )),
                 buffer_size: Some(RESPONSE_BUFFER),
                 ..Default::default()
@@ -103,12 +105,12 @@ impl Client {
     }
 
     /// Bot APIへJSONをPOSTする。URLとbodyはtokenや本文を含み得るためログへ出さない。
-    fn post_json(method: &str, body: &Value) -> Result<(), Box<dyn Error>> {
+    fn post_json(&self, method: &str, body: &Value) -> Result<(), Box<dyn Error>> {
         use esp_idf_svc::io::Write;
 
         let payload = serde_json::to_string(body)?;
-        let url = Self::api_url(method);
-        let mut client = Self::http_client()?;
+        let url = self.api_url(method);
+        let mut client = self.http_client()?;
         let content_length = payload.len().to_string();
         let headers = [
             ("Content-Type", "application/json"),
@@ -125,20 +127,20 @@ impl Client {
         Ok(())
     }
 
-    fn send_reply(chat_id: i64, text: &str) {
-        let _ = Self::post_json("sendMessage", &json!({ "chat_id": chat_id, "text": text }));
+    fn send_reply(&self, chat_id: i64, text: &str) {
+        let _ = self.post_json("sendMessage", &json!({ "chat_id": chat_id, "text": text }));
     }
 
-    /// Sends `text` with one row of two inline buttons. Both callback_data
-    /// values stay well inside Telegram's 1-64 byte limit.
+    /// Telegramの確認ボタンを1行で送る。callback_dataはTelegram上限内に収める。
     fn send_reply_with_confirm_buttons(
+        &self,
         chat_id: i64,
         text: &str,
         confirm_label: &str,
         confirm_data: &str,
         cancel_data: &str,
     ) {
-        let _ = Self::post_json(
+        let _ = self.post_json(
             "sendMessage",
             &json!({
                 "chat_id": chat_id,
@@ -153,14 +155,13 @@ impl Client {
         );
     }
 
-    /// Telegram requires every callback_query to be acknowledged, or the
-    /// tapping client keeps showing a loading spinner.
-    fn answer_callback_query(id: &str, text: &str) {
+    /// callback_queryへ応答し、Telegramクライアント側の読み込み表示を終わらせる。
+    fn answer_callback_query(&self, id: &str, text: &str) {
         let mut body = json!({ "callback_query_id": id });
         if !text.is_empty() {
             body["text"] = json!(text);
         }
-        let _ = Self::post_json("answerCallbackQuery", &body);
+        let _ = self.post_json("answerCallbackQuery", &body);
     }
 
     fn generate_nonce() -> String {
@@ -174,8 +175,7 @@ impl Client {
     }
 
     fn status_text(&self) -> String {
-        let online =
-            net::check_pc_online(crate::config::PC_STATUS_ADDR, Duration::from_millis(800));
+        let online = net::check_pc_online(&self.config.pc_status_addr, Duration::from_millis(800));
         format!(
             "PC: {}\nM5Stack: Rust firmware",
             if online {
@@ -191,7 +191,7 @@ impl Client {
         self.pending = Some(Pending {
             action,
             nonce: nonce.clone(),
-            expires_at: Instant::now() + Duration::from_secs(TELEGRAM_CONFIRM_TTL_SECS),
+            expires_at: Instant::now() + Duration::from_secs(self.config.telegram_confirm_ttl_secs),
         });
 
         let confirm_command = match action {
@@ -204,7 +204,7 @@ impl Client {
         );
         let confirm_data = format!("confirm:{}:{nonce}", action.slug());
         let cancel_data = format!("cancel:{}:{nonce}", action.slug());
-        Self::send_reply_with_confirm_buttons(
+        self.send_reply_with_confirm_buttons(
             chat_id,
             &text,
             action.label_ja(),
@@ -213,9 +213,7 @@ impl Client {
         );
     }
 
-    /// Checks `action`/`supplied` against the pending confirmation and always
-    /// consumes it, so a nonce cannot be replayed or brute-forced across
-    /// attempts regardless of the outcome.
+    /// 確認nonceを検証し、結果に関わらず消費する。
     fn consume_pending(&mut self, action: PowerAction, supplied: &str) -> bool {
         let pending = self.pending.take();
         match pending {
@@ -231,7 +229,7 @@ impl Client {
 
     fn run_power_action(&self, action: PowerAction) -> String {
         let _guard = self.power_lock.lock();
-        match agent::send_command(action) {
+        match agent::send_command(action, self.config.as_ref()) {
             Ok(code) if agent::is_accepted(code) => {
                 format!("{}を受け付けました。", action.label_ja())
             }
@@ -250,19 +248,22 @@ impl Client {
                 action.label_ja(),
                 action.slug()
             );
-            Self::send_reply(chat_id, &reply);
+            self.send_reply(chat_id, &reply);
             return;
         }
         let reply = self.run_power_action(action);
-        Self::send_reply(chat_id, &reply);
+        self.send_reply(chat_id, &reply);
     }
 
     fn dispatch_command(&mut self, chat_id: i64, command: &str, args: &str) {
         match command {
-            "/status" => Self::send_reply(chat_id, &self.status_text()),
+            "/status" => self.send_reply(chat_id, &self.status_text()),
             "/wake" => {
                 let _guard = self.power_lock.lock();
-                let reply = match net::send_wake_on_lan(PC_MAC_ADDRESS, WOL_PORT) {
+                let reply = match net::send_wake_on_lan(
+                    &self.config.pc_mac_address,
+                    self.config.wol_port,
+                ) {
                     Ok(()) => "WOLを送信しました。",
                     Err(e) => {
                         println!("WOL failed: {e}");
@@ -270,7 +271,7 @@ impl Client {
                     }
                 };
                 drop(_guard);
-                Self::send_reply(chat_id, reply);
+                self.send_reply(chat_id, reply);
             }
             "/reboot" => self.request_confirmation(chat_id, PowerAction::Reboot),
             "/shutdown" => self.request_confirmation(chat_id, PowerAction::Shutdown),
@@ -301,15 +302,15 @@ impl Client {
     fn handle_callback_query(&mut self, callback: &Value) {
         let id = callback["id"].as_str().unwrap_or_default().to_string();
         let from_id = callback["from"]["id"].as_i64().unwrap_or_default();
-        if from_id.to_string() != TELEGRAM_ALLOWED_USER_ID {
+        if from_id.to_string() != self.config.telegram_allowed_user_id {
             // 権限がない場合はpending確認を触らず、Telegram側の読み込み状態だけ終わらせる。
-            Self::answer_callback_query(&id, "権限がありません");
+            self.answer_callback_query(&id, "権限がありません");
             return;
         }
 
         let data = callback["data"].as_str().unwrap_or_default();
         let Some((is_confirm, action, nonce)) = Self::parse_callback_data(data) else {
-            Self::answer_callback_query(&id, "無効なボタンです");
+            self.answer_callback_query(&id, "無効なボタンです");
             return;
         };
 
@@ -319,7 +320,7 @@ impl Client {
         let valid = self.consume_pending(action, &nonce);
 
         if !is_confirm {
-            Self::answer_callback_query(
+            self.answer_callback_query(
                 &id,
                 if valid {
                     "キャンセルしました"
@@ -336,34 +337,34 @@ impl Client {
                         action.label_ja()
                     )
                 };
-                Self::send_reply(chat_id, &reply);
+                self.send_reply(chat_id, &reply);
             }
             return;
         }
 
         if !valid {
-            Self::answer_callback_query(&id, "期限切れまたは処理済みです");
+            self.answer_callback_query(&id, "期限切れまたは処理済みです");
             if chat_id != 0 {
                 let reply = format!(
                     "有効な{}確認がありません。期限切れ、使用済み、またはnonce不一致です。\nもう一度 /{} から実行してください。",
                     action.label_ja(),
                     action.slug()
                 );
-                Self::send_reply(chat_id, &reply);
+                self.send_reply(chat_id, &reply);
             }
             return;
         }
 
         let result = self.run_power_action(action);
-        Self::answer_callback_query(&id, &result);
+        self.answer_callback_query(&id, &result);
         if chat_id != 0 {
-            Self::send_reply(chat_id, &result);
+            self.send_reply(chat_id, &result);
         }
     }
 
     fn handle_message(&mut self, message: &Value) {
         let from_id = message["from"]["id"].as_i64().unwrap_or_default();
-        if from_id.to_string() != TELEGRAM_ALLOWED_USER_ID {
+        if from_id.to_string() != self.config.telegram_allowed_user_id {
             // 権限がないユーザーには返信しない。
             return;
         }
@@ -410,11 +411,11 @@ impl Client {
     fn poll_once(&mut self) -> Result<(), Box<dyn Error>> {
         let url = format!(
             "{}?timeout={}&offset={}",
-            Self::api_url("getUpdates"),
-            TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
+            self.api_url("getUpdates"),
+            self.config.telegram_long_poll_timeout_seconds,
             self.last_update_id
         );
-        let mut client = Self::http_client()?;
+        let mut client = self.http_client()?;
         let request = client.request(Method::Get, &url, &[])?;
         let mut response = request.submit()?;
         let status = response.status();

@@ -20,7 +20,7 @@ use esp_idf_svc::io::Write;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
-use crate::config::{AGENT_PORT, AGENT_SHARED_SECRET, PC_IP_ADDRESS};
+use crate::app_config::AppConfig;
 
 /// 2023-11-14より古い時刻は、NTP同期前の時計として扱って拒否する。
 /// Agent側でもtimestampを検証するが、送信前に止めた方が原因が分かりやすい。
@@ -95,7 +95,7 @@ fn nonce() -> String {
 }
 
 /// 署名済みの電源操作を送り、HTTPステータスコードを返す。2xxだけを受理扱いにする。
-pub fn send_command(action: PowerAction) -> Result<u16, Box<dyn Error>> {
+pub fn send_command(action: PowerAction, config: &AppConfig) -> Result<u16, Box<dyn Error>> {
     let path = action.path();
     let timestamp = unix_now()?;
     let request_nonce = nonce();
@@ -104,9 +104,12 @@ pub fn send_command(action: PowerAction) -> Result<u16, Box<dyn Error>> {
         "POST\n{path}\n{timestamp}\n{request_nonce}\n{}",
         sha256_hex(BODY.as_bytes())
     );
-    let signature = hmac_sha256_hex(AGENT_SHARED_SECRET.as_bytes(), &canonical)?;
+    let signature = hmac_sha256_hex(config.agent_shared_secret.as_bytes(), &canonical)?;
 
-    let url = format!("http://{PC_IP_ADDRESS}:{AGENT_PORT}{path}");
+    let url = format!(
+        "http://{}:{}{path}",
+        config.pc_ip_address, config.agent_port
+    );
 
     // 呼び出し元は電源操作ロックを保持している。Agent応答待ちでUIやTelegram処理を
     // 長く止めないよう、短いtimeoutで失敗させる。
