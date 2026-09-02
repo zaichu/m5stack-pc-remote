@@ -53,8 +53,7 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 ## shared_secret の保存とACL
 
 - `install.ps1` は `config.toml`(shared_secretを含む)を `%ProgramData%\m5stack-pc-bridge\config.toml` に配置します。
-- インストール先ディレクトリは `icacls` でAdministratorsとSYSTEMのみに読み書きを制限し、既定の継承ACLを解除します。ローカルの一般ユーザーからは読み取れません。
-- ローカル一般ユーザーがshared_secretを読めると、LAN内からREBOOT/SHUTDOWNを実行できる認証鍵が漏れるため、この制限は必須とみなします。
+- ACLは `%ProgramData%` からの既定の継承のままにしています(判断: 2026-09-03)。当初はAdministrators/SYSTEM限定に`icacls`でロックダウンする方針でしたが、実機で`icacls`が「成功」と報告しつつ実際には権限が適用されず、誰もアクセスできない空のACLになって復旧できなくなる事象が起きたため撤回しました。この結果、shared_secretはこのPCの他のローカルアカウントからも読める状態になります(このPCを他ユーザーと共有していない前提の運用とする)。
 - m5stack-pc-bridgeは、`config.example.toml` のプレースホルダー `shared_secret` と32文字未満の `shared_secret` を起動時に拒否します。
 - nonceの保持TTLは `allowed_skew_seconds` と連動し、timestamp skewを許容している間は同じnonceの再利用を拒否します。
-- `uninstall.ps1` はデフォルトでインストール先ディレクトリを削除しません。削除しない場合はACL制限が維持されている前提のため、手動でACLを緩めないでください。
+- `uninstall.ps1` はデフォルトでインストール先ディレクトリを削除しません。`-RemoveFiles` で明示的に削除できます。

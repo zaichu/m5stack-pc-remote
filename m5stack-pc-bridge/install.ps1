@@ -16,6 +16,14 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administra
     throw "Administrator権限のPowerShellで実行してください。"
 }
 
+# このスクリプトをWSL上のリポジトリ(\\wsl.localhost\...)から実行すると、カレント
+# ディレクトリがUNCパスになる。icacls/sc.exeのような古いコンソールツールは、
+# プロセスの作業ディレクトリがUNCパスだと内部的なワイルドカード解決(/Tなど)で
+# 「アクセスが拒否されました」を返すことがある。スクリプト自身のパス解決は
+# すべて $PSScriptRoot(絶対パス)基準なので、カレントディレクトリをローカルパスへ
+# 変えても他の処理に影響しない。
+Set-Location -Path $env:SystemRoot
+
 if (-not (Test-Path $ExePath)) {
     $fallback = "$PSScriptRoot\target\release\m5stack-pc-bridge.exe"
     if (Test-Path $fallback) {
@@ -47,8 +55,17 @@ if (-not (Test-Path $ConfigPath)) {
         $rng.Dispose()
     }
     $secret = -join ($randomBytes | ForEach-Object { $secretAlphabet[$_ -band 0x3F] })
-    (Get-Content $examplePath) -replace 'replace-with-a-long-random-shared-secret', $secret |
-        Set-Content $ConfigPath
+
+    # Get-Content/Set-Contentの既定文字コードは環境依存で、Windows PowerShell 5.1では
+    # BOM無しUTF-8をシステムのANSIコードページ(日本語Windowsだと大抵Shift-JIS)として
+    # 誤読することがある。config.example.tomlの日本語コメントが文字化けし、生成される
+    # config.tomlがTOMLとして壊れて読み込めなくなる(Serviceが起動直後に落ちる)ため、
+    # 読み込みはUTF-8を明示し、書き込みは.NETのWriteAllTextでBOM無しUTF-8を直接指定する。
+    # (Windows PowerShell 5.1の Set-Content -Encoding UTF8 は常にBOMを付けてしまい、
+    # RustのtomlパーサーがBOM付きファイルを解釈できないため。)
+    $templateContent = Get-Content -Path $examplePath -Raw -Encoding UTF8
+    $generatedContent = $templateContent -replace 'replace-with-a-long-random-shared-secret', $secret
+    [System.IO.File]::WriteAllText($ConfigPath, $generatedContent, (New-Object System.Text.UTF8Encoding($false)))
     Write-Host "shared_secret を暗号論的乱数(64文字)で新規生成しました。firmware/config.toml の agent_shared_secret を同じ値に必ず合わせてください。"
 }
 
@@ -63,33 +80,65 @@ if (Get-ScheduledTask -TaskName $legacyTaskName -ErrorAction SilentlyContinue) {
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-# config.toml に shared_secret が含まれるため、インストール先ディレクトリのACLを
-# Administrators (S-1-5-32-544) と SYSTEM (S-1-5-18) のみに制限する。
-# SIDを使うのはローカライズされたグループ名(例: 独語版Windowsの"Administratoren")に
-# 依存しないようにするため。/T で既存の子ファイル(config.toml, exe)にも再帰適用する。
-icacls $InstallDir /inheritance:r /T | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "ACLの継承解除に失敗しました: $InstallDir"
-}
-icacls $InstallDir /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" /T | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "ACLの設定に失敗しました: $InstallDir"
-}
-Write-Host "インストール先ディレクトリのACLをAdministratorsとSYSTEMのみに制限しました: $InstallDir"
-
 $installedExePath = "$InstallDir\m5stack-pc-bridge.exe"
 
 # Serviceが実行中だとexeを上書きできないため、更新の場合は先に止める。
-if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+# Stop-Serviceはstatus=Stoppedになるまでブロックするが、プロセス側がexeファイル
+# ハンドルを完全に解放するまで短い遅延が入ることがあるため、WaitForStatusで
+# 明示的に待ち、Copy-Itemもリトライして "使用中" による失敗を吸収する。
+$existingServiceBeforeInstall = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($existingServiceBeforeInstall) {
     Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    try {
+        $existingServiceBeforeInstall.WaitForStatus('Stopped', (New-TimeSpan -Seconds 15))
+    } catch {
+        Write-Host "WARNING: Serviceの停止待ちがタイムアウトしました。処理を続行します。"
+    }
 }
 
-Copy-Item -Path $ExePath -Destination $installedExePath -Force
+# SCM経由でない直接実行(開発時のforegroundフォールバック)や、前回の停止漏れで
+# m5stack-pc-bridge.exeがまだ起動したままの場合、上書きコピーが失敗するため
+# 名前が一致するプロセスを先に止めておく。
+Get-Process -Name "m5stack-pc-bridge" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+# 以前はAdministrators/SYSTEM限定にACLをロックダウンしていたが、環境によって
+# icaclsの/grantが「成功」と報告しつつ実際には適用されず、誰もアクセスできない
+# 空のACLになって復旧できなくなる事象が起きたため、ロックダウンはやめ、
+# %ProgramData%からの既定の継承ACLをそのまま使う方針にした(判断: 2026-09-03)。
+# config.tomlのshared_secretは、このPCの他のローカルアカウントからも読める状態に
+# なる(このPCを他ユーザーと共有していない前提)。
+# 既存ファイルが上記の壊れたACLのまま残っている場合に備え、上書き前に継承を
+# 明示的に復元しておく。所有者(Administrators)はDACLが空でもWRITE_DACを常に
+# 持つため、この呼び出し自体が失敗することはない。
+if (Test-Path $installedExePath) {
+    icacls $installedExePath /reset | Out-Null
+}
+
+$copyExeAttempts = 5
+for ($i = 1; $i -le $copyExeAttempts; $i++) {
+    try {
+        Copy-Item -Path $ExePath -Destination $installedExePath -Force
+        break
+    } catch {
+        if ($i -eq $copyExeAttempts) {
+            Write-Host "実行ファイルのコピーに失敗しました。現在のACL/所有者:"
+            icacls $installedExePath
+            throw
+        }
+        Write-Host "実行ファイルが使用中のため再試行します ($i/$copyExeAttempts)..."
+        Start-Sleep -Milliseconds 500
+    }
+}
 # 設定ファイルの既定パスは「実行ファイルと同じディレクトリのconfig.toml」なので、
 # ここでインストール先へ確定させる(Service起動時はCWDが %SystemRoot%\System32 になるため)。
-Copy-Item -Path $ConfigPath -Destination "$InstallDir\config.toml" -Force
+# exeと同様、既存ファイルの壊れたACLに備えて上書き前に継承を復元しておく。
+$installedConfigPath = "$InstallDir\config.toml"
+if (Test-Path $installedConfigPath) {
+    icacls $installedConfigPath /reset | Out-Null
+}
+Copy-Item -Path $ConfigPath -Destination $installedConfigPath -Force
 
-$configContent = Get-Content "$InstallDir\config.toml" -Raw
+$configContent = Get-Content $ConfigPath -Raw
 $port = "18080"
 if ($configContent -match 'bind\s*=\s*"[^:]+:(\d+)"') {
     $port = $Matches[1]

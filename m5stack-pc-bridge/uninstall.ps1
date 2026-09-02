@@ -1,4 +1,4 @@
-# Removes the m5stack-pc-bridge Windows Service, firewall rule, and (optionally)
+﻿# Removes the m5stack-pc-bridge Windows Service, firewall rule, and (optionally)
 # the installed files.
 # Must be run from an elevated (Administrator) PowerShell.
 param(
@@ -14,6 +14,10 @@ $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
     throw "Administrator権限のPowerShellで実行してください。"
 }
+
+# install.ps1と同じ理由(UNCパスのカレントディレクトリがsc.exe等の古いコンソール
+# ツールで問題を起こすことがある)で、ローカルパスへ変えておく。
+Set-Location -Path $env:SystemRoot
 
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     Stop-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -48,5 +52,5 @@ if ($RemoveFiles) {
         Write-Host "Install directory removed: $InstallDir"
     }
 } else {
-    Write-Host "Install directory kept: $InstallDir (-RemoveFiles で削除できます。config.tomlにshared_secretが含まれ、ACLはAdministratorsとSYSTEMのみ読み取り可能に制限されています。手動でACLを変更していないか確認してください)"
+    Write-Host "Install directory kept: $InstallDir (-RemoveFiles で削除できます。config.tomlにshared_secretが含まれます)"
 }
