@@ -66,10 +66,47 @@ fn generate_config() {
         "telegram_confirm_ttl_secs",
         "TELEGRAM_CONFIRM_TTL_SECS",
     );
+    // 定期レポート関連は後から追加した任意keyなので、既存のconfig.tomlでも
+    // ビルドが通るよう既定値を持たせる(requireするとkey追加まで壊れる)。
+    push_i64_const_or_default(
+        &mut out,
+        &table,
+        "daily_report_hour",
+        "DAILY_REPORT_HOUR",
+        DAILY_REPORT_DISABLED,
+    );
+    push_i64_const_or_default(
+        &mut out,
+        &table,
+        "timezone_offset_hours",
+        "TIMEZONE_OFFSET_HOURS",
+        0,
+    );
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
     let dest = Path::new(&out_dir).join("generated_config.rs");
     fs::write(&dest, out).expect("failed to write generated_config.rs");
+}
+
+/// `daily_report_hour` がこの値(0-23の範囲外)なら定期レポートを送らない。
+const DAILY_REPORT_DISABLED: i64 = -1;
+
+/// 任意keyの整数定数。keyが無ければ既定値を使う。
+fn push_i64_const_or_default(
+    out: &mut String,
+    table: &toml::Table,
+    key: &str,
+    const_name: &str,
+    default: i64,
+) {
+    let value = match table.get(key) {
+        Some(v) => v
+            .as_integer()
+            .unwrap_or_else(|| panic!("config.toml: `{key}` は整数で指定してください")),
+        None => default,
+    };
+    out.push_str("#[allow(dead_code)]\n");
+    out.push_str(&format!("pub const {const_name}: i64 = {value};\n\n"));
 }
 
 fn require<'a>(table: &'a toml::Table, key: &str) -> &'a toml::Value {

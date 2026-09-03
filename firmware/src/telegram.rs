@@ -218,6 +218,64 @@ impl Api {
     }
 }
 
+/// 定期レポートの時刻判定を行う間隔。長すぎると送信時刻がずれ、短すぎると
+/// スレッドが無駄に起きる。1分あれば時刻単位の判定には十分。
+const DAILY_REPORT_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// 1日1回の定期レポートの送信判定。
+///
+/// SNTP同期後のwall clockから「ローカル時刻の何日目か」と「何時か」を整数演算で
+/// 求める。tzデータベースを持たない環境なので、設定のUTCオフセットだけを使う。
+struct DailyReport {
+    /// 最後に送った日(UNIX epochからのローカル日数)。同じ日には二度送らない。
+    last_sent_day: Option<i64>,
+}
+
+impl DailyReport {
+    fn new(config: &AppConfig) -> Self {
+        // 起動時に既に送信時刻を過ぎていた場合、その日の分は送らない。
+        // 再起動のたびに同じ日のレポートが届くのを防ぐ。
+        Self {
+            last_sent_day: Self::local_now(config).map(|(day, _hour)| day),
+        }
+    }
+
+    /// (ローカル日数, ローカル時)を返す。NTP未同期なら None。
+    fn local_now(config: &AppConfig) -> Option<(i64, i64)> {
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs() as i64;
+        if unix < net::MIN_VALID_UNIX_TIME as i64 {
+            return None;
+        }
+        let local = unix + config.timezone_offset_hours * 3600;
+        Some((local.div_euclid(86_400), local.rem_euclid(86_400) / 3600))
+    }
+
+    /// 送信すべき時刻ならレポート本文を返す。
+    fn due_report(&mut self, config: &AppConfig) -> Option<String> {
+        if !(0..=23).contains(&config.daily_report_hour) {
+            return None;
+        }
+        let (day, hour) = Self::local_now(config)?;
+        if hour != config.daily_report_hour || self.last_sent_day == Some(day) {
+            return None;
+        }
+        self.last_sent_day = Some(day);
+
+        let online = net::check_pc_online(&config.pc_status_addr, Duration::from_millis(800));
+        Some(format!(
+            "定期レポート\nPC: {}",
+            if online {
+                "オンライン"
+            } else {
+                "オフライン"
+            }
+        ))
+    }
+}
+
 /// UIスレッドからTelegramへ能動的に通知を送るためのハンドル。
 ///
 /// 送信はHTTPSで数秒かかり得るため、UIループを止めないよう専用スレッドへ
@@ -246,14 +304,30 @@ pub fn start_notifier(config: Arc<AppConfig>) -> Option<Notifier> {
     let spawned = std::thread::Builder::new()
         .stack_size(12 * 1024)
         .spawn(move || {
-            while let Ok(text) = rx.recv() {
-                // CA store未設定のまま送るとTLS検証が成立しない。失敗した回は
-                // 送信を諦め、次のメッセージで再試行する。
+            let mut schedule = DailyReport::new(&api.config);
+            loop {
+                // 定期レポートの時刻判定のため、通知が無くても定期的に起きる。
+                let queued = match rx.recv_timeout(DAILY_REPORT_CHECK_INTERVAL) {
+                    Ok(text) => Some(text),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    // 送信側(UIスレッド)が全て落ちた場合は終了する。
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                };
+
+                // CA storeの確認は`due_report()`より前に行う。`due_report()`は
+                // 返した時点で「その日は送信済み」と記録するため、後段で失敗すると
+                // その日のレポートが黙って落ちる。
                 if let Err(e) = ensure_root_ca() {
                     println!("telegram: root CA install failed: {e}");
                     continue;
                 }
-                api.send_message(chat_id, &text);
+
+                if let Some(text) = queued {
+                    api.send_message(chat_id, &text);
+                }
+                if let Some(text) = schedule.due_report(&api.config) {
+                    api.send_message(chat_id, &text);
+                }
             }
         });
 

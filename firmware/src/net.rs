@@ -10,6 +10,10 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
+/// これより古いUNIX時刻はNTP未同期とみなす(2023-11-14相当)。
+/// 署名のtimestampと定期レポートの時刻判定で共通に使う。
+pub const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
+
 /// Wi-Fi stationハンドル。接続維持のためプログラム中で保持し続ける。
 pub struct Wifi {
     inner: BlockingWifi<EspWifi<'static>>,
@@ -139,7 +143,6 @@ pub fn start_sntp() -> Result<esp_idf_svc::sntp::EspSntp<'static>, Box<dyn Error
 /// NTP同期済みに見えるまで待つ。timeoutした場合も呼び出し側は処理を続ける。
 pub fn wait_for_time_sync(timeout: Duration) -> bool {
     use std::time::{SystemTime, UNIX_EPOCH};
-    const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
 
     let start = std::time::Instant::now();
     loop {
