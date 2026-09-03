@@ -3,6 +3,11 @@
 # - ブランチ名に issue 番号（例: refactor/91-bridge...）が含まれること
 # - PR本文またはコミットメッセージに Fixes #N / Refs #N が含まれること
 # ローカル（pre-push）と CI の両方で使う。network が無い環境ではスキップする。
+#
+# 対応するIssueが無いPR(ユーザーからの直接依頼等)向けの逃げ道:
+# - ブランチ名を `no-issue/<slug>` にする(番号チェックの対象外)
+# - PRに `no-issue` labelを付ける(PR作成後、CI側のgh呼び出しでのみ検出できる。
+#   pre-pushの1回目はPRがまだ無いため、まずブランチ名で通すしかない)
 set -euo pipefail
 
 branch="$(git branch --show-current 2>/dev/null || true)"
@@ -10,10 +15,23 @@ if [[ "$branch" == "main" ]]; then
   exit 0
 fi
 
+if [[ "$branch" == no-issue/* ]]; then
+  exit 0
+fi
+
+if command -v gh >/dev/null 2>&1; then
+  if labels_json="$(gh pr view --json labels --jq '.labels[].name' 2>/dev/null)"; then
+    if echo "$labels_json" | grep -qx "no-issue"; then
+      exit 0
+    fi
+  fi
+fi
+
 # ブランチ名から issue 番号を抽出
 issue="$(echo "$branch" | grep -oE '[0-9]+' | head -1 || true)"
 if [[ -z "$issue" ]]; then
   echo "ERROR: ブランチ名 '$branch' に issue 番号が含まれていません。例: refactor/91-bridge-config-validation" >&2
+  echo "  対応するIssueが無い場合は、ブランチ名を 'no-issue/<slug>' にするか、PRに 'no-issue' labelを付けてください。" >&2
   exit 1
 fi
 
