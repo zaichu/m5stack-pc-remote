@@ -39,6 +39,8 @@ m5stack-pc-bridge側の検証:
 
 m5stack-pc-bridgeの待受ポートはプライベートネットワークに限定します。ルーターのポート開放やUPnPによる公開は行いません。
 
+トラブルシュート: `Get-NetFirewallRule -DisplayName "M5StackPcBridge*"` でルールを確認し、`Test-NetConnection -ComputerName 192.168.1.100 -Port 18080` で到達確認します。パブリック/ドメインネットワークではブロックされるため、プライベートプロファイルで接続していることを確認してください。
+
 ## Telegram Bot token / allowed user / confirmation nonce
 
 - `TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` は `firmware/config.toml` に置き、m5stack-pc-bridge用の `BRIDGE_SHARED_SECRET` とは分離する。Telegramや外部中継先には `BRIDGE_SHARED_SECRET` を渡さない。
@@ -55,7 +57,7 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 ## shared_secret の保存とACL
 
 - `install.ps1` は `config.toml`(shared_secretを含む)を `%ProgramData%\m5stack-pc-bridge\config.toml` に配置します。
-- ACLは `%ProgramData%` からの既定の継承のままにしています(判断: 2026-09-03)。当初はAdministrators/SYSTEM限定に`icacls`でロックダウンする方針でしたが、実機で`icacls`が「成功」と報告しつつ実際には権限が適用されず、誰もアクセスできない空のACLになって復旧できなくなる事象が起きたため撤回しました。この結果、shared_secretはこのPCの他のローカルアカウントからも読める状態になります(このPCを他ユーザーと共有していない前提の運用とする)。
+- ACLは `%ProgramData%` からの既定の継承のままにしています(判断: 2026-09-03)。当初はAdministrators/SYSTEM限定に`icacls`でロックダウンする方針でしたが、実機で`icacls`が「成功」と報告しつつ実際には権限が適用されず、誰もアクセスできない空のACLになって復旧できなくなる事象が起きたため撤回しました。この結果、shared_secretはこのPCの他のローカルアカウントからも読める状態になります(このPCを他ユーザーと共有していない前提の運用とする)。共有PCでは、専用ローカルアカウントの分離や BitLocker の有効化、通知専用の別bot token運用（`docs/security.md:69` 参照）で緩和してください。
 - m5stack-pc-bridgeは、`config.example.toml` のプレースホルダー `shared_secret` と32文字未満の `shared_secret` を起動時に拒否します。
 - nonceの保持TTLは `allowed_skew_seconds` と連動し、timestamp skewを許容している間は同じnonceの再利用を拒否します。
 - `uninstall.ps1` はデフォルトでインストール先ディレクトリを削除しません。`-RemoveFiles` で明示的に削除できます。
@@ -77,5 +79,5 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 
 - m5stack-pc-bridgeは、認証成功かつ `confirm: true` の `POST /reboot` / `POST /shutdown` だけを実行ファイル横の `audit.log` へ記録します。
 - 記録項目は時刻、操作種別、`dry_run`、結果のみです。`shared_secret`、署名、nonce、リクエスト本文、Telegram tokenは記録しません。
-- 操作前の監査ログ追記に失敗した場合、reboot/shutdownは実行せず `500` を返します。
+- 操作前の監査ログ追記に失敗した場合、reboot/shutdownは実行せず `500` を返します（fail-closed）。ディスクフルや権限エラーが疑われるため、`audit.log` のサイズと空き容量を確認してください。
 - `audit.log` は約1MBで `audit.log.1` へ1世代ローテーションします。長期保存が必要な場合はWindows側で別途退避してください。

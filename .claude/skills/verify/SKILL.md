@@ -14,16 +14,18 @@ make check
 bash -n scripts/*.sh
 ```
 
-`make check` は以下を実行します。
+`make check` は以下を実行します（`Makefile` が正本）。
 
 - `git diff --check`
-- `bash scripts/check-local-firmware-rust-secrets.sh` (Rust firmwareの旧 `src/config.rs` が残っていれば内容を表示せず停止)
-- `cargo fmt --check`
-- `cargo clippy --all-targets -- -D warnings`
-- `cargo test`
-- `cargo build --release --target x86_64-pc-windows-gnu`(m5stack-pc-bridge)。Windows Service連携(`windows-service` crate)は`cfg(windows)`なので通常のtest/clippyには含まれず、これで実際にコンパイルを確認する。mingw-w64 toolchain / `x86_64-pc-windows-gnu` targetがない環境では警告のみ。
-- `python3 scripts/config_keys.py check`。firmware設定キー対応を `firmware/build.rs` と `firmware/src/app_config.rs` から導出し、`firmware/README.md` のNVS対応表と突合する。
-- `cargo +esp build --release --target xtensa-esp32-espidf`。esp toolchain / `firmware/config.toml` がない環境では警告のみ。
+- `bash scripts/check-staged-secret-paths.sh`
+- `bash scripts/scan-secrets.sh`
+- `python3 scripts/config_keys.py check` — firmware設定キー対応を `firmware/build.rs` と `firmware/src/app_config.rs` から導出し、`firmware/README.md` のNVS対応表と突合する
+- `cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml --check`
+- `cargo clippy --manifest-path m5stack-pc-bridge/Cargo.toml --all-targets -- -D warnings`
+- `cargo test --manifest-path m5stack-pc-bridge/Cargo.toml`（`shared/pc-remote-signing` は `make test` で明示的に実行）
+- `cargo build --manifest-path m5stack-pc-bridge/Cargo.toml --release --target x86_64-pc-windows-gnu`（`cfg(windows)` のため通常の test/clippy には含まれず、mingw 有無で skip）
+- `cargo +esp build --release --target xtensa-esp32-espidf`（esp toolchain / `firmware/config.toml` が無い環境では警告して skip）
+- `bash -n scripts/*.sh`
 
 ## secret パターン検査
 
