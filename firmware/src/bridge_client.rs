@@ -54,7 +54,14 @@ fn nonce() -> String {
 }
 
 /// 署名済みの電源操作を送り、HTTPステータスコードを返す。2xxだけを受理扱いにする。
-pub fn send_command(action: PowerAction, config: &AppConfig) -> Result<u16, Box<dyn Error>> {
+///
+/// `pc_ip_address` はTelegram経由で実行時に変更できるため、`AppConfig` ではなく
+/// 呼び出し側(`settings::RuntimeSettings`)から都度渡してもらう。
+pub fn send_command(
+    action: PowerAction,
+    config: &AppConfig,
+    pc_ip_address: &str,
+) -> Result<u16, Box<dyn Error>> {
     let path = action.path();
     let timestamp = unix_now()?;
     let request_nonce = nonce();
@@ -68,10 +75,7 @@ pub fn send_command(action: PowerAction, config: &AppConfig) -> Result<u16, Box<
         BODY.as_bytes(),
     );
 
-    let url = format!(
-        "http://{}:{}{path}",
-        config.pc_ip_address, config.bridge_port
-    );
+    let url = format!("http://{pc_ip_address}:{}{path}", config.bridge_port);
 
     // 呼び出し元は電源操作ロックを保持している。m5stack-pc-bridge応答待ちでUIやTelegram処理を
     // 長く止めないよう、短いtimeoutで失敗させる。
