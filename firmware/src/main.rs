@@ -360,7 +360,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Screen::Main => {
                         if ui::WAKE_BUTTON.contains(x, y) {
                             println!("WAKE tapped at x={x} y={y}");
-                            let _guard = power_lock.lock().unwrap();
+                            let _guard = telegram::lock_power(&power_lock);
                             // status.lockedはループ先頭で読んだ値なので、判定から
                             // ここまでの間にTelegramの/lockが通っている可能性がある。
                             // 実行直前に共有状態を直接見る。
@@ -406,7 +406,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             ui::draw_main(&mut display, &status)?;
                         } else if ui::OK_BUTTON.contains(x, y) {
                             println!("{} confirmed", action.slug());
-                            let _guard = power_lock.lock().unwrap();
+                            let _guard = telegram::lock_power(&power_lock);
                             // WAKEと同じ理由で、実行直前にロックを再確認する。
                             if operation_lock.is_locked() {
                                 toast_text = Some("Locked (/unlock in Telegram)".to_string());

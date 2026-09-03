@@ -36,6 +36,10 @@ const UNAUTHORIZED_ALERT_INTERVAL: Duration = Duration::from_secs(3600);
 const BACKOFF_MIN: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPONSE_BUFFER: usize = 4096;
+/// getUpdates応答の受け入れ上限。ESP32のヒープは小さく、応答をVecへ無制限に
+/// ためると枯渇し得る。超過分は読まずにエラーとし、backoffへ回す。
+/// 通常のupdateは数KB程度で、上限に当たるのは異常時だけ。
+const RESPONSE_MAX_BYTES: usize = 32 * 1024;
 
 /// UIスレッドへ共有するTelegram状態。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +51,16 @@ pub enum State {
 
 /// タッチUIとTelegramスレッドからの電源操作を直列化するロック。
 pub type PowerLock = Arc<Mutex<()>>;
+
+/// 電源操作の排他を取る。poisonしていても排他は維持する。
+///
+/// `lock()` の `Result` をそのまま束縛すると、poison時(保持中に他スレッドが
+/// panic)にguardを得られないまま処理が進み、排他が外れる。逆に `unwrap()` は
+/// UIループごとpanicさせてしまう。このMutexが守っているのは `()` で、
+/// 壊れた状態を引き継ぐ心配がないため `into_inner()` で回復してよい。
+pub fn lock_power(power_lock: &PowerLock) -> std::sync::MutexGuard<'_, ()> {
+    power_lock.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// 操作ロック。有効な間はWAKE / REBOOT / SHUTDOWNを一切実行しない。
 /// Telegramの `/lock` `/unlock` で切り替え、本体パネル操作にも効く。
@@ -466,7 +480,7 @@ impl Client {
     }
 
     fn run_power_action(&self, action: PowerAction) -> String {
-        let _guard = self.power_lock.lock();
+        let _guard = lock_power(&self.power_lock);
         match bridge_client::send_command(action, self.config.as_ref()) {
             Ok(code) if bridge_client::is_accepted(code) => {
                 format!("{}を受け付けました。", action.label_ja())
@@ -526,7 +540,7 @@ impl Client {
                 self.api.send_message(chat_id, "操作のロックを解除しました。");
             }
             "/wake" => {
-                let _guard = self.power_lock.lock();
+                let _guard = lock_power(&self.power_lock);
                 let reply = match net::send_wake_on_lan(
                     &self.config.pc_mac_address,
                     self.config.wol_port,
@@ -705,6 +719,9 @@ impl Client {
             let read = response.read(&mut chunk)?;
             if read == 0 {
                 break;
+            }
+            if body.len() + read > RESPONSE_MAX_BYTES {
+                return Err(format!("getUpdates response exceeds {RESPONSE_MAX_BYTES} bytes").into());
             }
             body.extend_from_slice(&chunk[..read]);
         }
