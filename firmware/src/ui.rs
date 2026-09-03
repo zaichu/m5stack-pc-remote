@@ -53,7 +53,7 @@ pub struct Button {
 
 impl Button {
     pub fn contains(&self, x: i32, y: i32) -> bool {
-        x >= self.x && x <= self.x + self.w as i32 && y >= self.y && y <= self.y + self.h as i32
+        x >= self.x && x < self.x + self.w as i32 && y >= self.y && y < self.y + self.h as i32
     }
 
     /// 面 + 明るい縁取りで立体感を出す。`enabled`がfalseなら沈んだ配色にする。

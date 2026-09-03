@@ -292,12 +292,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
+        // 電池はWi-Fi非依存で毎回読む。以前はWi-Fi断で表示が凍結していた。
+        if status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
             let previous_online = status.pc_online;
             let previous_battery = status.battery;
             // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
             status.battery = board::read_battery(&mut axp);
+            if !status.wifi_connected {
+                // Wi-Fi断ではPC状態は更新せず、電池表示だけを反映する
+                if matches!(screen, Screen::Main)
+                    && status.battery != previous_battery
+                {
+                    ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                }
+                // 以下のPCオンライン判定と通知はWi-Fi接続時のみ行う
+            } else {
             let now_online =
                 net::check_pc_online(&settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
             if now_online != status.pc_online {
@@ -332,6 +342,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             {
                 ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
             }
+            }
         }
 
         // ロック状態はTelegramスレッド側から変わるので、画面表示へ反映する。
@@ -355,10 +366,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // ロック中はどのボタンも実行しない。REBOOT/SHUTDOWNは確認画面を
                 // 開くだけだが、OKまで進んでから弾くより先に理由を返す。
                 // `status.locked`はループ先頭で読んだ値なので共有状態を直接見る。
-                let power_button_tapped = ui::WAKE_BUTTON.contains(x, y)
-                    || ui::REBOOT_BUTTON.contains(x, y)
-                    || ui::SHUTDOWN_BUTTON.contains(x, y)
-                    || ui::OK_BUTTON.contains(x, y);
+                let power_button_tapped = match screen {
+                    Screen::Main => {
+                        ui::WAKE_BUTTON.contains(x, y)
+                            || ui::REBOOT_BUTTON.contains(x, y)
+                            || ui::SHUTDOWN_BUTTON.contains(x, y)
+                    }
+                    Screen::Confirm(_) => ui::OK_BUTTON.contains(x, y),
+                };
                 if power_button_tapped && operation_lock.is_locked() {
                     reject_locked(
                         &mut display,
