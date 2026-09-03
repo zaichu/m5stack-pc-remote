@@ -76,4 +76,16 @@ else
 fi
 
 cat "$build_log"
-exit "$status"
+
+if [[ "$status" -ne 0 ]]; then
+  exit "$status"
+fi
+
+# partitions.csvの相対パス解決はビルド成功だけでは保証されない
+# (firmware/sdkconfig.defaultsのコメント、Issue #79参照)。ビルド成果物を
+# 直接検証する。
+if command -v python3 >/dev/null 2>&1; then
+  python3 "$repo_root/scripts/verify-partition-table.py"
+else
+  echo "WARNING: python3 が見つからないため、partition table検証をskipします。" >&2
+fi
