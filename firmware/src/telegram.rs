@@ -917,7 +917,7 @@ impl Client {
     pub fn run(mut self, state: Arc<Mutex<State>>) {
         if let Err(e) = ensure_root_ca() {
             println!("telegram: root CA install failed: {e}");
-            *state.lock().unwrap() = State::Error;
+            *state.lock().unwrap_or_else(|e| e.into_inner()) = State::Error;
             return;
         }
 
@@ -925,18 +925,18 @@ impl Client {
         net::wait_for_time_sync(Duration::from_secs(10));
 
         let mut backoff = BACKOFF_MIN;
-        *state.lock().unwrap() = State::Polling;
+        *state.lock().unwrap_or_else(|e| e.into_inner()) = State::Polling;
 
         loop {
             match self.poll_once() {
                 Ok(()) => {
                     backoff = BACKOFF_MIN;
-                    *state.lock().unwrap() = State::Polling;
+                    *state.lock().unwrap_or_else(|e| e.into_inner()) = State::Polling;
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(e) => {
                     println!("telegram poll error: {e}");
-                    *state.lock().unwrap() = State::Error;
+                    *state.lock().unwrap_or_else(|e| e.into_inner()) = State::Error;
                     std::thread::sleep(backoff);
                     backoff = (backoff * 2).min(BACKOFF_MAX);
                 }
