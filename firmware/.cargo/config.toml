@@ -1,5 +1,5 @@
 [env]
-ESP_IDF_SYS_ROOT_CRATE = "m5remote-rust-poc"
+ESP_IDF_SYS_ROOT_CRATE = "m5remote-rust"
 ESP_IDF_SDKCONFIG_DEFAULTS = { value = "sdkconfig.defaults", relative = true }
 
 [target.xtensa-esp32-espidf]
