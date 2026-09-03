@@ -166,6 +166,13 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
   C++版 `telegram_root_ca.h` と同じ証明書)。
   専用スレッドで動かすため、long pollingがタッチUIやSTATUS更新を止めない。
   電源操作はUIスレッドとの間を `Mutex` で直列化する(C++版のFreeRTOSミューテックス相当)。
+- **実行時設定変更**(`src/settings.rs`): `/set_ip <ipv4>` `/set_status_addr <host:port>`
+  `/set_wol_port <n>` `/settings`(現在値表示)`/confirm_set <nonce>`(手入力フォールバック)。
+  対象は `pc_ip_address` / `pc_status_addr` / `wol_port` の3値のみで、REBOOT/SHUTDOWNと
+  同じnonce確認フローを経由する。値の検証(`config-validation` crate)は確認発行前に行い、
+  NVSへの書き込みに成功したときだけ即時反映する。`wifi_ssid` / `telegram_bot_token` などの
+  自己断線し得る値は対象外で、これらはUSB経由のNVS provisioningのまま(#42設計)。
+  `/lock`中はREBOOT/SHUTDOWNと同様に変更系コマンドを拒否する。
 
 ## 現在のスコープと実機確認結果
 
