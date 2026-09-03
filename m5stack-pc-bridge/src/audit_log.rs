@@ -22,9 +22,10 @@ pub fn path() -> PathBuf {
 /// 書く項目は timestamp / action / dry_run / result のみ。shared_secret、signature、
 /// nonce、request body、Telegram tokenは書かない。
 pub fn append(action: &str, dry_run: bool, result: &str) -> std::io::Result<()> {
-    let _guard = AUDIT_LOG_LOCK
-        .lock()
-        .map_err(|_| std::io::Error::other("audit log lock poisoned"))?;
+    // poisonしても排他は維持したまま処理を続ける。この排他が守るのはファイルへの
+    // 追記1回分だけで、panicが残せる最悪の状態は行の途中までの書き込みにとどまる。
+    // 一方でここでエラーを返すと fail-closed により電源操作が以後ずっと通らなくなる。
+    let _guard = AUDIT_LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let path = path();
     rotate_if_too_large(&path)?;
 
