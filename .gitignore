@@ -10,6 +10,9 @@ m5stack-pc-bridge/config.toml
 # Rust generated files.
 target/
 m5stack-pc-bridge/target/
+# shared/はlibraryなのでlockfileはコミットしない。
+# firmware/bridge側から直接cargoを叩くと生成される。
+shared/*/Cargo.lock
 
 # esp-idf / embuild generated files (Rust firmware).
 firmware/.embuild/
