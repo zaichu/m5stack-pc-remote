@@ -2,6 +2,7 @@ mod app_config;
 mod board;
 mod bridge_client;
 mod net;
+mod settings;
 mod telegram;
 mod telegram_root_ca;
 mod ui;
@@ -27,6 +28,7 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use app_config::AppConfig;
 use board::{DisplayPins, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use bridge_client::{PowerAction, PowerActionLabel};
+use settings::RuntimeSettings;
 use ui::{Status, TelegramState};
 
 const STATUS_INTERVAL: Duration = Duration::from_secs(10);
@@ -50,6 +52,11 @@ enum Screen {
 ///
 /// NTP同期完了までは待たない。ここはUIループ上で動くため、STATUS更新やタッチ処理を
 /// 止めないことを優先する。電源操作側で未同期時計は拒否する。
+///
+/// 呼び出し元(main内)がこの数だけの状態を個別に持っているため、素直に引数へ
+/// 並べている。呼び出し箇所は2つだけで、構造体へまとめても本体の複雑さは
+/// 変わらない。
+#[allow(clippy::too_many_arguments)]
 fn start_online_services(
     sntp: &mut Option<esp_idf_svc::sntp::EspSntp<'static>>,
     telegram_started: &mut bool,
@@ -58,6 +65,7 @@ fn start_online_services(
     telegram_state: &Arc<Mutex<telegram::State>>,
     notifier: &mut Option<telegram::Notifier>,
     app_config: &Arc<AppConfig>,
+    settings: &Arc<RuntimeSettings>,
 ) {
     if sntp.is_none() {
         // m5stack-pc-bridgeはtimestampを検証するため、電源操作前に時計同期が必要になる。
@@ -73,7 +81,7 @@ fn start_online_services(
 
     if notifier.is_none() {
         // PC状態変化などをUIループから送るための送信専用スレッド。
-        *notifier = telegram::start_notifier(Arc::clone(app_config));
+        *notifier = telegram::start_notifier(Arc::clone(app_config), Arc::clone(settings));
     }
 
     if !*telegram_started && telegram::is_configured(app_config.as_ref()) {
@@ -81,6 +89,7 @@ fn start_online_services(
             Arc::clone(power_lock),
             operation_lock.clone(),
             Arc::clone(app_config),
+            Arc::clone(settings),
         );
         let state_handle = Arc::clone(telegram_state);
         // long pollingでUIやSTATUS更新を止めないよう、Telegramは専用スレッドで動かす。
@@ -106,6 +115,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let peripherals = Peripherals::take()?;
     let nvs_partition = EspDefaultNvsPartition::take()?;
     let app_config = Arc::new(AppConfig::load(nvs_partition.clone()));
+    // Telegramから実行時に変更できる設定値(pc_ip_address/pc_status_addr/wol_port)。
+    // AppConfigは起動時の読み取り専用スナップショットのまま残す。
+    let settings = Arc::new(RuntimeSettings::new(&app_config, nvs_partition.clone())?);
 
     // AXP192とタッチコントローラーは同じI2Cバスを共有する。
     let i2c = board::new_i2c(
@@ -193,6 +205,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &telegram_state,
             &mut notifier,
             &app_config,
+            &settings,
         );
     }
 
@@ -262,6 +275,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &telegram_state,
                     &mut notifier,
                     &app_config,
+                    &settings,
                 );
             }
         }
@@ -285,7 +299,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
             status.battery = board::read_battery(&mut axp);
             let now_online =
-                net::check_pc_online(&app_config.pc_status_addr, net::STATUS_PROBE_TIMEOUT);
+                net::check_pc_online(&settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
             if now_online != status.pc_online {
                 status.pc_online = now_online;
                 println!("PC status changed: online={}", status.pc_online);
@@ -380,7 +394,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                             let wol_result = net::send_wake_on_lan(
                                 &app_config.pc_mac_address,
-                                app_config.wol_port,
+                                settings.wol_port(),
                             );
                             let (toast, report) = match wol_result {
                                 Ok(()) => {
@@ -426,8 +440,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 std::thread::sleep(TOUCH_POLL_INTERVAL);
                                 continue;
                             }
+                            let pc_ip_address = settings.pc_ip_address();
                             let (toast, report) =
-                                match bridge_client::send_command(action, app_config.as_ref()) {
+                                match bridge_client::send_command(action, app_config.as_ref(), &pc_ip_address) {
                                     Ok(code) if bridge_client::is_accepted(code) => (
                                         "Command accepted".to_string(),
                                         format!("{}を受け付けました。", action.label_ja()),
