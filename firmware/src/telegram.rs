@@ -24,6 +24,7 @@ use pc_remote_signing::AlertThrottle;
 use crate::app_config::AppConfig;
 use crate::bridge_client::{self, PowerAction, PowerActionLabel};
 use crate::net;
+use crate::settings::RuntimeSettings;
 use crate::telegram_root_ca::TELEGRAM_ROOT_CA_PEM;
 
 const PLACEHOLDER_TOKEN: &str = "replace-with-your-telegram-bot-token";
@@ -126,8 +127,79 @@ struct Api {
     config: Arc<AppConfig>,
 }
 
+/// 確認待ちの操作。電源操作(REBOOT/SHUTDOWN)と設定変更(/set_*)の両方が、
+/// 同じ「単回使用nonce付き確認」フローを共有する。同時に保留できるのは1件のみ。
+enum PendingKind {
+    Power(PowerAction),
+    Config(ConfigChange),
+}
+
+impl PendingKind {
+    fn label_ja(&self) -> String {
+        match self {
+            PendingKind::Power(action) => action.label_ja().to_string(),
+            PendingKind::Config(change) => change.label_ja().to_string(),
+        }
+    }
+}
+
+/// callback_dataが指す確認の対象。値そのもの(新しいIP等)はcallback_dataに
+/// 入れない(Codexレビュー方針)。nonceだけで、実際の中身は`pending`側が持つ。
+enum CallbackTarget {
+    Power(PowerAction),
+    Config,
+}
+
+impl CallbackTarget {
+    /// ボタンが指す対象と、実際に保留されている確認が一致するか。
+    /// 一致しないボタン(古いメッセージ、別種類の保留との衝突)は無効として扱う。
+    fn matches(&self, kind: &PendingKind) -> bool {
+        match (self, kind) {
+            (CallbackTarget::Power(a), PendingKind::Power(b)) => a == b,
+            (CallbackTarget::Config, PendingKind::Config(_)) => true,
+            _ => false,
+        }
+    }
+}
+
+/// `/set_ip` 等で保留される設定変更。値は検証済みのものだけがここに入る
+/// (確認nonce発行前に `config_validation` を通す)。
+#[derive(Clone)]
+enum ConfigChange {
+    PcIpAddress(String),
+    PcStatusAddr(String),
+    WolPort(u16),
+}
+
+impl ConfigChange {
+    fn label_ja(&self) -> &'static str {
+        match self {
+            ConfigChange::PcIpAddress(_) => "PC IPアドレス",
+            ConfigChange::PcStatusAddr(_) => "STATUS確認先",
+            ConfigChange::WolPort(_) => "WOLポート",
+        }
+    }
+
+    fn display_value(&self) -> String {
+        match self {
+            ConfigChange::PcIpAddress(value) | ConfigChange::PcStatusAddr(value) => value.clone(),
+            ConfigChange::WolPort(value) => value.to_string(),
+        }
+    }
+
+    /// NVSへ永続化し、成功したときだけ`settings`上の値も更新する
+    /// (`RuntimeSettings`側の書き込み成功後だけメモリを更新する方針をそのまま踏襲)。
+    fn apply(&self, settings: &RuntimeSettings) -> Result<(), esp_idf_sys::EspError> {
+        match self {
+            ConfigChange::PcIpAddress(value) => settings.set_pc_ip_address(value.clone()),
+            ConfigChange::PcStatusAddr(value) => settings.set_pc_status_addr(value.clone()),
+            ConfigChange::WolPort(value) => settings.set_wol_port(*value),
+        }
+    }
+}
+
 struct Pending {
-    action: PowerAction,
+    kind: PendingKind,
     nonce: String,
     expires_at: Instant,
 }
@@ -139,6 +211,7 @@ pub struct Client {
     power_lock: PowerLock,
     operation_lock: OperationLock,
     config: Arc<AppConfig>,
+    settings: Arc<RuntimeSettings>,
     api: Api,
     /// 未許可アクセスの検知数と、直近でアラートを送った時刻。
     unauthorized_alerts: AlertThrottle,
@@ -282,7 +355,7 @@ impl DailyReport {
     ///
     /// ここでは「送信済み」にしない。送信に失敗した日を既済にしてしまうと、
     /// その日のレポートが黙って落ちる。成功後に`mark_sent()`を呼ぶこと。
-    fn due_report(&self, config: &AppConfig) -> Option<(i64, String)> {
+    fn due_report(&self, config: &AppConfig, settings: &RuntimeSettings) -> Option<(i64, String)> {
         if !(0..=23).contains(&config.daily_report_hour) {
             return None;
         }
@@ -291,7 +364,8 @@ impl DailyReport {
             return None;
         }
 
-        let online = net::check_pc_online(&config.pc_status_addr, net::STATUS_PROBE_TIMEOUT);
+        let online =
+            net::check_pc_online(&settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
         Some((
             day,
             format!("定期レポート\nPC: {}", net::pc_online_label_ja(online)),
@@ -321,7 +395,7 @@ impl Notifier {
 
 /// 通知送信スレッドを起動し、UIスレッド用のハンドルを返す。
 /// Telegram未設定、または許可ユーザーIDがchat_idとして使えない場合はNone。
-pub fn start_notifier(config: Arc<AppConfig>) -> Option<Notifier> {
+pub fn start_notifier(config: Arc<AppConfig>, settings: Arc<RuntimeSettings>) -> Option<Notifier> {
     if !is_configured(config.as_ref()) {
         return None;
     }
@@ -355,7 +429,7 @@ pub fn start_notifier(config: Arc<AppConfig>) -> Option<Notifier> {
                 }
                 // 送信できた日だけ既済にする。失敗した場合は次のループで
                 // 再送する(送信時刻のうちは何度でも試す)。
-                if let Some((day, text)) = schedule.due_report(&api.config) {
+                if let Some((day, text)) = schedule.due_report(&api.config, &settings) {
                     if api.send_message(chat_id, &text) {
                         schedule.mark_sent(day);
                     }
@@ -377,6 +451,7 @@ impl Client {
         power_lock: PowerLock,
         operation_lock: OperationLock,
         config: Arc<AppConfig>,
+        settings: Arc<RuntimeSettings>,
     ) -> Self {
         Self {
             last_update_id: 0,
@@ -388,6 +463,7 @@ impl Client {
                 config: Arc::clone(&config),
             },
             config,
+            settings,
             // 抑制ポリシー(閾値・間隔)はbridgeと共有する。
             unauthorized_alerts: AlertThrottle::default(),
         }
@@ -424,7 +500,8 @@ impl Client {
     }
 
     fn status_text(&self) -> String {
-        let online = net::check_pc_online(&self.config.pc_status_addr, net::STATUS_PROBE_TIMEOUT);
+        let online =
+            net::check_pc_online(&self.settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
         format!(
             "PC: {}\n操作: {}\nM5Stack: Rust firmware",
             net::pc_online_label_ja(online),
@@ -436,10 +513,19 @@ impl Client {
         )
     }
 
+    /// `/settings` の応答。現在値と変更コマンドの案内を返す。
+    fn settings_text(&self) -> String {
+        let (pc_ip_address, pc_status_addr, wol_port) = self.settings.snapshot();
+        format!(
+            "現在の設定:\nPC IPアドレス: {pc_ip_address}\nSTATUS確認先: {pc_status_addr}\n\
+             WOLポート: {wol_port}\n\n変更するには /set_ip /set_status_addr /set_wol_port を使ってください。"
+        )
+    }
+
     fn request_confirmation(&mut self, chat_id: i64, action: PowerAction) {
         let nonce = Self::generate_nonce();
         self.pending = Some(Pending {
-            action,
+            kind: PendingKind::Power(action),
             nonce: nonce.clone(),
             expires_at: Instant::now() + Duration::from_secs(self.config.telegram_confirm_ttl_secs),
         });
@@ -463,23 +549,43 @@ impl Client {
         );
     }
 
-    /// 確認nonceを検証し、結果に関わらず消費する。
-    fn consume_pending(&mut self, action: PowerAction, supplied: &str) -> bool {
-        let pending = self.pending.take();
-        match pending {
-            Some(p) => {
-                p.action == action
-                    && !supplied.is_empty()
-                    && p.nonce == supplied
-                    && Instant::now() < p.expires_at
-            }
-            None => false,
+    /// 検証済みの設定変更に対して確認を発行する。`current_value` は変更前の値
+    /// (確認メッセージの「現在」欄に出すだけで、検証や書き込みには使わない)。
+    fn request_config_confirmation(&mut self, chat_id: i64, change: ConfigChange, current_value: String) {
+        let nonce = Self::generate_nonce();
+        let label = change.label_ja();
+        let new_value = change.display_value();
+        self.pending = Some(Pending {
+            kind: PendingKind::Config(change),
+            nonce: nonce.clone(),
+            expires_at: Instant::now() + Duration::from_secs(self.config.telegram_confirm_ttl_secs),
+        });
+
+        let text = format!(
+            "{label}を変更しますか？\n現在: {current_value}\n変更後: {new_value}\n\
+             ボタンを押すと反映します。\n手入力する場合: /confirm_set {nonce}"
+        );
+        let confirm_data = format!("confirm:config:{nonce}");
+        let cancel_data = format!("cancel:config:{nonce}");
+        self.api
+            .send_message_with_confirm_buttons(chat_id, &text, label, &confirm_data, &cancel_data);
+    }
+
+    /// 確認nonceを検証し、結果に関わらず消費する(再利用させないため)。
+    /// 有効ならどの操作に対する確認だったかを返す。
+    fn consume_pending(&mut self, supplied: &str) -> Option<PendingKind> {
+        let pending = self.pending.take()?;
+        if !supplied.is_empty() && pending.nonce == supplied && Instant::now() < pending.expires_at {
+            Some(pending.kind)
+        } else {
+            None
         }
     }
 
     fn run_power_action(&self, action: PowerAction) -> String {
         let _guard = lock_power(&self.power_lock);
-        match bridge_client::send_command(action, self.config.as_ref()) {
+        let pc_ip_address = self.settings.pc_ip_address();
+        match bridge_client::send_command(action, self.config.as_ref(), &pc_ip_address) {
             Ok(code) if bridge_client::is_accepted(code) => {
                 format!("{}を受け付けました。", action.label_ja())
             }
@@ -491,31 +597,65 @@ impl Client {
         }
     }
 
+    /// 検証・確認済みの設定変更をNVSへ反映する。
+    fn apply_config_change(&self, change: &ConfigChange) -> String {
+        match change.apply(&self.settings) {
+            Ok(()) => format!(
+                "{}を変更しました。\n新しい値: {}",
+                change.label_ja(),
+                change.display_value()
+            ),
+            Err(e) => {
+                println!("settings: failed to persist {}: {e}", change.label_ja());
+                format!(
+                    "{}の保存に失敗しました。設定は変更されていません。",
+                    change.label_ja()
+                )
+            }
+        }
+    }
+
     fn handle_confirmation(&mut self, chat_id: i64, action: PowerAction, supplied: &str) {
-        if !self.consume_pending(action, supplied) {
-            let reply = format!(
+        let reply = match self.consume_pending(supplied) {
+            Some(PendingKind::Power(pending_action)) if pending_action == action => {
+                self.run_power_action(action)
+            }
+            _ => format!(
                 "有効な{}確認がありません。期限切れ、使用済み、またはnonce不一致です。\nもう一度 /{} から実行してください。",
                 action.label_ja(),
                 action.slug()
-            );
-            self.api.send_message(chat_id, &reply);
-            return;
-        }
-        let reply = self.run_power_action(action);
+            ),
+        };
+        self.api.send_message(chat_id, &reply);
+    }
+
+    /// `/confirm_set <nonce>` の手入力フォールバック。ボタンが押せない場合に使う。
+    fn handle_config_confirmation(&mut self, chat_id: i64, supplied: &str) {
+        let reply = match self.consume_pending(supplied) {
+            Some(PendingKind::Config(change)) => self.apply_config_change(&change),
+            _ => "有効な設定変更確認がありません。期限切れ、使用済み、または\
+                  nonce不一致です。\nもう一度 /set_ip 等から実行してください。"
+                .to_string(),
+        };
         self.api.send_message(chat_id, &reply);
     }
 
     fn dispatch_command(&mut self, chat_id: i64, command: &str, args: &str) {
         // 操作系コマンドはロック中に一切実行しない。ロックの切り替えと状態確認は
-        // ロック中でも受け付ける(そうしないと解除できない)。
-        const POWER_COMMANDS: [&str; 5] = [
+        // ロック中でも受け付ける(そうしないと解除できない)。`/settings`は
+        // `/status`と同枠の参照系として、ロック中でも読める。
+        const LOCKED_COMMANDS: [&str; 9] = [
             "/wake",
             "/reboot",
             "/shutdown",
             "/confirm_reboot",
             "/confirm_shutdown",
+            "/set_ip",
+            "/set_status_addr",
+            "/set_wol_port",
+            "/confirm_set",
         ];
-        if self.operation_lock.is_locked() && POWER_COMMANDS.contains(&command) {
+        if self.operation_lock.is_locked() && LOCKED_COMMANDS.contains(&command) {
             self.api.send_message(
                 chat_id,
                 "操作はロック中です。/unlock で解除してから実行してください。",
@@ -526,6 +666,9 @@ impl Client {
         match command {
             "/status" => {
                 self.api.send_message(chat_id, &self.status_text());
+            }
+            "/settings" => {
+                self.api.send_message(chat_id, &self.settings_text());
             }
             "/lock" => {
                 self.operation_lock.set(true);
@@ -542,10 +685,8 @@ impl Client {
             }
             "/wake" => {
                 let _guard = lock_power(&self.power_lock);
-                let reply = match net::send_wake_on_lan(
-                    &self.config.pc_mac_address,
-                    self.config.wol_port,
-                ) {
+                let wol_port = self.settings.wol_port();
+                let reply = match net::send_wake_on_lan(&self.config.pc_mac_address, wol_port) {
                     Ok(()) => "WOLを送信しました。",
                     Err(e) => {
                         println!("WOL failed: {e}");
@@ -559,16 +700,44 @@ impl Client {
             "/shutdown" => self.request_confirmation(chat_id, PowerAction::Shutdown),
             "/confirm_reboot" => self.handle_confirmation(chat_id, PowerAction::Reboot, args),
             "/confirm_shutdown" => self.handle_confirmation(chat_id, PowerAction::Shutdown, args),
+            "/set_ip" => match config_validation::validate_ipv4(args) {
+                Ok(value) => {
+                    let current = self.settings.pc_ip_address();
+                    self.request_config_confirmation(chat_id, ConfigChange::PcIpAddress(value), current);
+                }
+                Err(message) => {
+                    self.api.send_message(chat_id, &message);
+                }
+            },
+            "/set_status_addr" => match config_validation::validate_status_addr(args) {
+                Ok(value) => {
+                    let current = self.settings.pc_status_addr();
+                    self.request_config_confirmation(chat_id, ConfigChange::PcStatusAddr(value), current);
+                }
+                Err(message) => {
+                    self.api.send_message(chat_id, &message);
+                }
+            },
+            "/set_wol_port" => match config_validation::validate_wol_port(args) {
+                Ok(port) => {
+                    let current = self.settings.wol_port().to_string();
+                    self.request_config_confirmation(chat_id, ConfigChange::WolPort(port), current);
+                }
+                Err(message) => {
+                    self.api.send_message(chat_id, &message);
+                }
+            },
+            "/confirm_set" => self.handle_config_confirmation(chat_id, args),
             // 未知のコマンドは静かに無視する。
             _ => {}
         }
     }
 
     /// callback_dataを解析する。形式外、古いボタン、別bot由来の値は拒否する。
-    fn parse_callback_data(data: &str) -> Option<(bool, PowerAction, String)> {
+    fn parse_callback_data(data: &str) -> Option<(bool, CallbackTarget, String)> {
         let mut parts = data.splitn(3, ':');
         let kind = parts.next()?;
-        let slug = parts.next()?;
+        let target = parts.next()?;
         let nonce = parts.next()?;
         if nonce.is_empty() {
             return None;
@@ -578,7 +747,12 @@ impl Client {
             "cancel" => false,
             _ => return None,
         };
-        Some((is_confirm, PowerAction::from_slug(slug)?, nonce.to_string()))
+        let target = if target == "config" {
+            CallbackTarget::Config
+        } else {
+            CallbackTarget::Power(PowerAction::from_slug(target)?)
+        };
+        Some((is_confirm, target, nonce.to_string()))
     }
 
     fn handle_callback_query(&mut self, callback: &Value) {
@@ -598,7 +772,7 @@ impl Client {
         }
 
         let data = callback["data"].as_str().unwrap_or_default();
-        let Some((is_confirm, action, nonce)) = Self::parse_callback_data(data) else {
+        let Some((is_confirm, target, nonce)) = Self::parse_callback_data(data) else {
             self.api.answer_callback_query(&id, "無効なボタンです");
             return;
         };
@@ -606,46 +780,47 @@ impl Client {
         let chat_id = callback["message"]["chat"]["id"]
             .as_i64()
             .unwrap_or_default();
-        let valid = self.consume_pending(action, &nonce);
+        // nonceが一致しても、ボタンが指す対象(target)とpendingの中身が一致しない
+        // 限り有効扱いにしない(古いボタンや別種類の保留との取り違えを防ぐ)。
+        let valid = self.consume_pending(&nonce).filter(|kind| target.matches(kind));
 
         if !is_confirm {
             self.api.answer_callback_query(
                 &id,
-                if valid {
+                if valid.is_some() {
                     "キャンセルしました"
                 } else {
                     "処理済みです"
                 },
             );
             if chat_id != 0 {
-                let reply = if valid {
-                    format!("{}をキャンセルしました。", action.label_ja())
-                } else {
-                    format!(
-                        "有効な{}確認がありません。期限切れ、使用済み、またはnonce不一致です。",
-                        action.label_ja()
-                    )
+                let reply = match &valid {
+                    Some(kind) => format!("{}をキャンセルしました。", kind.label_ja()),
+                    None => "有効な確認がありません。期限切れ、使用済み、またはnonce不一致です。"
+                        .to_string(),
                 };
                 self.api.send_message(chat_id, &reply);
             }
             return;
         }
 
-        if !valid {
+        let Some(kind) = valid else {
             self.api
                 .answer_callback_query(&id, "期限切れまたは処理済みです");
             if chat_id != 0 {
-                let reply = format!(
-                    "有効な{}確認がありません。期限切れ、使用済み、またはnonce不一致です。\nもう一度 /{} から実行してください。",
-                    action.label_ja(),
-                    action.slug()
+                self.api.send_message(
+                    chat_id,
+                    "有効な確認がありません。期限切れ、使用済み、またはnonce不一致です。\
+                     \nもう一度実行してください。",
                 );
-                self.api.send_message(chat_id, &reply);
             }
             return;
-        }
+        };
 
-        let result = self.run_power_action(action);
+        let result = match kind {
+            PendingKind::Power(action) => self.run_power_action(action),
+            PendingKind::Config(change) => self.apply_config_change(&change),
+        };
         self.api.answer_callback_query(&id, &result);
         if chat_id != 0 {
             self.api.send_message(chat_id, &result);

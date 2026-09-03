@@ -7,7 +7,8 @@ use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 
 use crate::build_config;
 
-const NAMESPACE: &str = "m5remote";
+/// `settings` moduleも同じNVS namespaceへ書き込むため、ここで公開する。
+pub(crate) const NAMESPACE: &str = "m5remote";
 const MAX_STRING_LEN: usize = 512;
 
 #[derive(Clone)]
