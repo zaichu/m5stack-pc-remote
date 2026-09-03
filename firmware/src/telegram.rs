@@ -189,13 +189,25 @@ impl Api {
         let response = request.submit()?;
         let status = response.status();
         if !(200..300).contains(&status) {
-            println!("telegram {method} failed: {status}");
+            // 呼び出し側が再送要否を判断できるよう、失敗はエラーとして返す。
+            return Err(format!("telegram {method} failed: {status}").into());
         }
         Ok(())
     }
 
-    fn send_message(&self, chat_id: i64, text: &str) {
-        let _ = self.post_json("sendMessage", &json!({ "chat_id": chat_id, "text": text }));
+    /// 送信できたらtrue。定期レポートのように「落としたくない」通知が
+    /// 再送を判断できるようにする。
+    ///
+    /// エラー文言にURL(bot tokenを含む)は入らない。`post_json`が組み立てる
+    /// エラーはmethod名とHTTPステータスのみ。
+    fn send_message(&self, chat_id: i64, text: &str) -> bool {
+        match self.post_json("sendMessage", &json!({ "chat_id": chat_id, "text": text })) {
+            Ok(()) => true,
+            Err(e) => {
+                println!("telegram: sendMessage failed: {e}");
+                false
+            }
+        }
     }
 
     /// Telegramの確認ボタンを1行で送る。callback_dataはTelegram上限内に収める。
@@ -271,8 +283,11 @@ impl DailyReport {
         Some((local.div_euclid(86_400), local.rem_euclid(86_400) / 3600))
     }
 
-    /// 送信すべき時刻ならレポート本文を返す。
-    fn due_report(&mut self, config: &AppConfig) -> Option<String> {
+    /// 送信すべき時刻なら(対象日, レポート本文)を返す。
+    ///
+    /// ここでは「送信済み」にしない。送信に失敗した日を既済にしてしまうと、
+    /// その日のレポートが黙って落ちる。成功後に`mark_sent()`を呼ぶこと。
+    fn due_report(&self, config: &AppConfig) -> Option<(i64, String)> {
         if !(0..=23).contains(&config.daily_report_hour) {
             return None;
         }
@@ -280,17 +295,24 @@ impl DailyReport {
         if hour != config.daily_report_hour || self.last_sent_day == Some(day) {
             return None;
         }
-        self.last_sent_day = Some(day);
 
         let online = net::check_pc_online(&config.pc_status_addr, Duration::from_millis(800));
-        Some(format!(
-            "定期レポート\nPC: {}",
-            if online {
-                "オンライン"
-            } else {
-                "オフライン"
-            }
+        Some((
+            day,
+            format!(
+                "定期レポート\nPC: {}",
+                if online {
+                    "オンライン"
+                } else {
+                    "オフライン"
+                }
+            ),
         ))
+    }
+
+    /// 送信に成功した日を記録する。以降その日は送らない。
+    fn mark_sent(&mut self, day: i64) {
+        self.last_sent_day = Some(day);
     }
 }
 
@@ -343,8 +365,12 @@ pub fn start_notifier(config: Arc<AppConfig>) -> Option<Notifier> {
                 if let Some(text) = queued {
                     api.send_message(chat_id, &text);
                 }
-                if let Some(text) = schedule.due_report(&api.config) {
-                    api.send_message(chat_id, &text);
+                // 送信できた日だけ既済にする。失敗した場合は次のループで
+                // 再送する(送信時刻のうちは何度でも試す)。
+                if let Some((day, text)) = schedule.due_report(&api.config) {
+                    if api.send_message(chat_id, &text) {
+                        schedule.mark_sent(day);
+                    }
                 }
             }
         });
@@ -526,7 +552,9 @@ impl Client {
         }
 
         match command {
-            "/status" => self.api.send_message(chat_id, &self.status_text()),
+            "/status" => {
+                self.api.send_message(chat_id, &self.status_text());
+            }
             "/lock" => {
                 self.operation_lock.set(true);
                 // 保留中の確認も無効化しておく(ロック直前に発行された確認を
