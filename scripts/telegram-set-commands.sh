@@ -23,8 +23,16 @@ commands='[
   {"command":"status","description":"PC状態を表示"},
   {"command":"wake","description":"PCへWake-on-LANを送信"},
   {"command":"reboot","description":"確認後にPCを再起動"},
-  {"command":"shutdown","description":"確認後にPCをシャットダウン"}
+  {"command":"shutdown","description":"確認後にPCをシャットダウン"},
+  {"command":"lock","description":"電源操作を一時的にロック"},
+  {"command":"unlock","description":"電源操作のロックを解除"},
+  {"command":"settings","description":"実行時設定の現在値を表示"},
+  {"command":"set_ip","description":"PC IPアドレスを変更(要確認)"},
+  {"command":"set_status_addr","description":"STATUS確認先を変更(要確認)"},
+  {"command":"set_wol_port","description":"WOLポートを変更(要確認)"}
 ]'
+# /confirm_reboot /confirm_shutdown /confirm_set はnonce引数が必須の手入力
+# フォールバックであり、タップで実行する類のコマンドではないため一覧には含めない。
 
 response="$(
   curl -fsS -X POST "https://api.telegram.org/bot${token}/setMyCommands" \
