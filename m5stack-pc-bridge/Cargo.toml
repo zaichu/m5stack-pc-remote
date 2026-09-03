@@ -6,24 +6,24 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
-axum = "0.7"
+axum = "0.8"
 clap = { version = "4.5", features = ["derive", "env"] }
 dashmap = "6.1"
 # firmware/と共有するHMAC署名wire protocol実装。
 pc-remote-signing = { path = "../shared/pc-remote-signing" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 time = { version = "0.3", features = ["serde", "formatting"] }
 tokio = { version = "1.39", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
-toml = "0.8"
+toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Windows Serviceとして動かすためのSCM連携。ホスト(Linux/CI)側のbuild/test/clippyは
 # このcrateを引き込まないので、cfg(windows)以外の環境には影響しない。
 [target.'cfg(windows)'.dependencies]
-windows-service = "0.7"
+windows-service = "0.8"
 
 [dev-dependencies]
 tempfile = "3.10"
