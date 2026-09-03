@@ -19,6 +19,7 @@ tokio = { version = "1.39", features = ["macros", "net", "rt-multi-thread", "sig
 toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq = { version = "3.4", default-features = false, features = ["rustls", "json"] }
 
 # Windows Serviceとして動かすためのSCM連携。ホスト(Linux/CI)側のbuild/test/clippyは
 # このcrateを引き込まないので、cfg(windows)以外の環境には影響しない。

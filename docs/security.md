@@ -60,6 +60,18 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 - nonceの保持TTLは `allowed_skew_seconds` と連動し、timestamp skewを許容している間は同じnonceの再利用を拒否します。
 - `uninstall.ps1` はデフォルトでインストール先ディレクトリを削除しません。`-RemoveFiles` で明示的に削除できます。
 
+## 認証失敗アラートとbridge側のbot token
+
+- m5stack-pc-bridgeは、HTTP認証に失敗したリクエストが3件たまると、Telegramへアラートを送ります(最短送信間隔1時間)。`config.toml` の `telegram_bot_token` と `telegram_chat_id` が両方設定されているときだけ有効で、未設定なら通知しないだけです。
+- 通知本文には件数だけを書き、送信元IP、ヘッダー値、リクエスト本文は含めません。攻撃者が自由に決められる文字列を自分のチャットへ流すと、なりすましや誘導の材料になるためです。
+- 送信URLにはbot tokenが含まれるため、ログにもエラーメッセージにもURLを出しません。
+- **bot tokenをWindows側にも置くことを許容する判断(2026-09-03)**。firmware側と同じtokenを `%ProgramData%\m5stack-pc-bridge\config.toml` に置きます。理由は次のとおりです。
+  - このファイルには既に `shared_secret` があります。これは電源操作を直接authorizeする、bot tokenより強い鍵です。
+  - このファイルを読める攻撃者は既にそのPC上におり、その時点で `shutdown.exe` を直接実行できます。PC制御という観点で新たな能力は増えません。
+  - 同じbot tokenは既にM5Stack側のflashに平文で保存されており、実機はflash encryption / secure bootとも無効(`espflash board-info` が `Security features: None`)です。USB接続できれば吸い出せるため、OSログインの後ろにあるWindows PCの方がむしろ保護は強くなります。
+  - 増える能力は「Telegramの会話を読める / botとしてメッセージを送れる」の1点です。これはPC制御とは別方向の被害(本人へのフィッシング、コマンドの盗み見)であり、blast radiusを下げたい場合は通知専用の別botを作ってそのtokenだけを置く運用にできます。
+- bridgeのTLS検証はrustlsの標準ルート証明書集合(webpki-roots)を使います。firmwareのようなルートCAピン留めはしていません。firmwareは証明書集合を持てない組み込み環境のため1枚に固定していますが、Windows側は通常のルート集合で検証するほうがCAローテーション時に壊れにくいためです。
+
 ## 監査ログ
 
 - m5stack-pc-bridgeは、認証成功かつ `confirm: true` の `POST /reboot` / `POST /shutdown` だけを実行ファイル横の `audit.log` へ記録します。
