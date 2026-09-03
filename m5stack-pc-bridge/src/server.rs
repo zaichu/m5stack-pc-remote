@@ -152,7 +152,10 @@ async fn command(
                 }
             }
         }
-        Err(err) => (StatusCode::UNAUTHORIZED, err.to_string()).into_response(),
+        Err(err) => {
+            tracing::warn!("power command authentication failed: {err}");
+            (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+        }
     }
 }
 

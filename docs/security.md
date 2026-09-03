@@ -33,6 +33,7 @@ m5stack-pc-bridge側の検証:
 - 許可されたpathだけを実行すること。
 - `POST /reboot` と `POST /shutdown` は、署名済みJSON本文の `confirm: true` を必須にすること。
 - request bodyは128byteに制限し、`confirm` 以外のJSON fieldを拒否すること。
+- 認証失敗時のHTTP response bodyは理由を出さず、固定文言だけを返すこと。詳細理由はsecretを含まない内部ログにだけ残す。
 
 ## Windows Firewall
 
