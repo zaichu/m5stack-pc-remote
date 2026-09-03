@@ -8,7 +8,7 @@
 //! ため、全体のリスクはほとんど変わらないと判断して許容している。詳細は
 //! `docs/security.md` と Issue #43 を参照。
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::app_config::AgentConfig;
@@ -73,17 +73,38 @@ impl AlertNotifier {
     /// 認証失敗を記録し、必要ならバックグラウンドでアラートを送る。
     ///
     /// 送信はHTTPSで数秒かかり得るため、リクエスト処理スレッドでは待たない。
-    pub fn record_auth_failure(&self, notifier: std::sync::Arc<Self>) {
+    /// 送信タスクへ渡すため`Arc<Self>`のメソッドにしている。
+    pub fn record_auth_failure(self: &Arc<Self>) {
         let Some(count) = self.record() else {
             return;
         };
 
+        let notifier = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             if let Err(e) = notifier.send_alert(count) {
-                // 失敗理由にURL(tokenを含む)を出さない。
-                tracing::warn!("failed to send auth failure alert: {e}");
+                tracing::warn!(
+                    "failed to send auth failure alert: {}",
+                    notifier.redact(&e.to_string())
+                );
             }
         });
+    }
+
+    /// エラー文字列からbot tokenを伏せる。
+    ///
+    /// `ureq::Error`は変種によってURIをそのまま含む(`BadUri`など)。URLには
+    /// bot tokenが入るため、ログへ出す前に必ず通す。
+    fn redact(&self, message: &str) -> String {
+        message.replace(&self.bot_token, "[REDACTED]")
+    }
+
+    #[cfg(test)]
+    fn for_test(bot_token: &str) -> Self {
+        Self {
+            bot_token: bot_token.to_string(),
+            chat_id: 1,
+            state: Mutex::new(AlertState::default()),
+        }
     }
 
     fn send_alert(&self, count: u32) -> Result<(), ureq::Error> {
@@ -93,7 +114,7 @@ impl AlertNotifier {
             "m5stack-pc-bridge: 認証に失敗したリクエストを{count}件検知しました。\n電源操作は実行されていません。"
         );
 
-        // URLにbot tokenが入るため、エラーメッセージにもログにも出さない。
+        // URLにbot tokenが入る。エラーを記録する側は必ず`redact`を通すこと。
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
         ureq::post(&url)
             .config()
@@ -104,5 +125,39 @@ impl AlertNotifier {
                 "text": text,
             }))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacts_bot_token_from_error_text() {
+        let notifier = AlertNotifier::for_test("123456:SECRET-TOKEN");
+        // ureq::Error::BadUri などはURIをそのまま含むため、tokenが混ざり得る。
+        let raw = "bad uri: https://api.telegram.org/bot123456:SECRET-TOKEN/sendMessage";
+
+        let redacted = notifier.redact(raw);
+
+        assert!(
+            !redacted.contains("SECRET-TOKEN"),
+            "token leaked: {redacted}"
+        );
+        assert!(redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn alerts_only_after_threshold_and_respects_interval() {
+        let notifier = AlertNotifier::for_test("token");
+
+        assert_eq!(notifier.record(), None);
+        assert_eq!(notifier.record(), None);
+        // 閾値到達で件数を返し、カウンタはリセットされる。
+        assert_eq!(notifier.record(), Some(ALERT_THRESHOLD));
+        // 直後は送信間隔を満たさないため、閾値に再到達しても送らない。
+        for _ in 0..ALERT_THRESHOLD {
+            assert_eq!(notifier.record(), None);
+        }
     }
 }

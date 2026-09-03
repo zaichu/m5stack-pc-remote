@@ -160,7 +160,7 @@ async fn command(
         Err(err) => {
             tracing::warn!("power command authentication failed: {err}");
             if let Some(alert) = state.alert.as_ref() {
-                alert.record_auth_failure(Arc::clone(alert));
+                alert.record_auth_failure();
             }
             (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
         }
