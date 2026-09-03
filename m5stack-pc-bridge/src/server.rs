@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     body::Bytes,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -34,6 +34,7 @@ struct StatusResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CommandRequest {
     confirm: bool,
 }
@@ -52,6 +53,7 @@ pub fn router(config: AgentConfig) -> Router {
         .route("/status", get(status))
         .route("/reboot", post(reboot))
         .route("/shutdown", post(shutdown))
+        .layer(DefaultBodyLimit::max(128))
         .with_state(state)
 }
 

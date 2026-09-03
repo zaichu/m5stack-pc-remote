@@ -104,7 +104,7 @@ Stop-Service M5StackPcBridge
 - `X-Nonce`
 - `X-Signature`
 
-本文は `{"confirm":true}` が必須です。
+本文は `{"confirm":true}` が必須です。本文は128byte以下で、`confirm` 以外のfieldは拒否します。
 
 署名対象は以下です。
 

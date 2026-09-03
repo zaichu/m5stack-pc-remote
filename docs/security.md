@@ -32,6 +32,7 @@ m5stack-pc-bridge側の検証:
 - HMAC-SHA256署名が一致すること。
 - 許可されたpathだけを実行すること。
 - `POST /reboot` と `POST /shutdown` は、署名済みJSON本文の `confirm: true` を必須にすること。
+- request bodyは128byteに制限し、`confirm` 以外のJSON fieldを拒否すること。
 
 ## Windows Firewall
 
