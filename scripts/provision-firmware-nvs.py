@@ -83,6 +83,9 @@ def apply_toml_aliases(data: dict[str, object], keys: tuple[ConfigKey, ...]) -> 
 
 
 def validate_config(data: dict[str, object]) -> None:
+    # 必須かつ空を許さないキー。derive_mappings() の required 12件のうち、
+    # telegram_* は placeholder で無効化できるため除外し、残り 6件を対象にする。
+    # 新キーを追加する際は、ここへ追加するか、derive 対象にするかを検討すること。
     non_empty = [
         "wifi_ssid",
         "wifi_password",
