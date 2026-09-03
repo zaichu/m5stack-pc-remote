@@ -24,6 +24,6 @@ description: Use when preparing, reviewing, merging, or cleaning up an m5stack-p
 - 着手時に `gh issue edit N --add-assignee @me` と `gh issue comment N --body "着手します PR #xx"` を必ず実行し、誰がどの Issue を担当しているかを可視化する。
 - ブランチと Issue は 1:1 で対応させ、別 Issue の差分を混ぜない。並行する Claude Code との競合は、ブランチ名と Assignee で検出する。
 
-## Codex-authored Diff
+## 設計エージェントが書いたDiff
 
-Codexが実質的な差分を直接書いた場合、merge前に `.claude/skills/codex-claude-handoff/SKILL.md` の逆レビューを行います。Claudeが使えない場合は、PR本文に試行結果と残リスクを書きます。
+設計エージェント(現在の割り当ては `.claude/skills/design-implementation-handoff/SKILL.md` を参照)が実質的な差分を直接書いた場合、merge前に同スキルの逆レビューを行います。実装エージェントが使えない場合は、PR本文に試行結果と残リスクを書きます。

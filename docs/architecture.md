@@ -39,4 +39,4 @@ m5stack-pc-bridgeはLAN内限定です。外部公開が必要な場合でも、
 - `firmware/`: M5Stack実機で動くRust firmware
 - `m5stack-pc-bridge/`: Windows上で常駐するRust Windows Service
 - `docs/`: 設計、フェーズ、セキュリティ
-- `.claude/skills/`: Codex/Claude運用の正本
+- `.claude/skills/`: 設計/実装エージェント運用の正本(現在の割り当てはCodex/Claude、`design-implementation-handoff` skillを参照)
