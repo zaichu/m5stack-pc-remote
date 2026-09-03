@@ -38,8 +38,7 @@ const KEYS: &[Key] = &[
     ),
     // 定期レポート関連は後から追加した任意keyなので、既存のconfig.tomlでも
     // ビルドが通るよう既定値を持たせる(必須にするとkey追加まで壊れる)。
-    Key::int("daily_report_hour", "DAILY_REPORT_HOUR", IntTy::I64)
-        .default(DAILY_REPORT_DISABLED),
+    Key::int("daily_report_hour", "DAILY_REPORT_HOUR", IntTy::I64).default(DAILY_REPORT_DISABLED),
     Key::int("timezone_offset_hours", "TIMEZONE_OFFSET_HOURS", IntTy::I64).default(0),
 ];
 
