@@ -155,9 +155,7 @@ espflash reset --port /dev/ttyUSB0
 Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の設計を移植した
 以下を実装済み:
 
-- **REBOOT / SHUTDOWN**(`src/bridge_client.rs`): m5stack-pc-bridgeへのHMAC-SHA256署名付きPOST。
-  canonical文字列 `POST\n{path}\n{timestamp}\n{nonce}\n{sha256hex(body)}` と
-  本文 `{"confirm":true}` 必須をC++版と揃えてある。NTP未同期のクロックでは送信前に弾く。
+- **REBOOT / SHUTDOWN**(`src/bridge_client.rs`): m5stack-pc-bridgeへのHMAC-SHA256署名付きPOST（wire protocol は `shared/pc-remote-signing/src/lib.rs` を正本とする）。本文 `{"confirm":true}` 必須をC++版と揃えてある。NTP未同期のクロックでは送信前に弾く。
   画面上はPCがONLINEのときだけボタンが出て、確認画面(CANCEL/OK)を必ず経由する。
 - **Telegram連携**(`src/telegram.rs`): Bot APIへのアウトバウンドHTTPS long polling。
   `/status` `/wake` `/reboot` `/shutdown` `/confirm_reboot <nonce>`

@@ -32,7 +32,12 @@ Windows PC
 
 m5stack-pc-bridgeはLAN内限定です。外部公開が必要な場合でも、m5stack-pc-bridgeの管理ポートは直接公開せず、M5Stackが外向きHTTPSで取得したコマンドだけを実行します。
 
-詳細設計は [External Access Design](external-access.md) を正本にします。コストゼロを絶対条件にし、ルーターVPNを前提にできないため、初期案はTelegram Bot APIのlong polling方式です。
+詳細設計は [External Access Design](external-access.md) を正本にします。コスト方針は [Cost Policy](cost.md) を参照。初期案はTelegram Bot APIのlong polling方式です。
+
+## 用語
+
+- **PC STATUS (TCP probe)**: M5Stack が `pc_status_addr` へ TCP connect probe して判定する PC の電源状態。`firmware/src/net.rs:148` が正本。
+- **Bridge health `/status`**: `m5stack-pc-bridge` プロセス自体のヘルスチェック（未認証、電源状態とは無関係）。`m5stack-pc-bridge/src/server.rs:83` が正本。
 
 ## 境界
 
