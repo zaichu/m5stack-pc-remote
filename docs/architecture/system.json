@@ -2,63 +2,63 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "m5stack-pc-remote System Architecture",
-    "subtitle": "Telegram-relayed Wake/Reboot/Shutdown for a home Windows PC",
+    "title": "m5stack-pc-remote システムアーキテクチャ",
+    "subtitle": "Telegram経由で家庭内Windows PCのWake/Reboot/Shutdownを操作する",
     "output": "index.html",
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/zaichu/m5stack-pc-remote",
-      "revision": "be9d948a4170cab98f3aa129cb771c575249ff15"
+      "revision": "b54c7933976ed9e65c2970cd0b5b77ee42a64fb2"
     },
     "views": [
-      { "id": "full-system", "label": "Full system", "focus": ["phone", "telegram", "m5stack", "bridge", "windows_pc"], "note": "Every hop from the smartphone to the physical PC." },
-      { "id": "authenticated-path", "label": "Authenticated command path", "focus": ["m5stack", "bridge", "windows_pc"], "note": "The only path that can trigger reboot/shutdown: HMAC-signed LAN request, then a local OS command." },
-      { "id": "external-access", "label": "External access (no inbound port)", "focus": ["phone", "telegram", "m5stack"], "note": "M5Stack polls Telegram outbound; nothing is exposed to the internet." }
+      { "id": "full-system", "label": "全体像", "focus": ["phone", "telegram", "m5stack", "bridge", "windows_pc"], "note": "スマートフォンから物理PCまでの全経路。" },
+      { "id": "authenticated-path", "label": "認証済みコマンド経路", "focus": ["m5stack", "bridge", "windows_pc"], "note": "reboot/shutdownを実行できる唯一の経路: HMAC署名付きLANリクエストの後にローカルOSコマンドを実行する。" },
+      { "id": "external-access", "label": "外部アクセス（受信ポートなし）", "focus": ["phone", "telegram", "m5stack"], "note": "M5StackはTelegramへ外向きにpollingするだけで、インターネットには何も公開しない。" }
     ]
   },
   "components": [
-    { "id": "phone", "type": "external", "label": "Smartphone", "sublabel": "Telegram app", "pos": [40, 240], "size": [130, 60] },
+    { "id": "phone", "type": "external", "label": "スマートフォン", "sublabel": "Telegramアプリ", "pos": [40, 240], "size": [130, 60] },
     { "id": "telegram", "type": "external", "label": "Telegram Bot API", "sublabel": "api.telegram.org", "pos": [300, 240], "size": [150, 60],
-      "sources": [{ "path": "firmware/src/telegram.rs", "label": "long-polling client" }] },
-    { "id": "m5stack", "type": "backend", "label": "M5Stack Core2", "sublabel": "Rust firmware", "pos": [590, 230], "size": [150, 80],
+      "sources": [{ "path": "firmware/src/telegram.rs", "label": "long-pollingクライアント" }] },
+    { "id": "m5stack", "type": "backend", "label": "M5Stack Core2", "sublabel": "Rust製firmware", "pos": [590, 230], "size": [150, 80],
       "sources": [
-        { "path": "firmware/src/main.rs", "label": "entry point / UI loop" },
-        { "path": "firmware/src/telegram.rs", "label": "Telegram command handling" }
+        { "path": "firmware/src/main.rs", "label": "エントリーポイント / UIループ" },
+        { "path": "firmware/src/telegram.rs", "label": "Telegramコマンド処理" }
       ] },
     { "id": "bridge", "type": "security", "label": "m5stack-pc-bridge", "sublabel": "Windows Service :18080", "pos": [900, 180], "size": [170, 70],
       "sources": [
-        { "path": "m5stack-pc-bridge/src/server.rs", "label": "HTTP routes" },
-        { "path": "m5stack-pc-bridge/src/auth.rs", "label": "HMAC + timestamp + nonce" }
+        { "path": "m5stack-pc-bridge/src/server.rs", "label": "HTTPルーティング" },
+        { "path": "m5stack-pc-bridge/src/auth.rs", "label": "HMAC + timestamp + nonce検証" }
       ] },
     { "id": "windows_pc", "type": "backend", "label": "Windows 11 Pro PC", "sublabel": "shutdown.exe", "pos": [900, 290], "size": [170, 70],
-      "sources": [{ "path": "m5stack-pc-bridge/src/power.rs", "label": "process execution" }] }
+      "sources": [{ "path": "m5stack-pc-bridge/src/power.rs", "label": "プロセス実行" }] }
   ],
   "boundaries": [
-    { "kind": "region", "label": "Home LAN (no inbound internet exposure)", "wraps": ["m5stack", "bridge", "windows_pc"], "pad": 20 },
-    { "kind": "security-group", "label": "HMAC-SHA256 + timestamp + nonce auth boundary", "wraps": ["bridge"], "pad": 12 }
+    { "kind": "region", "label": "家庭内LAN（インターネットからの受信なし）", "wraps": ["m5stack", "bridge", "windows_pc"], "pad": 20 },
+    { "kind": "security-group", "label": "HMAC-SHA256 + timestamp + nonce 認証境界", "wraps": ["bridge"], "pad": 12 }
   ],
   "connections": [
-    { "id": "phone-telegram", "from": "phone", "to": "telegram", "label": "message / tap", "fromSide": "right", "toSide": "left", "labelDy": -20 },
+    { "id": "phone-telegram", "from": "phone", "to": "telegram", "label": "メッセージ / タップ", "fromSide": "right", "toSide": "left", "labelDy": -20 },
     { "id": "telegram-m5stack", "from": "telegram", "to": "m5stack", "label": "HTTPS long polling", "variant": "emphasis", "fromSide": "right", "toSide": "left", "labelDy": -20 },
-    { "id": "m5stack-bridge", "from": "m5stack", "to": "bridge", "label": "HMAC-signed POST", "variant": "security", "fromSide": "right", "toSide": "left", "labelDy": -14 },
+    { "id": "m5stack-bridge", "from": "m5stack", "to": "bridge", "label": "HMAC署名付きPOST", "variant": "security", "fromSide": "right", "toSide": "left", "labelDy": -14 },
     { "id": "bridge-pc", "from": "bridge", "to": "windows_pc", "label": "shutdown.exe", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
-    { "id": "m5stack-pc-direct", "from": "m5stack", "to": "windows_pc", "label": "WOL + STATUS probe", "variant": "dashed" }
+    { "id": "m5stack-pc-direct", "from": "m5stack", "to": "windows_pc", "label": "WOL + STATUS確認", "variant": "dashed" }
   ],
   "cards": [
-    { "dot": "rose", "title": "Security", "items": [
-      "REBOOT/SHUTDOWN require HMAC-SHA256 signature + timestamp (±60s skew) + single-use nonce",
-      "TLS root CA pinned for Telegram (Go Daddy G2, hardcoded in firmware/src/telegram_root_ca.rs)",
-      "Telegram commands accepted only from TELEGRAM_ALLOWED_USER_ID (strict from.id match)",
-      "dry_run = true by default in m5stack-pc-bridge/config.toml; must be explicitly disabled"
+    { "dot": "rose", "title": "セキュリティ", "items": [
+      "REBOOT/SHUTDOWNはHMAC-SHA256署名 + timestamp（±60秒許容）+ 使い捨てnonceが必須",
+      "TelegramのTLSルートCAをピン留め（telegram_root_ca.rsにハードコード）",
+      "TelegramコマンドはTELEGRAM_ALLOWED_USER_IDのfrom.idのみ受理",
+      "dry_runは既定でtrue。明示的に無効化しない限り実行しない"
     ] },
-    { "dot": "amber", "title": "Failure / recovery paths", "items": [
-      "Unauthorized Telegram user or invalid/expired timestamp/nonce: request ignored, command never executed",
-      "m5stack-pc-bridge crash: Windows Service Recovery restarts it (sc.exe failure action)",
-      "Wi-Fi drop on M5Stack: reconnect every 15s; Telegram getUpdates failure: backoff 5s–60s"
+    { "dot": "amber", "title": "失敗・復旧経路", "items": [
+      "未許可ユーザー・不正/期限切れのtimestamp・nonce再利用: リクエストを無視し実行しない",
+      "m5stack-pc-bridgeクラッシュ時: Windows Service Recoveryが自動再起動",
+      "M5StackのWi-Fi切断は15秒ごとに再接続。Telegram取得失敗は5〜60秒でbackoff"
     ] },
-    { "dot": "cyan", "title": "Secret boundaries", "items": [
-      "BRIDGE_SHARED_SECRET: known only to M5Stack and m5stack-pc-bridge",
-      "TELEGRAM_BOT_TOKEN: known only to M5Stack and Telegram, never forwarded to the bridge"
+    { "dot": "cyan", "title": "秘密情報の境界", "items": [
+      "BRIDGE_SHARED_SECRET: M5Stackとm5stack-pc-bridgeのみが保持",
+      "TELEGRAM_BOT_TOKEN: M5StackとTelegramのみが保持し、bridgeへは転送しない"
     ] }
   ]
 }
