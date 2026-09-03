@@ -85,9 +85,12 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 | `tg_user_id` | `telegram_allowed_user_id` | 許可するTelegram user id |
 | `tg_poll_secs` | `telegram_long_poll_timeout_seconds` | Telegram long polling timeout |
 | `tg_ttl_secs` | `telegram_confirm_ttl_secs` | 再起動/シャットダウン確認TTL |
+| `report_hour` | `daily_report_hour` | 定期レポートを送るローカル時刻(0-23、範囲外で無効) |
+| `tz_offset` | `timezone_offset_hours` | UTCからのローカル時刻のずれ(JSTなら9) |
 
 NVS上では全keyを文字列として保存する。`wol_port`、`bridge_port`、
-`telegram_long_poll_timeout_seconds`、`telegram_confirm_ttl_secs` は起動時に数値へ変換する。
+`telegram_long_poll_timeout_seconds`、`telegram_confirm_ttl_secs`、
+`daily_report_hour`、`timezone_offset_hours` は起動時に数値へ変換する。
 既存NVSに残る `agent_port` / `agent_secret` は移行互換として読み込む。
 
 現時点の正本運用は `config.toml` 更新後に再build/flashする方式。NVS provisioningのみで

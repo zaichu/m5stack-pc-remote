@@ -233,11 +233,15 @@ struct DailyReport {
 
 impl DailyReport {
     fn new(config: &AppConfig) -> Self {
-        // 起動時に既に送信時刻を過ぎていた場合、その日の分は送らない。
-        // 再起動のたびに同じ日のレポートが届くのを防ぐ。
-        Self {
-            last_sent_day: Self::local_now(config).map(|(day, _hour)| day),
-        }
+        // 起動時点で既に送信時刻を過ぎているなら、その日の分は送信済みとして扱う。
+        // 再起動のたびに同じ日のレポートが届くのを防ぐため。
+        //
+        // まだ送信時刻より前なら未送信のままにする。ここで無条件に送信済みへ
+        // すると、送信時刻の前に再起動しただけでその日の分が飛んでしまう
+        // (例: 8時に再起動 → 9時のレポートが翌日まで来ない)。
+        let last_sent_day = Self::local_now(config)
+            .and_then(|(day, hour)| (hour >= config.daily_report_hour).then_some(day));
+        Self { last_sent_day }
     }
 
     /// (ローカル日数, ローカル時)を返す。NTP未同期なら None。
