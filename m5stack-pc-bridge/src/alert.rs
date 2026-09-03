@@ -11,26 +11,18 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use pc_remote_signing::AlertThrottle;
+
 use crate::app_config::AgentConfig;
 
-/// 何回失敗がたまったらアラートを送るか。1回目から送ると、
-/// 時計ずれ等の単発の失敗でも鳴ってしまう。
-const ALERT_THRESHOLD: u32 = 3;
-/// アラートの最短送信間隔。スキャンや連投で通知が埋まらないようにする。
-const ALERT_INTERVAL: Duration = Duration::from_secs(3600);
 /// Telegram APIへの接続・応答待ちの上限。電源操作の応答を巻き込まないよう短くする。
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
-
-#[derive(Default)]
-struct AlertState {
-    failures: u32,
-    last_sent: Option<Instant>,
-}
 
 pub struct AlertNotifier {
     bot_token: String,
     chat_id: i64,
-    state: Mutex<AlertState>,
+    /// 抑制ポリシー(閾値・間隔)はfirmwareと共有する。
+    throttle: Mutex<AlertThrottle>,
 }
 
 impl AlertNotifier {
@@ -44,30 +36,14 @@ impl AlertNotifier {
         Some(Self {
             bot_token,
             chat_id,
-            state: Mutex::new(AlertState::default()),
+            throttle: Mutex::new(AlertThrottle::default()),
         })
     }
 
     /// 認証失敗を1件記録し、閾値と送信間隔を満たしていれば送信すべき件数を返す。
     fn record(&self) -> Option<u32> {
         // Mutexが毒された場合でもリクエスト処理は続けたいので、失敗時は通知を諦める。
-        let mut state = self.state.lock().ok()?;
-        state.failures += 1;
-        if state.failures < ALERT_THRESHOLD {
-            return None;
-        }
-
-        let now = Instant::now();
-        if let Some(sent) = state.last_sent {
-            if now.duration_since(sent) < ALERT_INTERVAL {
-                return None;
-            }
-        }
-
-        let count = state.failures;
-        state.failures = 0;
-        state.last_sent = Some(now);
-        Some(count)
+        self.throttle.lock().ok()?.record(Instant::now())
     }
 
     /// 認証失敗を記録し、必要ならバックグラウンドでアラートを送る。
@@ -103,7 +79,7 @@ impl AlertNotifier {
         Self {
             bot_token: bot_token.to_string(),
             chat_id: 1,
-            state: Mutex::new(AlertState::default()),
+            throttle: Mutex::new(AlertThrottle::default()),
         }
     }
 
@@ -154,9 +130,9 @@ mod tests {
         assert_eq!(notifier.record(), None);
         assert_eq!(notifier.record(), None);
         // 閾値到達で件数を返し、カウンタはリセットされる。
-        assert_eq!(notifier.record(), Some(ALERT_THRESHOLD));
+        assert_eq!(notifier.record(), Some(AlertThrottle::DEFAULT_THRESHOLD));
         // 直後は送信間隔を満たさないため、閾値に再到達しても送らない。
-        for _ in 0..ALERT_THRESHOLD {
+        for _ in 0..AlertThrottle::DEFAULT_THRESHOLD {
             assert_eq!(notifier.record(), None);
         }
     }

@@ -63,6 +63,7 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 ## 認証失敗アラートとbridge側のbot token
 
 - m5stack-pc-bridgeは、HTTP認証に失敗したリクエストが3件たまると、Telegramへアラートを送ります(最短送信間隔1時間)。`config.toml` の `telegram_bot_token` と `telegram_chat_id` が両方設定されているときだけ有効で、未設定なら通知しないだけです。
+- M5Stack側もTelegramの未許可ユーザーからのアクセスに同じポリシーで通知します。閾値と間隔の正本は `shared/pc-remote-signing` の `AlertThrottle`(`DEFAULT_THRESHOLD` / `DEFAULT_INTERVAL`)で、firmwareとbridgeの両方がこれを使います。値を変えるときはここだけを直します。
 - 通知本文には件数だけを書き、送信元IP、ヘッダー値、リクエスト本文は含めません。攻撃者が自由に決められる文字列を自分のチャットへ流すと、なりすましや誘導の材料になるためです。
 - 送信URLにはbot tokenが含まれるため、ログにもエラーメッセージにもURLを出しません。
 - **bot tokenをWindows側にも置くことを許容する判断(2026-09-03)**。firmware側と同じtokenを `%ProgramData%\m5stack-pc-bridge\config.toml` に置きます。理由は次のとおりです。

@@ -19,6 +19,8 @@ use embedded_svc::http::Method;
 use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
 use serde_json::{json, Value};
 
+use pc_remote_signing::AlertThrottle;
+
 use crate::app_config::AppConfig;
 use crate::bridge_client::{self, PowerAction, PowerActionLabel};
 use crate::net;
@@ -26,12 +28,6 @@ use crate::telegram_root_ca::TELEGRAM_ROOT_CA_PEM;
 
 const PLACEHOLDER_TOKEN: &str = "replace-with-your-telegram-bot-token";
 const PLACEHOLDER_USER_ID: &str = "replace-with-your-telegram-user-id";
-
-/// 未許可ユーザーからのアクセスが何回たまったらアラートを送るか。
-/// 1回目から送ると、無関係なbot巡回でも鳴ってしまう。
-const UNAUTHORIZED_ALERT_THRESHOLD: u32 = 3;
-/// アラートの最短送信間隔。スキャンや連投で通知が埋まらないようにする。
-const UNAUTHORIZED_ALERT_INTERVAL: Duration = Duration::from_secs(3600);
 
 const BACKOFF_MIN: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
@@ -145,8 +141,7 @@ pub struct Client {
     config: Arc<AppConfig>,
     api: Api,
     /// 未許可アクセスの検知数と、直近でアラートを送った時刻。
-    unauthorized_count: u32,
-    unauthorized_alert_at: Option<Instant>,
+    unauthorized_alerts: AlertThrottle,
 }
 
 impl Api {
@@ -393,8 +388,8 @@ impl Client {
                 config: Arc::clone(&config),
             },
             config,
-            unauthorized_count: 0,
-            unauthorized_alert_at: None,
+            // 抑制ポリシー(閾値・間隔)はbridgeと共有する。
+            unauthorized_alerts: AlertThrottle::default(),
         }
     }
 
@@ -403,21 +398,9 @@ impl Client {
     /// 通知には送信者のIDやメッセージ本文を一切含めない。相手が自由に決められる
     /// 文字列をそのまま自分のチャットへ流すと、なりすましや誘導の材料になるため。
     fn record_unauthorized_access(&mut self) {
-        self.unauthorized_count += 1;
-        if self.unauthorized_count < UNAUTHORIZED_ALERT_THRESHOLD {
+        let Some(count) = self.unauthorized_alerts.record(Instant::now()) else {
             return;
-        }
-
-        let now = Instant::now();
-        if let Some(sent_at) = self.unauthorized_alert_at {
-            if now.duration_since(sent_at) < UNAUTHORIZED_ALERT_INTERVAL {
-                return;
-            }
-        }
-
-        let count = self.unauthorized_count;
-        self.unauthorized_count = 0;
-        self.unauthorized_alert_at = Some(now);
+        };
         println!("telegram: unauthorized access detected ({count})");
 
         if let Some(chat_id) = allowed_chat_id(self.config.as_ref()) {

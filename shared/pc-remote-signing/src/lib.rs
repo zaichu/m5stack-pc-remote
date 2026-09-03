@@ -1,4 +1,8 @@
-//! M5Stack firmware(署名側)とm5stack-pc-bridge(検証側)が共有するHMAC署名wire protocol。
+//! M5Stack firmwareとm5stack-pc-bridgeが共有する実装。
+//!
+//! 中心はHMAC署名のwire protocolだが、「両側で同一でなければ壊れる」ものは
+//! 電源操作の識別子(`PowerAction`)やアラート抑制ポリシー(`AlertThrottle`)も
+//! ここへ置く。
 //!
 //! canonical文字列は次の形式で固定する。片方だけを変更すると署名が一致しなくなるため、
 //! 実装を1箇所にまとめてある。
@@ -112,6 +116,61 @@ impl PowerAction {
     }
 }
 
+/// 認証・認可の失敗が続いたときに通知を出すかどうかを決める抑制ロジック。
+///
+/// firmware(Telegramの未許可ユーザー)とbridge(HTTP認証失敗)で同じポリシーを使う。
+/// 「閾値回たまったら発火し、発火後は一定時間鳴らさない」。1回目から鳴らすと、
+/// 無関係なbot巡回や時計ずれによる単発の失敗でも通知が飛んでしまう。
+///
+/// 現在時刻を引数で受け取るため、待たずにテストできる。
+pub struct AlertThrottle {
+    threshold: u32,
+    interval: std::time::Duration,
+    failures: u32,
+    last_fired: Option<std::time::Instant>,
+}
+
+impl AlertThrottle {
+    /// 何回たまったら発火するか。
+    pub const DEFAULT_THRESHOLD: u32 = 3;
+    /// 発火後、次に鳴らせるようになるまでの時間。スキャンや連投で通知が
+    /// 埋まらないようにする。
+    pub const DEFAULT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+    pub fn new(threshold: u32, interval: std::time::Duration) -> Self {
+        Self {
+            threshold,
+            interval,
+            failures: 0,
+            last_fired: None,
+        }
+    }
+
+    /// 失敗を1件記録する。通知すべきならたまっていた件数を返し、カウンタを戻す。
+    pub fn record(&mut self, now: std::time::Instant) -> Option<u32> {
+        self.failures += 1;
+        if self.failures < self.threshold {
+            return None;
+        }
+        if let Some(fired) = self.last_fired {
+            if now.duration_since(fired) < self.interval {
+                return None;
+            }
+        }
+
+        let count = self.failures;
+        self.failures = 0;
+        self.last_fired = Some(now);
+        Some(count)
+    }
+}
+
+impl Default for AlertThrottle {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_THRESHOLD, Self::DEFAULT_INTERVAL)
+    }
+}
+
 #[cfg(test)]
 mod power_action_tests {
     use super::PowerAction;
@@ -131,5 +190,43 @@ mod power_action_tests {
         }
         assert_eq!(PowerAction::from_slug("hibernate"), None);
         assert_eq!(PowerAction::from_path("/reboot/"), None);
+    }
+}
+
+#[cfg(test)]
+mod alert_throttle_tests {
+    use super::AlertThrottle;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn fires_at_threshold_and_resets_counter() {
+        let mut throttle = AlertThrottle::default();
+        let now = Instant::now();
+
+        assert_eq!(throttle.record(now), None);
+        assert_eq!(throttle.record(now), None);
+        assert_eq!(throttle.record(now), Some(AlertThrottle::DEFAULT_THRESHOLD));
+    }
+
+    #[test]
+    fn stays_quiet_until_the_interval_has_passed() {
+        let interval = Duration::from_secs(3600);
+        let mut throttle = AlertThrottle::new(3, interval);
+        let start = Instant::now();
+
+        for _ in 0..2 {
+            assert_eq!(throttle.record(start), None);
+        }
+        assert_eq!(throttle.record(start), Some(3));
+
+        // 間隔内は閾値へ再到達しても鳴らさない。
+        for _ in 0..6 {
+            assert_eq!(
+                throttle.record(start + interval - Duration::from_secs(1)),
+                None
+            );
+        }
+        // 間隔を過ぎれば、たまっていた件数をまとめて返す。
+        assert_eq!(throttle.record(start + interval), Some(7));
     }
 }
