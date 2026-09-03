@@ -66,71 +66,46 @@ impl AppConfig {
         }
     }
 
+    /// NVSに値があれば上書きする。keyを複数渡した場合は先に見つかったものを使う
+    /// (2つ目以降は旧key)。NVSのkeyは15文字までなので短縮名になっている。
     fn apply_nvs(&mut self, nvs: &EspNvs<NvsDefault>) {
-        replace_string(nvs, "wifi_ssid", &mut self.wifi_ssid);
-        replace_string(nvs, "wifi_pass", &mut self.wifi_password);
-        replace_string(nvs, "pc_mac", &mut self.pc_mac_address);
-        replace_number(nvs, "wol_port", &mut self.wol_port);
-        replace_string(nvs, "status_addr", &mut self.pc_status_addr);
-        replace_number_with_fallback(nvs, "bridge_port", "agent_port", &mut self.bridge_port);
-        replace_string_with_fallback(
+        replace(nvs, &["wifi_ssid"], &mut self.wifi_ssid);
+        replace(nvs, &["wifi_pass"], &mut self.wifi_password);
+        replace(nvs, &["pc_mac"], &mut self.pc_mac_address);
+        replace(nvs, &["wol_port"], &mut self.wol_port);
+        replace(nvs, &["status_addr"], &mut self.pc_status_addr);
+        replace(nvs, &["bridge_port", "agent_port"], &mut self.bridge_port);
+        replace(
             nvs,
-            "bridge_secret",
-            "agent_secret",
+            &["bridge_secret", "agent_secret"],
             &mut self.bridge_shared_secret,
         );
-        replace_string(nvs, "pc_ip", &mut self.pc_ip_address);
-        replace_string(nvs, "tg_token", &mut self.telegram_bot_token);
-        replace_string(nvs, "tg_user_id", &mut self.telegram_allowed_user_id);
-        replace_number(
+        replace(nvs, &["pc_ip"], &mut self.pc_ip_address);
+        replace(nvs, &["tg_token"], &mut self.telegram_bot_token);
+        replace(nvs, &["tg_user_id"], &mut self.telegram_allowed_user_id);
+        replace(
             nvs,
-            "tg_poll_secs",
+            &["tg_poll_secs"],
             &mut self.telegram_long_poll_timeout_seconds,
         );
-        replace_number(nvs, "tg_ttl_secs", &mut self.telegram_confirm_ttl_secs);
-        replace_number(nvs, "report_hour", &mut self.daily_report_hour);
-        replace_number(nvs, "tz_offset", &mut self.timezone_offset_hours);
+        replace(nvs, &["tg_ttl_secs"], &mut self.telegram_confirm_ttl_secs);
+        replace(nvs, &["report_hour"], &mut self.daily_report_hour);
+        replace(nvs, &["tz_offset"], &mut self.timezone_offset_hours);
     }
 }
 
-fn replace_string(nvs: &EspNvs<NvsDefault>, key: &str, target: &mut String) {
-    if let Some(value) = read_string(nvs, key) {
-        *target = value;
-    }
-}
-
-fn replace_string_with_fallback(
-    nvs: &EspNvs<NvsDefault>,
-    key: &str,
-    fallback_key: &str,
-    target: &mut String,
-) {
-    if let Some(value) = read_string(nvs, key).or_else(|| read_string(nvs, fallback_key)) {
-        *target = value;
-    }
-}
-
-fn replace_number<T>(nvs: &EspNvs<NvsDefault>, key: &str, target: &mut T)
+/// NVSから読めて、かつ目的の型へparseできたときだけ上書きする。
+/// `String` も `FromStr` を実装しているため、文字列と数値を同じ関数で扱える。
+/// 壊れた値が入っていてもビルド時configへフォールバックする。
+fn replace<T>(nvs: &EspNvs<NvsDefault>, keys: &[&str], target: &mut T)
 where
     T: std::str::FromStr,
 {
-    if let Some(value) = read_string(nvs, key).and_then(|raw| raw.parse().ok()) {
-        *target = value;
-    }
-}
-
-fn replace_number_with_fallback<T>(
-    nvs: &EspNvs<NvsDefault>,
-    key: &str,
-    fallback_key: &str,
-    target: &mut T,
-) where
-    T: std::str::FromStr,
-{
-    if let Some(value) = read_string(nvs, key)
-        .or_else(|| read_string(nvs, fallback_key))
-        .and_then(|raw| raw.parse().ok())
-    {
+    let found = keys
+        .iter()
+        .find_map(|key| read_string(nvs, key))
+        .and_then(|raw| raw.parse().ok());
+    if let Some(value) = found {
         *target = value;
     }
 }
