@@ -12,6 +12,10 @@ description: Use when preparing, reviewing, merging, or cleaning up an m5stack-p
 - unrelated changesを混ぜない。
 - ブランチ名は `{type}/{issue-number}-{slug}` とし、Issue 番号を必ず含める（例: `refactor/91-bridge-config-validation`）。`scripts/check-pr-issue-link.sh` が検証する。
 - PR本文は日本語で、概要、変更内容、検証、残リスクを書く。
+- 他のエージェントが同時に動いている可能性がある間は、共有の主working directoryで
+  `git switch` / `git checkout <branch>` / `git stash` を使わず、タスクごとに
+  `git worktree add /tmp/<repo>-<topic> -b <branch> origin/main` で専用ディレクトリを
+  作って作業する。理由と手順は `.claude/skills/parallel-agent-coordination/SKILL.md` を参照。
 
 ## Issue Close Keywords
 

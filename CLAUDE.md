@@ -11,6 +11,10 @@ Claude Code がこのリポジトリで作業する際のルールです。詳�
 - 実装エージェントは main へ直接pushしない。PRをmergeしない。Windows PCの実 shutdown/reboot や外部公開設定変更を勝手に実行しない。
 - 設計エージェントが直接書いた実質的な差分は、`.claude/skills/design-implementation-handoff/SKILL.md` の逆レビュー対象にする。
 
+## 複数エージェントの同時作業
+
+Claude Code、Codex CLI、OpenCode等、複数のAIエージェントが同時にこのリポジトリで作業することがあります。Issueの重複着手や、git状態の衝突(あるエージェントのbranch切り替え/stashが別エージェントの未commit変更を壊す)を防ぐ手順は `.claude/skills/parallel-agent-coordination/SKILL.md` を正本にします。作業開始前に必ず参照してください。
+
 ## 品質ゲート
 
 正本は `.claude/skills/verify/SKILL.md` と `Makefile` です。

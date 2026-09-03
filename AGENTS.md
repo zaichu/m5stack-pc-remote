@@ -22,3 +22,4 @@
 - mainへ直接pushしない。短期作業branchとPRを使う。ブランチ名は `{type}/{issue-number}-{slug}` とし、Issue には着手時に Assignee と「着手します PR #xx」コメントで明示的に紐付ける。PR本文には `Fixes #N` / `Refs #N` を必ず含める。
 - 実装を担当しないエージェントが設計・レビュー・リリース判断を担当する運用を標準とする。特定のモデル名には固定しない。現在の割り当ては `.claude/skills/design-implementation-handoff/SKILL.md` の「現在の割り当て」節が正本(今はCodex=設計・レビュー、Claude=実装)。
 - 設計エージェントがコード、テスト、スクリプト、ドキュメントを直接書いた場合は、PR作成前または作成後に実装エージェントへ逆レビューを依頼する。できない場合は理由と残リスクをPR本文に書く。
+- 複数のAIエージェントが同時にこのリポジトリで作業し得る。着手前のIssue確認・宣言、共有working directoryでのgit操作の扱いは `.claude/skills/parallel-agent-coordination/SKILL.md` を正本にする。
