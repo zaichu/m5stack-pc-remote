@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Rust firmware用のNVS設定イメージを生成し、必要なら実機へ書き込む。
 
+config.toml keyとNVS keyの対応はここで持たず、`config_keys.py` が
+`firmware/build.rs` と `firmware/src/app_config.rs` から導出したものを正本にする(#76)。
+新しい設定キーは源码側(build.rs / app_config.rs)に追加するだけで、このスクリプトの
+編集は不要になる。
+
 secret値は表示しない。生成物はsecretを含むためGit管理外に置く。
 """
 
@@ -20,6 +25,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore[no-redef]
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config_keys import ConfigKey, derive_mappings  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE_DIR = REPO_ROOT / "firmware"
@@ -27,21 +35,6 @@ DEFAULT_CONFIG = FIRMWARE_DIR / "config.toml"
 DEFAULT_OUTDIR = FIRMWARE_DIR / ".nvs-provisioning"
 DEFAULT_NVS_SIZE = 0x6000
 DEFAULT_NVS_OFFSET = 0x9000
-
-CONFIG_TO_NVS_KEYS = [
-    ("wifi_ssid", "wifi_ssid"),
-    ("wifi_password", "wifi_pass"),
-    ("pc_mac_address", "pc_mac"),
-    ("wol_port", "wol_port"),
-    ("pc_status_addr", "status_addr"),
-    ("bridge_port", "bridge_port"),
-    ("bridge_shared_secret", "bridge_secret"),
-    ("pc_ip_address", "pc_ip"),
-    ("telegram_bot_token", "tg_token"),
-    ("telegram_allowed_user_id", "tg_user_id"),
-    ("telegram_long_poll_timeout_seconds", "tg_poll_secs"),
-    ("telegram_confirm_ttl_secs", "tg_ttl_secs"),
-]
 
 
 def parse_int(value: str) -> int:
@@ -72,21 +65,21 @@ def find_generator() -> tuple[Path, Path]:
     return python, generator
 
 
-def load_config(path: Path) -> dict[str, object]:
+def load_config(path: Path, keys: tuple[ConfigKey, ...]) -> dict[str, object]:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    migrate_legacy_keys(data)
-    missing = [key for key, _ in CONFIG_TO_NVS_KEYS if key not in data]
+    apply_toml_aliases(data, keys)
+    missing = [key.toml_key for key in keys if not key.optional and key.toml_key not in data]
     if missing:
         raise ValueError("configに不足があります: " + ", ".join(missing))
     validate_config(data)
     return data
 
 
-def migrate_legacy_keys(data: dict[str, object]) -> None:
-    if "bridge_port" not in data and "agent_port" in data:
-        data["bridge_port"] = data["agent_port"]
-    if "bridge_shared_secret" not in data and "agent_shared_secret" in data:
-        data["bridge_shared_secret"] = data["agent_shared_secret"]
+def apply_toml_aliases(data: dict[str, object], keys: tuple[ConfigKey, ...]) -> None:
+    """build.rsのKEYSが持つ旧TOML key(agent_port等)を新keyへ引き継ぐ。"""
+    for key in keys:
+        if key.toml_alias and key.toml_key not in data and key.toml_alias in data:
+            data[key.toml_key] = data[key.toml_alias]
 
 
 def validate_config(data: dict[str, object]) -> None:
@@ -112,16 +105,27 @@ def validate_config(data: dict[str, object]) -> None:
         if value < 1:
             raise ValueError(f"{key} は1以上で指定してください")
 
+    if "daily_report_hour" in data and not -1 <= int(data["daily_report_hour"]) <= 23:
+        raise ValueError("daily_report_hour は-1(無効)または0..23で指定してください")
 
-def write_csv(path: Path, config: dict[str, object]) -> None:
+    if "timezone_offset_hours" in data and not -14 <= int(data["timezone_offset_hours"]) <= 14:
+        raise ValueError("timezone_offset_hours は-14..14で指定してください")
+
+
+def write_csv(path: Path, config: dict[str, object], keys: tuple[ConfigKey, ...]) -> None:
     with path.open("w", encoding="utf-8", newline="") as fp:
         writer = csv.writer(fp)
         writer.writerow(["key", "type", "encoding", "value"])
         writer.writerow(["m5remote", "namespace", "", ""])
-        for config_key, nvs_key in CONFIG_TO_NVS_KEYS:
-            writer.writerow([nvs_key, "data", "string", str(config[config_key])])
-        writer.writerow(["agent_port", "data", "string", str(config["bridge_port"])])
-        writer.writerow(["agent_secret", "data", "string", str(config["bridge_shared_secret"])])
+        for key in keys:
+            if key.toml_key not in config:
+                # 任意key(defaultを持つkey)がconfigに無いときはNVSへも書かない。
+                # 起動時にビルド時configへfallbackする。
+                continue
+            value = str(config[key.toml_key])
+            # 1つ目が正本NVS key、2つ目以降は移行互換の旧key(agent_port等)。
+            for nvs_key in key.nvs_keys:
+                writer.writerow([nvs_key, "data", "string", value])
 
 
 def generate_image(
@@ -187,13 +191,14 @@ def main() -> int:
     outdir.mkdir(parents=True, exist_ok=True)
     os.chmod(outdir, 0o700)
 
-    config = load_config(config_path)
+    keys = derive_mappings()
+    config = load_config(config_path, keys)
     python, generator = find_generator()
     image_path = outdir / "m5remote-nvs.bin"
 
     with tempfile.TemporaryDirectory(prefix="m5remote-nvs-") as temp_dir:
         csv_path = Path(temp_dir) / "m5remote-nvs.csv"
-        write_csv(csv_path, config)
+        write_csv(csv_path, config, keys)
         generate_image(python, generator, csv_path, image_path, args.size)
 
     os.chmod(image_path, 0o600)
