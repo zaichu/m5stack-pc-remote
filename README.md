@@ -78,8 +78,7 @@ make firmware-nvs-image
 python3 scripts/provision-firmware-nvs.py --write --yes --port /dev/ttyUSB0
 ```
 
-現行partition tableではNVSは offset `0x9000`、size `0x6000` です。partition tableを変えた
-場合は `--offset` と `--size` を指定してください。
+現行partition tableではNVSは offset `0x9000`、size `0x6000` です（`firmware/sdkconfig.defaults` の partition 定義を参照）。`--size` は `4096` の倍数で指定してください。partition tableを変えた場合は `--offset` と `--size` を指定してください。
 
 ## セットアップ: m5stack-pc-bridge (Windows側)
 
@@ -122,6 +121,12 @@ Windows Serviceとして常駐させるには、管理者PowerShellで以下を�
 ### 2. 自分のTelegram user idを取得する
 
 1. Telegramで `@userinfobot` など、自分のuser idを教えてくれるbotとチャットする、またはBot APIの `getUpdates` を一度手動で呼んで自分の `from.id` を確認する。
+
+   ```bash
+   curl https://api.telegram.org/bot<token>/getUpdates | jq .result[0].message.from.id
+   ```
+
+   `TELEGRAM_BOT_TOKEN` を環境変数に設定している場合は `scripts/telegram-set-commands.sh` が `setMyCommands` を登録します。
 2. 数値のuser id (`123456789` のような形式) を控える。
 
 ### 3. Rust firmwareの `config.toml` に設定する
