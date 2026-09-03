@@ -352,6 +352,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                         if ui::WAKE_BUTTON.contains(x, y) {
                             println!("WAKE tapped at x={x} y={y}");
                             let _guard = power_lock.lock().unwrap();
+                            // status.lockedはループ先頭で読んだ値なので、判定から
+                            // ここまでの間にTelegramの/lockが通っている可能性がある。
+                            // 実行直前に共有状態を直接見る。
+                            if operation_lock.is_locked() {
+                                toast_text = Some("Locked (/unlock in Telegram)".to_string());
+                                toast_at = Instant::now();
+                                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                                touch_was_down = touch_down;
+                                std::thread::sleep(Duration::from_millis(20));
+                                continue;
+                            }
                             let wol_result = net::send_wake_on_lan(
                                 &app_config.pc_mac_address,
                                 app_config.wol_port,
@@ -387,6 +398,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                         } else if ui::OK_BUTTON.contains(x, y) {
                             println!("{} confirmed", action.slug());
                             let _guard = power_lock.lock().unwrap();
+                            // WAKEと同じ理由で、実行直前にロックを再確認する。
+                            if operation_lock.is_locked() {
+                                toast_text = Some("Locked (/unlock in Telegram)".to_string());
+                                toast_at = Instant::now();
+                                screen = Screen::Main;
+                                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                                touch_was_down = touch_down;
+                                std::thread::sleep(Duration::from_millis(20));
+                                continue;
+                            }
                             let (toast, report) =
                                 match bridge_client::send_command(action, app_config.as_ref()) {
                                     Ok(code) if bridge_client::is_accepted(code) => (
