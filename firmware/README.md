@@ -88,6 +88,10 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 | `report_hour` | `daily_report_hour` | 定期レポートを送るローカル時刻(0-23、範囲外で無効) |
 | `tz_offset` | `timezone_offset_hours` | UTCからのローカル時刻のずれ(JSTなら9) |
 
+この表は `scripts/config_keys.py` が `firmware/build.rs` と `src/app_config.rs` から
+導出する対応と機械的に突合される(`make config-key-check`、`make check`に含まれる)。
+源码と表のどちらか片方にkeyを足しただけではCIが通らない。
+
 NVS上では全keyを文字列として保存する。`wol_port`、`bridge_port`、
 `telegram_long_poll_timeout_seconds`、`telegram_confirm_ttl_secs`、
 `daily_report_hour`、`timezone_offset_hours` は起動時に数値へ変換する。
