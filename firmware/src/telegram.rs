@@ -9,6 +9,7 @@
 //   - bot tokenとメッセージ内容をログへ出さない
 
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
@@ -40,6 +41,24 @@ pub enum State {
 
 /// タッチUIとTelegramスレッドからの電源操作を直列化するロック。
 pub type PowerLock = Arc<Mutex<()>>;
+
+/// 操作ロック。有効な間はWAKE / REBOOT / SHUTDOWNを一切実行しない。
+/// Telegramの `/lock` `/unlock` で切り替え、本体パネル操作にも効く。
+///
+/// 状態はメモリ上だけで保持し、M5Stackを再起動すると解除される。再起動できる
+/// 位置に居るなら本人が近くに居るとみなせるため、永続化はしない。
+#[derive(Clone, Default)]
+pub struct OperationLock(Arc<AtomicBool>);
+
+impl OperationLock {
+    pub fn is_locked(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    fn set(&self, locked: bool) {
+        self.0.store(locked, Ordering::Relaxed);
+    }
+}
 
 pub fn is_configured(config: &AppConfig) -> bool {
     !config.telegram_bot_token.is_empty()
@@ -93,6 +112,7 @@ pub struct Client {
     initial_sync_done: bool,
     pending: Option<Pending>,
     power_lock: PowerLock,
+    operation_lock: OperationLock,
     config: Arc<AppConfig>,
     api: Api,
 }
@@ -224,12 +244,17 @@ pub fn start_notifier(config: Arc<AppConfig>) -> Option<Notifier> {
 }
 
 impl Client {
-    pub fn new(power_lock: PowerLock, config: Arc<AppConfig>) -> Self {
+    pub fn new(
+        power_lock: PowerLock,
+        operation_lock: OperationLock,
+        config: Arc<AppConfig>,
+    ) -> Self {
         Self {
             last_update_id: 0,
             initial_sync_done: false,
             pending: None,
             power_lock,
+            operation_lock,
             api: Api {
                 config: Arc::clone(&config),
             },
@@ -250,11 +275,16 @@ impl Client {
     fn status_text(&self) -> String {
         let online = net::check_pc_online(&self.config.pc_status_addr, Duration::from_millis(800));
         format!(
-            "PC: {}\nM5Stack: Rust firmware",
+            "PC: {}\n操作: {}\nM5Stack: Rust firmware",
             if online {
                 "オンライン"
             } else {
                 "オフライン"
+            },
+            if self.operation_lock.is_locked() {
+                "ロック中"
+            } else {
+                "可能"
             }
         )
     }
@@ -329,8 +359,37 @@ impl Client {
     }
 
     fn dispatch_command(&mut self, chat_id: i64, command: &str, args: &str) {
+        // 操作系コマンドはロック中に一切実行しない。ロックの切り替えと状態確認は
+        // ロック中でも受け付ける(そうしないと解除できない)。
+        const POWER_COMMANDS: [&str; 5] = [
+            "/wake",
+            "/reboot",
+            "/shutdown",
+            "/confirm_reboot",
+            "/confirm_shutdown",
+        ];
+        if self.operation_lock.is_locked() && POWER_COMMANDS.contains(&command) {
+            self.api.send_message(
+                chat_id,
+                "操作はロック中です。/unlock で解除してから実行してください。",
+            );
+            return;
+        }
+
         match command {
             "/status" => self.api.send_message(chat_id, &self.status_text()),
+            "/lock" => {
+                self.operation_lock.set(true);
+                // 保留中の確認も無効化しておく(ロック直前に発行された確認を
+                // 解除後に使い回せてしまうのを防ぐ)。
+                self.pending = None;
+                self.api
+                    .send_message(chat_id, "操作をロックしました。/unlock で解除できます。");
+            }
+            "/unlock" => {
+                self.operation_lock.set(false);
+                self.api.send_message(chat_id, "操作のロックを解除しました。");
+            }
             "/wake" => {
                 let _guard = self.power_lock.lock();
                 let reply = match net::send_wake_on_lan(
@@ -378,6 +437,12 @@ impl Client {
         if from_id.to_string() != self.config.telegram_allowed_user_id {
             // 権限がない場合はpending確認を触らず、Telegram側の読み込み状態だけ終わらせる。
             self.api.answer_callback_query(&id, "権限がありません");
+            return;
+        }
+
+        if self.operation_lock.is_locked() {
+            // ロック中はボタンからの実行も拒否する。pendingは/lockで既に破棄済み。
+            self.api.answer_callback_query(&id, "操作はロック中です");
             return;
         }
 

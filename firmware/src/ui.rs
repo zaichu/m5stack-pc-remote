@@ -93,6 +93,8 @@ pub struct Status<'a> {
     pub wifi_connected: bool,
     pub pc_online: bool,
     pub telegram: TelegramState,
+    /// Telegramの /lock で操作が禁止されている状態。
+    pub locked: bool,
     pub toast: Option<&'a str>,
 }
 
@@ -163,6 +165,17 @@ pub fn draw_main(
     )
     .draw(display)
     .map_err(|e| format!("draw failed: {e:?}"))?;
+
+    // ロック中は操作しても何も起きないため、理由が分かるよう明示する。
+    if status.locked {
+        Text::new(
+            "LOCKED (/unlock to enable)",
+            Point::new(12, 64),
+            MonoTextStyle::new(&FONT_6X10, Rgb565::CSS_ORANGE),
+        )
+        .draw(display)
+        .map_err(|e| format!("draw failed: {e:?}"))?;
+    }
 
     Text::new(
         if status.pc_online {
