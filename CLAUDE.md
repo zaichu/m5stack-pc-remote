@@ -4,12 +4,12 @@ Claude Code がこのリポジトリで作業する際のルールです。詳�
 
 ## 役割分担
 
-このプロジェクトの標準運用は「設計・レビューは Codex、実装は Claude」です。
+このプロジェクトの標準運用は「実装を担当しないエージェントが設計・レビュー・リリース判断を持つ」です。特定のモデル名には固定しません。現在の割り当ては `.claude/skills/design-implementation-handoff/SKILL.md` の「現在の割り当て」節が正本で、今は Claude Code が実装エージェント、Codex CLI が設計・レビューエージェントです。割り当てが変わったらそのスキルの節だけ書き換えます。
 
-- 大きな技術選定、認証方式、外部操作経路、Windowsサービス化方針は Codex レビューを前提にする。
-- Claude は実装、テスト、ドキュメント更新、明示パスでの staging、作業branchへのpush、PR作成を担当する。
-- Claude は main へ直接pushしない。PRをmergeしない。Windows PCの実 shutdown/reboot や外部公開設定変更を勝手に実行しない。
-- Codex が直接書いた実質的な差分は、`.claude/skills/codex-claude-handoff/SKILL.md` の逆レビュー対象にする。
+- 大きな技術選定、認証方式、外部操作経路、Windowsサービス化方針は設計エージェントのレビューを前提にする。
+- 実装エージェント(現在: Claude)は実装、テスト、ドキュメント更新、明示パスでの staging、作業branchへのpush、PR作成を担当する。
+- 実装エージェントは main へ直接pushしない。PRをmergeしない。Windows PCの実 shutdown/reboot や外部公開設定変更を勝手に実行しない。
+- 設計エージェントが直接書いた実質的な差分は、`.claude/skills/design-implementation-handoff/SKILL.md` の逆レビュー対象にする。
 
 ## 品質ゲート
 
