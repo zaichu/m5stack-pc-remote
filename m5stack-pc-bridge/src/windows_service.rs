@@ -65,10 +65,7 @@ fn service_main(_arguments: Vec<OsString>) {
 fn log_startup_error(err: &anyhow::Error) {
     use std::io::Write;
 
-    let log_path = crate::default_config_path()
-        .parent()
-        .map(|dir| dir.join("service-error.log"))
-        .unwrap_or_else(|| std::path::PathBuf::from("service-error.log"));
+    let log_path = crate::exe_dir_file("service-error.log");
 
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
