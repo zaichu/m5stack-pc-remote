@@ -108,9 +108,15 @@ fn generate_config() {
     }
 
     let raw = fs::read_to_string(&config_path).expect("config.toml の読み込みに失敗しました");
-    let table: toml::Table = raw.parse().expect(
-        "config.toml をTOMLとして解析できませんでした。secretを含む可能性があるため内容は表示しません",
-    );
+    // parse失敗時のエラーはDebug出力に config.toml の全文(`input`)を含むため、
+    // エラーそのものをpanicメッセージへ載せない。行番号すら出さない代わりに、
+    // secretがビルドログへ流れないことを優先する。
+    let Ok(table) = raw.parse::<toml::Table>() else {
+        panic!(
+            "config.toml をTOMLとして解析できませんでした。secretを含む可能性があるため \
+             内容とエラー詳細は表示しません。config.example.toml と見比べてください"
+        );
+    };
 
     let mut out = String::new();
     for spec in KEYS {
