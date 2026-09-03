@@ -277,11 +277,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 ) {
                                     Ok(()) => {
                                         println!("WOL sent");
-                                        "Magic Packet送信".to_string()
+                                        "Magic packet sent".to_string()
                                     }
                                     Err(e) => {
                                         println!("WOL failed: {e}");
-                                        "WOL失敗".to_string()
+                                        "WOL failed".to_string()
                                     }
                                 },
                             );
@@ -307,12 +307,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             toast_text = Some(
                                 match bridge_client::send_command(action, app_config.as_ref()) {
                                     Ok(code) if bridge_client::is_accepted(code) => {
-                                        "操作を受け付けました".into()
+                                        "Command accepted".into()
                                     }
-                                    Ok(code) => format!("操作が拒否されました ({code})"),
+                                    Ok(code) => format!("Command rejected ({code})"),
                                     Err(e) => {
                                         println!("bridge command failed: {e}");
-                                        "操作に失敗しました".to_string()
+                                        "Command failed".to_string()
                                     }
                                 },
                             );

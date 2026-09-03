@@ -225,7 +225,7 @@ pub fn draw_confirm(
     .map_err(|e| format!("draw failed: {e:?}"))?;
 
     Text::new(
-        "OKで署名付きコマンドを送信",
+        "OK sends a signed command",
         Point::new(12, 100),
         MonoTextStyle::new(&FONT_6X10, Rgb565::CSS_LIGHT_GRAY),
     )
