@@ -139,6 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         pc_online: false,
         telegram: TelegramState::Disabled,
         locked: false,
+        battery: None,
         toast: None,
     };
     let mut toast_text: Option<String> = None;
@@ -277,6 +278,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
+            // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
+            status.battery = board::read_battery(&mut axp);
             let now_online = net::check_pc_online(&app_config.pc_status_addr, STATUS_PROBE_TIMEOUT);
             if now_online != status.pc_online {
                 status.pc_online = now_online;
