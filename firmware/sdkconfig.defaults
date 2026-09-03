@@ -9,3 +9,20 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_COMPILER_CXX_EXCEPTIONS=y
 CONFIG_COMPILER_CXX_RTTI=y
+
+# OTA(無線更新)対応。partitions.csv でota_0/ota_1/otadataを定義している(Issue #41/#79)。
+#
+# ファイル名は素の相対パスでは解決できない。cargo-embuildが生成する合成CMake
+# プロジェクトの実体は target/ 配下の一時ディレクトリにあり、ESP-IDFの
+# project.cmakeはそこを基準にCONFIG_PARTITION_TABLE_CUSTOM_FILENAMEを解決する
+# (このプロジェクトのfirmware/ディレクトリではない)。Kconfigの$(VAR)展開で、
+# 実際のcrateディレクトリを指すPROJECT_DIR環境変数(cargoが子プロセスへ渡す)を
+# 使って絶対パスへ展開する。
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../../../../../partitions.csv"
+# OTA後、起動自己診断を通過するまで新slotをcommitしない運用にする(esp_ota_mark_app_*)。
+# 未commitのまま再起動するとbootloaderが自動的に旧slotへ戻る。診断ロジック自体は
+# Phase4(#79)で実装する。この設定はPhase1の時点で有効にしておく
+# (otadata partitionの追加とセットのbootloader機能であり、後から追加すると
+# もう一度パーティション構成に触るbootloaderの再書き込みが必要になるため)。
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

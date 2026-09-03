@@ -1,0 +1,18 @@
+# OTA(無線更新)対応のカスタムパーティションテーブル。Issue #41/#79。
+#
+# ESP-IDF標準の `partitions_two_ota.csv` を土台に、このfirmwareの実際の
+# バイナリサイズに合わせて調整してある。
+#   - nvs: 0x6000 -> 0x4000。ESP-IDF標準OTA構成に寄せる(#41のCodexレビュー方針)。
+#     縮小に伴い、NVS provisioning(scripts/provision-firmware-nvs.py)の
+#     既定size/offsetも本PRで合わせて更新する
+#   - factoryは持たない。初回書き込みもota_0へ行う(ESP-IDFの二重OTA標準構成と同じ)
+#   - ota_0/ota_1は2MBずつ。2026-09-04時点のrelease app imageは約1.3MBで、
+#     以後の機能追加を見込んで約50%の余裕を持たせた
+#   - 合計使用量は約4.06MB。16MB flashのうち残りは未使用(将来coredump等に転用可)
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     ,        0x4000,
+otadata,  data, ota,     ,        0x2000,
+phy_init, data, phy,     ,        0x1000,
+ota_0,    app,  ota_0,   ,        2M,
+ota_1,    app,  ota_1,   ,        2M,
