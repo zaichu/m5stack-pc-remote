@@ -149,6 +149,8 @@ bash scripts/telegram-set-commands.sh
 - `/wake`: PCへWake-on-LANを送信
 - `/reboot`: 確認後にPCを再起動
 - `/shutdown`: 確認後にPCをシャットダウン
+- `/lock`: 電源操作を一時的に禁止
+- `/unlock`: `/lock` を解除
 
 ### 5. 実行方法
 
@@ -159,6 +161,13 @@ Telegramアプリから許可したuser idのアカウントで、bot宛てに�
 - `/status`: PCのONLINE/OFFLINE、Wi-Fi RSSI、M5Stack IPを返信します。
 - `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
 - `/reboot` / `/shutdown`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」または「シャットダウン」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を手入力しても構いません(後方互換)。nonceは `TELEGRAM_CONFIRM_TTL_MS` の間だけ有効で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
+- `/lock` / `/unlock`: 旅行中などに誤操作・不正操作を防ぐため、電源操作を一時的に禁止します。ロック中は `/wake` `/reboot` `/shutdown` と確認ボタンをすべて拒否し、**M5Stack本体のタッチ操作も同様に拒否**します(画面に `LOCKED` と表示されます)。`/lock` `/unlock` `/status` はロック中でも受け付けます。ロック状態はメモリ上だけで保持するため、M5Stackを再起動すると解除されます。
+
+なお、次の出来事はこちらから操作しなくてもTelegramへ通知されます。
+
+- PCのオンライン/オフラインが切り替わったとき(瞬断での連投を防ぐため、20秒継続した変化だけを通知)
+- M5Stack本体のタッチパネルから電源操作を実行したとき(`[本体パネル操作]` のprefixが付きます)
+- 未許可ユーザーからのアクセスを検知したとき(3回たまった時点で通知。最短送信間隔1時間)
 
 Telegram APIとのTLS通信は `firmware/src/telegram_root_ca.rs` に埋め込んだルートCA証明書でサーバー証明書を検証します。Telegramが将来ルート認証局を切り替えた場合、画面が `Telegram: polling` から `Telegram: error` に変わります。その場合の証明書更新手順は [External Access Design](docs/external-access.md) の「CA証明書のローテーション運用」を参照してください。
 

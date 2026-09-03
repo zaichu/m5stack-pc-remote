@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/zaichu/m5stack-pc-remote",
-      "revision": "b54c7933976ed9e65c2970cd0b5b77ee42a64fb2"
+      "revision": "cfd501db246fd017402e33ae4f8a7b979d2469ed"
     },
     "views": [
       { "id": "full-system", "label": "全体像", "focus": ["phone", "telegram", "m5stack", "bridge", "windows_pc"], "note": "スマートフォンから物理PCまでの全経路。" },
@@ -27,10 +27,11 @@
       ] },
     { "id": "bridge", "type": "security", "label": "m5stack-pc-bridge", "sublabel": "Windows Service :18080", "pos": [900, 180], "size": [170, 70],
       "sources": [
-        { "path": "m5stack-pc-bridge/src/server.rs", "label": "HTTPルーティング" },
-        { "path": "m5stack-pc-bridge/src/auth.rs", "label": "HMAC + timestamp + nonce検証" }
+        { "path": "m5stack-pc-bridge/src/auth.rs", "label": "HMAC + timestamp + nonce検証" },
+        { "path": "m5stack-pc-bridge/src/audit_log.rs", "label": "操作の監査ログ" },
+        { "path": "m5stack-pc-bridge/src/alert.rs", "label": "認証失敗アラート送信" }
       ] },
-    { "id": "windows_pc", "type": "backend", "label": "Windows 11 Pro PC", "sublabel": "shutdown.exe", "pos": [900, 290], "size": [170, 70],
+    { "id": "windows_pc", "type": "backend", "label": "Windows 11 Pro PC", "sublabel": "shutdown.exe", "pos": [900, 276], "size": [170, 70],
       "sources": [{ "path": "m5stack-pc-bridge/src/power.rs", "label": "プロセス実行" }] }
   ],
   "boundaries": [
@@ -42,19 +43,22 @@
     { "id": "telegram-m5stack", "from": "telegram", "to": "m5stack", "label": "HTTPS long polling", "variant": "emphasis", "fromSide": "right", "toSide": "left", "labelDy": -20 },
     { "id": "m5stack-bridge", "from": "m5stack", "to": "bridge", "label": "HMAC署名付きPOST", "variant": "security", "fromSide": "right", "toSide": "left", "labelDy": -14 },
     { "id": "bridge-pc", "from": "bridge", "to": "windows_pc", "label": "shutdown.exe", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
-    { "id": "m5stack-pc-direct", "from": "m5stack", "to": "windows_pc", "label": "WOL + STATUS確認", "variant": "dashed" }
+    { "id": "m5stack-pc-direct", "from": "m5stack", "to": "windows_pc", "label": "WOL + STATUS確認", "variant": "dashed" },
+    { "id": "bridge-telegram", "from": "bridge", "to": "telegram", "label": "認証失敗アラート", "variant": "dashed", "fromSide": "top", "toSide": "top", "via": [[985, 36], [375, 36]] }
   ],
   "cards": [
     { "dot": "rose", "title": "セキュリティ", "items": [
-      "REBOOT/SHUTDOWNはHMAC-SHA256署名 + timestamp（±60秒許容）+ 使い捨てnonceが必須",
-      "TelegramのTLSルートCAをピン留め（telegram_root_ca.rsにハードコード）",
+      "REBOOT/SHUTDOWNはHMAC-SHA256署名 + timestamp（±60秒）+ 使い捨てnonceが必須",
+      "TelegramのTLSルートCAをピン留め（firmware側）",
       "TelegramコマンドはTELEGRAM_ALLOWED_USER_IDのfrom.idのみ受理",
-      "dry_runは既定でtrue。明示的に無効化しない限り実行しない"
+      "/lockで全操作を一時停止（Telegram・本体パネル両方）",
+      "認証失敗3回でTelegramへアラート（本文は件数のみ）"
     ] },
     { "dot": "amber", "title": "失敗・復旧経路", "items": [
-      "未許可ユーザー・不正/期限切れのtimestamp・nonce再利用: リクエストを無視し実行しない",
-      "m5stack-pc-bridgeクラッシュ時: Windows Service Recoveryが自動再起動",
-      "M5StackのWi-Fi切断は15秒ごとに再接続。Telegram取得失敗は5〜60秒でbackoff"
+      "未許可ユーザー・不正なtimestamp・nonce再利用: 実行しない",
+      "bridgeクラッシュ時: Windows Service Recoveryが自動再起動",
+      "Wi-Fi切断は15秒ごとに再接続。Telegram取得失敗は5〜60秒backoff",
+      "PC状態変化・本体パネル操作はTelegram通知、電源操作はaudit.logへ記録"
     ] },
     { "dot": "cyan", "title": "秘密情報の境界", "items": [
       "BRIDGE_SHARED_SECRET: M5Stackとm5stack-pc-bridgeのみが保持",
