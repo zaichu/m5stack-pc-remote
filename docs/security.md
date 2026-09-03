@@ -9,21 +9,13 @@
 
 ## HMAC署名
 
-署名対象:
+wire protocol の正本は `shared/pc-remote-signing/src/lib.rs` です。canonical 文字列とヘッダーはそこで定義します。
 
 ```text
-METHOD + "\n" +
-PATH + "\n" +
-TIMESTAMP + "\n" +
-NONCE + "\n" +
-SHA256(BODY)
+METHOD + "\n" + PATH + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + SHA256(BODY)
+X-Signature = HMAC-SHA256(shared_secret, canonical)
+ヘッダー: X-Timestamp, X-Nonce, X-Signature
 ```
-
-ヘッダー:
-
-- `X-Timestamp`
-- `X-Nonce`
-- `X-Signature`
 
 m5stack-pc-bridge側の検証:
 

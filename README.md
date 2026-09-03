@@ -34,7 +34,7 @@ Windows PC
 ```
 
 m5stack-pc-bridge のポートをインターネットへ直接公開しません。賃貸無料回線などでルーターVPNを前提にできない場合は、M5StackがTelegram Bot APIを外向きHTTPSでlong pollingしてコマンドを受け取ります。
-外部操作経路はコストゼロを絶対条件にし、月額課金・従量課金・無料枠超過リスクのある構成を運用必須経路にしません。
+外部操作経路はコストゼロを絶対条件にします（詳細は [Cost Policy](docs/cost.md)）。
 
 ## 技術選定
 
