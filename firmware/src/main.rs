@@ -26,15 +26,17 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
 use app_config::AppConfig;
 use board::{DisplayPins, DISPLAY_HEIGHT, DISPLAY_WIDTH};
-use bridge_client::PowerAction;
+use bridge_client::{PowerAction, PowerActionLabel};
 use ui::{Status, TelegramState};
 
 const STATUS_INTERVAL: Duration = Duration::from_secs(10);
-const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 const TOAST_TTL: Duration = Duration::from_secs(3);
 /// PC状態のTelegram通知を出すまでに必要な、同じ結果の連続観測回数。
 /// STATUS_INTERVAL(10秒)×2回なので、20秒続いた変化だけを通知する。
+/// タッチのポーリング間隔。取りこぼさない程度に短く、CPUを回しすぎない程度に長く。
+const TOUCH_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
 const NOTIFY_STABLE_POLLS: u8 = 2;
 
 /// タッチUIの現在画面。
@@ -282,7 +284,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let previous_battery = status.battery;
             // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
             status.battery = board::read_battery(&mut axp);
-            let now_online = net::check_pc_online(&app_config.pc_status_addr, STATUS_PROBE_TIMEOUT);
+            let now_online =
+                net::check_pc_online(&app_config.pc_status_addr, net::STATUS_PROBE_TIMEOUT);
             if now_online != status.pc_online {
                 status.pc_online = now_online;
                 println!("PC status changed: online={}", status.pc_online);
@@ -300,14 +303,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         notified_online = Some(now_online);
                         notify_streak = 0;
                         if let Some(notifier) = notifier.as_ref() {
-                            notifier.notify(
-                                if now_online {
-                                    "PCがオンラインになりました。"
-                                } else {
-                                    "PCがオフラインになりました。"
-                                }
-                                .to_string(),
-                            );
+                            notifier.notify(format!(
+                                "PCが{}になりました。",
+                                net::pc_online_label_ja(now_online)
+                            ));
                         }
                     }
                 }
@@ -339,20 +338,23 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if let Some((x, y)) = touch_point {
             if !touch_was_down {
-                // ロック中はどのボタンも実行しない。無反応だと故障と区別が
-                // つかないため、理由をトーストで返す。
-                if status.locked
-                    && (ui::WAKE_BUTTON.contains(x, y)
-                        || ui::REBOOT_BUTTON.contains(x, y)
-                        || ui::SHUTDOWN_BUTTON.contains(x, y)
-                        || ui::OK_BUTTON.contains(x, y))
-                {
-                    toast_text = Some("Locked (/unlock in Telegram)".to_string());
-                    toast_at = Instant::now();
-                    screen = Screen::Main;
-                    ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                // ロック中はどのボタンも実行しない。REBOOT/SHUTDOWNは確認画面を
+                // 開くだけだが、OKまで進んでから弾くより先に理由を返す。
+                // `status.locked`はループ先頭で読んだ値なので共有状態を直接見る。
+                let power_button_tapped = ui::WAKE_BUTTON.contains(x, y)
+                    || ui::REBOOT_BUTTON.contains(x, y)
+                    || ui::SHUTDOWN_BUTTON.contains(x, y)
+                    || ui::OK_BUTTON.contains(x, y);
+                if power_button_tapped && operation_lock.is_locked() {
+                    reject_locked(
+                        &mut display,
+                        &status,
+                        &mut toast_text,
+                        &mut toast_at,
+                        &mut screen,
+                    )?;
                     touch_was_down = touch_down;
-                    std::thread::sleep(Duration::from_millis(20));
+                    std::thread::sleep(TOUCH_POLL_INTERVAL);
                     continue;
                 }
 
@@ -365,11 +367,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                             // ここまでの間にTelegramの/lockが通っている可能性がある。
                             // 実行直前に共有状態を直接見る。
                             if operation_lock.is_locked() {
-                                toast_text = Some("Locked (/unlock in Telegram)".to_string());
-                                toast_at = Instant::now();
-                                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                                reject_locked(
+                                    &mut display,
+                                    &status,
+                                    &mut toast_text,
+                                    &mut toast_at,
+                                    &mut screen,
+                                )?;
                                 touch_was_down = touch_down;
-                                std::thread::sleep(Duration::from_millis(20));
+                                std::thread::sleep(TOUCH_POLL_INTERVAL);
                                 continue;
                             }
                             let wol_result = net::send_wake_on_lan(
@@ -409,12 +415,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                             let _guard = telegram::lock_power(&power_lock);
                             // WAKEと同じ理由で、実行直前にロックを再確認する。
                             if operation_lock.is_locked() {
-                                toast_text = Some("Locked (/unlock in Telegram)".to_string());
-                                toast_at = Instant::now();
-                                screen = Screen::Main;
-                                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                                reject_locked(
+                                    &mut display,
+                                    &status,
+                                    &mut toast_text,
+                                    &mut toast_at,
+                                    &mut screen,
+                                )?;
                                 touch_was_down = touch_down;
-                                std::thread::sleep(Duration::from_millis(20));
+                                std::thread::sleep(TOUCH_POLL_INTERVAL);
                                 continue;
                             }
                             let (toast, report) =
@@ -454,7 +463,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(TOUCH_POLL_INTERVAL);
     }
 }
 
@@ -467,6 +476,26 @@ fn notify_panel_action(notifier: Option<&telegram::Notifier>, text: &str) {
     if let Some(notifier) = notifier {
         notifier.notify(format!("[本体パネル操作] {text}"));
     }
+}
+
+/// ロック中に電源操作を弾いたときのトースト。無反応だと故障と区別がつかない
+/// ため、解除方法まで出す。画面はASCIIフォントなので英語。
+const LOCKED_TOAST: &str = "Locked (/unlock in Telegram)";
+
+/// ロック中の操作を弾き、理由をトーストで表示してメイン画面へ戻す。
+/// 呼び出し側はこの後ループを`continue`する。
+fn reject_locked(
+    display: &mut board::Core2Display<'_>,
+    status: &Status<'_>,
+    toast_text: &mut Option<String>,
+    toast_at: &mut Instant,
+    screen: &mut Screen,
+) -> Result<(), Box<dyn std::error::Error>> {
+    *toast_text = Some(LOCKED_TOAST.to_string());
+    *toast_at = Instant::now();
+    *screen = Screen::Main;
+    ui::draw_main(display, &with_toast(status, toast_text))?;
+    Ok(())
 }
 
 fn with_toast<'a>(status: &Status<'a>, toast: &'a Option<String>) -> Status<'a> {

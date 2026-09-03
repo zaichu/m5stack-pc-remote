@@ -14,6 +14,29 @@ use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configura
 /// 署名のtimestampと定期レポートの時刻判定で共通に使う。
 pub const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
 
+/// PCの死活確認に使うTCP接続タイムアウト。UI更新ループとTelegramの応答生成で
+/// 同じ値を使う。長くすると画面の更新周期とTelegramの応答が遅くなる。
+pub const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
+
+/// PCの死活状態の日本語表記。Telegramの応答・通知・定期レポートで共通に使う。
+pub fn pc_online_label_ja(online: bool) -> &'static str {
+    if online {
+        "オンライン"
+    } else {
+        "オフライン"
+    }
+}
+
+/// PCの死活状態のASCII表記。M5Stackの画面で使うmono_font::asciiは非ASCIIを
+/// `?` に落とすため、画面表示は日本語ではなくこちらを使う。
+pub fn pc_online_label_ascii(online: bool) -> &'static str {
+    if online {
+        "ONLINE"
+    } else {
+        "OFFLINE"
+    }
+}
+
 /// Wi-Fi stationハンドル。接続維持のためプログラム中で保持し続ける。
 pub struct Wifi {
     inner: BlockingWifi<EspWifi<'static>>,

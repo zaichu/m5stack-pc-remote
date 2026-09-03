@@ -195,10 +195,13 @@ fn draw_lamp(
 }
 
 fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<(), Box<dyn Error>> {
-    Rectangle::new(Point::zero(), Size::new(DISPLAY_WIDTH as u32, HEADER_HEIGHT))
-        .into_styled(PrimitiveStyle::with_fill(palette::HEADER))
-        .draw(display)
-        .map_err(|e| format!("header failed: {e:?}"))?;
+    Rectangle::new(
+        Point::zero(),
+        Size::new(DISPLAY_WIDTH as u32, HEADER_HEIGHT),
+    )
+    .into_styled(PrimitiveStyle::with_fill(palette::HEADER))
+    .draw(display)
+    .map_err(|e| format!("header failed: {e:?}"))?;
 
     Text::new(
         "M5 PC REMOTE",
@@ -282,7 +285,7 @@ fn draw_status_card(
     .map_err(|e| format!("draw failed: {e:?}"))?;
 
     Text::with_alignment(
-        if status.pc_online { "ONLINE" } else { "OFFLINE" },
+        crate::net::pc_online_label_ascii(status.pc_online),
         Point::new(DISPLAY_WIDTH as i32 / 2, 110),
         MonoTextStyle::new(&FONT_10X20, accent),
         Alignment::Center,
@@ -358,10 +361,13 @@ pub fn draw_confirm(
         .map_err(|e| format!("clear failed: {e:?}"))?;
 
     // 危険操作の確認画面。赤い帯で通常画面と明確に区別する。
-    Rectangle::new(Point::zero(), Size::new(DISPLAY_WIDTH as u32, HEADER_HEIGHT))
-        .into_styled(PrimitiveStyle::with_fill(palette::DANGER))
-        .draw(display)
-        .map_err(|e| format!("header failed: {e:?}"))?;
+    Rectangle::new(
+        Point::zero(),
+        Size::new(DISPLAY_WIDTH as u32, HEADER_HEIGHT),
+    )
+    .into_styled(PrimitiveStyle::with_fill(palette::DANGER))
+    .draw(display)
+    .map_err(|e| format!("header failed: {e:?}"))?;
 
     Text::with_alignment(
         "CONFIRM",
