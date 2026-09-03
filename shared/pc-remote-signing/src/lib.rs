@@ -70,3 +70,66 @@ pub fn verify_signature(
     mac.update(canonical.as_bytes());
     mac.verify_slice(&expected).is_ok()
 }
+
+/// firmware(署名側)とm5stack-pc-bridge(検証側)で共有する電源操作の識別子。
+///
+/// HTTPパスとslugの対応をここ1箇所で決める。canonical文字列にはPATHが入るため、
+/// 片方だけを変えると署名が一致しなくなる。表示文言はwire protocolの一部では
+/// ないので、ここには置かない。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerAction {
+    Reboot,
+    Shutdown,
+}
+
+impl PowerAction {
+    pub const ALL: [PowerAction; 2] = [PowerAction::Reboot, PowerAction::Shutdown];
+
+    /// Telegram callback_dataや監査ログで使う識別子。`:` 区切りで解析するため
+    /// 小文字の単語にする。
+    pub fn slug(self) -> &'static str {
+        match self {
+            PowerAction::Reboot => "reboot",
+            PowerAction::Shutdown => "shutdown",
+        }
+    }
+
+    /// 署名対象になるHTTPパス。slugへ `/` を付けたものと必ず一致する。
+    pub fn path(self) -> &'static str {
+        match self {
+            PowerAction::Reboot => "/reboot",
+            PowerAction::Shutdown => "/shutdown",
+        }
+    }
+
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|action| action.slug() == slug)
+    }
+
+    /// HTTPパスからの逆引き。bridge側のrouting確認に使える。
+    pub fn from_path(path: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|action| action.path() == path)
+    }
+}
+
+#[cfg(test)]
+mod power_action_tests {
+    use super::PowerAction;
+
+    #[test]
+    fn path_is_slug_prefixed_with_slash() {
+        for action in PowerAction::ALL {
+            assert_eq!(action.path(), format!("/{}", action.slug()));
+        }
+    }
+
+    #[test]
+    fn slug_and_path_round_trip() {
+        for action in PowerAction::ALL {
+            assert_eq!(PowerAction::from_slug(action.slug()), Some(action));
+            assert_eq!(PowerAction::from_path(action.path()), Some(action));
+        }
+        assert_eq!(PowerAction::from_slug("hibernate"), None);
+        assert_eq!(PowerAction::from_path("/reboot/"), None);
+    }
+}
