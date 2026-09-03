@@ -9,7 +9,8 @@
 //   - bot tokenとメッセージ内容をログへ出さない
 
 use std::error::Error;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
 use embedded_svc::http::client::Client as HttpClient;
@@ -58,6 +59,29 @@ fn install_root_ca() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// global CA storeはプロセス全体で1つなので、pollingスレッドと通知スレッドの
+/// どちらが先に走っても登録が1回だけになるようにする。
+static ROOT_CA_ONCE: Once = Once::new();
+
+fn ensure_root_ca() {
+    ROOT_CA_ONCE.call_once(|| {
+        if let Err(e) = install_root_ca() {
+            println!("telegram: root CA install failed: {e}");
+        }
+    });
+}
+
+/// private chatではchat_idがuser_idと一致するため、許可ユーザーIDをそのまま
+/// 送信先として使う。能動送信(pollingの応答ではない通知)で必要になる。
+fn allowed_chat_id(config: &AppConfig) -> Option<i64> {
+    config.telegram_allowed_user_id.parse::<i64>().ok()
+}
+
+/// Bot APIへのHTTP呼び出し。pollingスレッドと通知スレッドの両方から使う。
+struct Api {
+    config: Arc<AppConfig>,
+}
+
 struct Pending {
     action: PowerAction,
     nonce: String,
@@ -70,19 +94,10 @@ pub struct Client {
     pending: Option<Pending>,
     power_lock: PowerLock,
     config: Arc<AppConfig>,
+    api: Api,
 }
 
-impl Client {
-    pub fn new(power_lock: PowerLock, config: Arc<AppConfig>) -> Self {
-        Self {
-            last_update_id: 0,
-            initial_sync_done: false,
-            pending: None,
-            power_lock,
-            config,
-        }
-    }
-
+impl Api {
     /// URLにはbot tokenが入るため、絶対にログへ出さない。
     fn api_url(&self, method: &str) -> String {
         format!(
@@ -127,12 +142,12 @@ impl Client {
         Ok(())
     }
 
-    fn send_reply(&self, chat_id: i64, text: &str) {
+    fn send_message(&self, chat_id: i64, text: &str) {
         let _ = self.post_json("sendMessage", &json!({ "chat_id": chat_id, "text": text }));
     }
 
     /// Telegramの確認ボタンを1行で送る。callback_dataはTelegram上限内に収める。
-    fn send_reply_with_confirm_buttons(
+    fn send_message_with_confirm_buttons(
         &self,
         chat_id: i64,
         text: &str,
@@ -162,6 +177,64 @@ impl Client {
             body["text"] = json!(text);
         }
         let _ = self.post_json("answerCallbackQuery", &body);
+    }
+}
+
+/// UIスレッドからTelegramへ能動的に通知を送るためのハンドル。
+///
+/// 送信はHTTPSで数秒かかり得るため、UIループを止めないよう専用スレッドへ
+/// channelで渡す。送信スレッドが落ちていても`notify`は失敗を無視する。
+#[derive(Clone)]
+pub struct Notifier {
+    tx: mpsc::Sender<String>,
+}
+
+impl Notifier {
+    pub fn notify(&self, text: String) {
+        let _ = self.tx.send(text);
+    }
+}
+
+/// 通知送信スレッドを起動し、UIスレッド用のハンドルを返す。
+/// Telegram未設定、または許可ユーザーIDがchat_idとして使えない場合はNone。
+pub fn start_notifier(config: Arc<AppConfig>) -> Option<Notifier> {
+    if !is_configured(config.as_ref()) {
+        return None;
+    }
+    let chat_id = allowed_chat_id(config.as_ref())?;
+
+    let (tx, rx) = mpsc::channel::<String>();
+    let api = Api { config };
+    let spawned = std::thread::Builder::new()
+        .stack_size(12 * 1024)
+        .spawn(move || {
+            ensure_root_ca();
+            while let Ok(text) = rx.recv() {
+                api.send_message(chat_id, &text);
+            }
+        });
+
+    match spawned {
+        Ok(_) => Some(Notifier { tx }),
+        Err(e) => {
+            println!("telegram: failed to start notifier thread: {e}");
+            None
+        }
+    }
+}
+
+impl Client {
+    pub fn new(power_lock: PowerLock, config: Arc<AppConfig>) -> Self {
+        Self {
+            last_update_id: 0,
+            initial_sync_done: false,
+            pending: None,
+            power_lock,
+            api: Api {
+                config: Arc::clone(&config),
+            },
+            config,
+        }
     }
 
     fn generate_nonce() -> String {
@@ -204,7 +277,7 @@ impl Client {
         );
         let confirm_data = format!("confirm:{}:{nonce}", action.slug());
         let cancel_data = format!("cancel:{}:{nonce}", action.slug());
-        self.send_reply_with_confirm_buttons(
+        self.api.send_message_with_confirm_buttons(
             chat_id,
             &text,
             action.label_ja(),
@@ -248,16 +321,16 @@ impl Client {
                 action.label_ja(),
                 action.slug()
             );
-            self.send_reply(chat_id, &reply);
+            self.api.send_message(chat_id, &reply);
             return;
         }
         let reply = self.run_power_action(action);
-        self.send_reply(chat_id, &reply);
+        self.api.send_message(chat_id, &reply);
     }
 
     fn dispatch_command(&mut self, chat_id: i64, command: &str, args: &str) {
         match command {
-            "/status" => self.send_reply(chat_id, &self.status_text()),
+            "/status" => self.api.send_message(chat_id, &self.status_text()),
             "/wake" => {
                 let _guard = self.power_lock.lock();
                 let reply = match net::send_wake_on_lan(
@@ -271,7 +344,7 @@ impl Client {
                     }
                 };
                 drop(_guard);
-                self.send_reply(chat_id, reply);
+                self.api.send_message(chat_id, reply);
             }
             "/reboot" => self.request_confirmation(chat_id, PowerAction::Reboot),
             "/shutdown" => self.request_confirmation(chat_id, PowerAction::Shutdown),
@@ -304,13 +377,13 @@ impl Client {
         let from_id = callback["from"]["id"].as_i64().unwrap_or_default();
         if from_id.to_string() != self.config.telegram_allowed_user_id {
             // 権限がない場合はpending確認を触らず、Telegram側の読み込み状態だけ終わらせる。
-            self.answer_callback_query(&id, "権限がありません");
+            self.api.answer_callback_query(&id, "権限がありません");
             return;
         }
 
         let data = callback["data"].as_str().unwrap_or_default();
         let Some((is_confirm, action, nonce)) = Self::parse_callback_data(data) else {
-            self.answer_callback_query(&id, "無効なボタンです");
+            self.api.answer_callback_query(&id, "無効なボタンです");
             return;
         };
 
@@ -320,7 +393,7 @@ impl Client {
         let valid = self.consume_pending(action, &nonce);
 
         if !is_confirm {
-            self.answer_callback_query(
+            self.api.answer_callback_query(
                 &id,
                 if valid {
                     "キャンセルしました"
@@ -337,28 +410,28 @@ impl Client {
                         action.label_ja()
                     )
                 };
-                self.send_reply(chat_id, &reply);
+                self.api.send_message(chat_id, &reply);
             }
             return;
         }
 
         if !valid {
-            self.answer_callback_query(&id, "期限切れまたは処理済みです");
+            self.api.answer_callback_query(&id, "期限切れまたは処理済みです");
             if chat_id != 0 {
                 let reply = format!(
                     "有効な{}確認がありません。期限切れ、使用済み、またはnonce不一致です。\nもう一度 /{} から実行してください。",
                     action.label_ja(),
                     action.slug()
                 );
-                self.send_reply(chat_id, &reply);
+                self.api.send_message(chat_id, &reply);
             }
             return;
         }
 
         let result = self.run_power_action(action);
-        self.answer_callback_query(&id, &result);
+        self.api.answer_callback_query(&id, &result);
         if chat_id != 0 {
-            self.send_reply(chat_id, &result);
+            self.api.send_message(chat_id, &result);
         }
     }
 
@@ -411,11 +484,11 @@ impl Client {
     fn poll_once(&mut self) -> Result<(), Box<dyn Error>> {
         let url = format!(
             "{}?timeout={}&offset={}",
-            self.api_url("getUpdates"),
+            self.api.api_url("getUpdates"),
             self.config.telegram_long_poll_timeout_seconds,
             self.last_update_id
         );
-        let mut client = self.http_client()?;
+        let mut client = self.api.http_client()?;
         let request = client.request(Method::Get, &url, &[])?;
         let mut response = request.submit()?;
         let status = response.status();
@@ -443,11 +516,7 @@ impl Client {
 
     /// 専用スレッドでlong pollingを継続する。
     pub fn run(mut self, state: Arc<Mutex<State>>) {
-        if let Err(e) = install_root_ca() {
-            println!("telegram: root CA install failed: {e}");
-            *state.lock().unwrap() = State::Error;
-            return;
-        }
+        ensure_root_ca();
 
         // NTP同期を短時間だけ待つ。未同期なら電源操作の送信側で拒否する。
         net::wait_for_time_sync(Duration::from_secs(10));
