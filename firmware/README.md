@@ -125,6 +125,27 @@ espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust
 
 WSL2から書き込む場合はusbipd-winでUSBデバイスをアタッチしてから実行する。
 
+### シリアルを自前スクリプトで読むときの注意
+
+ESP32の自動リセット回路はUSB-UARTのDTR/RTSでENとGPIO0を駆動する。pyserial等で
+ポートを開閉すると、closeのタイミングでこの2線の状態次第では**ダウンロードモード
+(bootloader)のまま止まり、アプリが起動しない**。この状態は画面が真っ暗になるだけで
+シリアルにも何も出ないため、故障と紛らわしい。
+
+自前でポートを開く場合は、closeの前に両線を解放する。
+
+```python
+ser.dtr = False
+ser.rts = False
+ser.close()
+```
+
+ダウンロードモードで止まってしまった場合は次で復帰する。
+
+```bash
+espflash reset --port /dev/ttyUSB0
+```
+
 ## 実装済み機能
 
 Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の設計を移植した
