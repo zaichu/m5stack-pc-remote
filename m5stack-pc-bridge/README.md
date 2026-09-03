@@ -71,6 +71,15 @@ Stop-Service M5StackPcBridge
 本番運用で `dry_run = false` にする前に、`%ProgramData%\m5stack-pc-bridge\config.toml`
 の内容を再確認してください。
 
+## 監査ログ
+
+認証成功かつ `confirm: true` の `POST /reboot` / `POST /shutdown` は、実行ファイルと
+同じディレクトリの `audit.log` へ追記します。記録するのは時刻、操作種別、`dry_run`、
+結果のみで、`shared_secret`、署名、nonce、リクエスト本文、Telegram tokenは書きません。
+
+監査ログを書けない場合、m5stack-pc-bridgeは電源操作を実行せず `500` を返します。
+`audit.log` が約1MBを超えると、書き込み前に `audit.log.1` へ1世代だけローテーションします。
+
 ## API
 
 - `GET /status`

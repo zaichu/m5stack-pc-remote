@@ -8,6 +8,15 @@ pub enum PowerAction {
     Shutdown,
 }
 
+impl PowerAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PowerAction::Reboot => "reboot",
+            PowerAction::Shutdown => "shutdown",
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct PowerResult {
     pub action: &'static str,
@@ -40,10 +49,7 @@ where
     }
 
     Ok(PowerResult {
-        action: match action {
-            PowerAction::Reboot => "reboot",
-            PowerAction::Shutdown => "shutdown",
-        },
+        action: action.as_str(),
         dry_run,
         command,
     })

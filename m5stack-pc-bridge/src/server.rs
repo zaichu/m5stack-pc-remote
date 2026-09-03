@@ -14,6 +14,7 @@ use tokio::net::TcpListener;
 
 use crate::{
     app_config::AgentConfig,
+    audit_log,
     auth::{verify_request, AuthConfig, AuthError, NonceStore},
     power::{run_power_action, PowerAction},
 };
@@ -117,13 +118,36 @@ async fn command(
             if !request.confirm {
                 return (StatusCode::BAD_REQUEST, "confirm must be true").into_response();
             }
-            match run_power_action(action, state.dry_run) {
-                Ok(result) => (StatusCode::OK, Json(result)).into_response(),
-                Err(err) => (
+
+            // fail-closed: 監査ログを残せない場合は電源操作そのものを実行しない。
+            if let Err(err) = audit_log::append(action.as_str(), state.dry_run, "accepted") {
+                tracing::error!("failed to write audit log: {err}");
+                return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("power command failed: {err}"),
+                    "failed to write audit log",
                 )
-                    .into_response(),
+                    .into_response();
+            }
+
+            match run_power_action(action, state.dry_run) {
+                Ok(result) => {
+                    if let Err(err) = audit_log::append(action.as_str(), state.dry_run, "ok") {
+                        tracing::error!("failed to write audit log result: {err}");
+                    }
+                    (StatusCode::OK, Json(result)).into_response()
+                }
+                Err(err) => {
+                    if let Err(log_err) =
+                        audit_log::append(action.as_str(), state.dry_run, "failed")
+                    {
+                        tracing::error!("failed to write audit log result: {log_err}");
+                    }
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("power command failed: {err}"),
+                    )
+                        .into_response()
+                }
             }
         }
         Err(err) => (StatusCode::UNAUTHORIZED, err.to_string()).into_response(),

@@ -57,3 +57,10 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 - m5stack-pc-bridgeは、`config.example.toml` のプレースホルダー `shared_secret` と32文字未満の `shared_secret` を起動時に拒否します。
 - nonceの保持TTLは `allowed_skew_seconds` と連動し、timestamp skewを許容している間は同じnonceの再利用を拒否します。
 - `uninstall.ps1` はデフォルトでインストール先ディレクトリを削除しません。`-RemoveFiles` で明示的に削除できます。
+
+## 監査ログ
+
+- m5stack-pc-bridgeは、認証成功かつ `confirm: true` の `POST /reboot` / `POST /shutdown` だけを実行ファイル横の `audit.log` へ記録します。
+- 記録項目は時刻、操作種別、`dry_run`、結果のみです。`shared_secret`、署名、nonce、リクエスト本文、Telegram tokenは記録しません。
+- 操作前の監査ログ追記に失敗した場合、reboot/shutdownは実行せず `500` を返します。
+- `audit.log` は約1MBで `audit.log.1` へ1世代ローテーションします。長期保存が必要な場合はWindows側で別途退避してください。
