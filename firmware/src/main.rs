@@ -33,6 +33,9 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(10);
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 const TOAST_TTL: Duration = Duration::from_secs(3);
+/// PC状態のTelegram通知を出すまでに必要な、同じ結果の連続観測回数。
+/// STATUS_INTERVAL(10秒)×2回なので、20秒続いた変化だけを通知する。
+const NOTIFY_STABLE_POLLS: u8 = 2;
 
 /// タッチUIの現在画面。
 enum Screen {
@@ -50,6 +53,7 @@ fn start_online_services(
     telegram_started: &mut bool,
     power_lock: &telegram::PowerLock,
     telegram_state: &Arc<Mutex<telegram::State>>,
+    notifier: &mut Option<telegram::Notifier>,
     app_config: &Arc<AppConfig>,
 ) {
     if sntp.is_none() {
@@ -62,6 +66,11 @@ fn start_online_services(
             }
             Err(e) => println!("SNTP start failed: {e}"),
         }
+    }
+
+    if notifier.is_none() {
+        // PC状態変化などをUIループから送るための送信専用スレッド。
+        *notifier = telegram::start_notifier(Arc::clone(app_config));
     }
 
     if !*telegram_started && telegram::is_configured(app_config.as_ref()) {
@@ -140,6 +149,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let telegram_state = Arc::new(Mutex::new(telegram::State::Disabled));
     let mut sntp: Option<esp_idf_svc::sntp::EspSntp<'static>> = None;
     let mut telegram_started = false;
+    let mut notifier: Option<telegram::Notifier> = None;
     if !telegram::is_configured(app_config.as_ref()) {
         println!("telegram: disabled (token or user id is a placeholder)");
     }
@@ -168,6 +178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &mut telegram_started,
             &power_lock,
             &telegram_state,
+            &mut notifier,
             &app_config,
         );
     }
@@ -179,6 +190,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut wifi_check_at = Instant::now();
     let mut toast_at = Instant::now();
     let mut touch_was_down = false;
+    // Telegramへ通知済みのPC状態。画面表示(status.pc_online)とは別に持ち、
+    // 瞬断による通知の連投を防ぐ。
+    //
+    // 起動直後の最初の観測は通知せず基準値として取り込むだけにする(Noneの間)。
+    // そうしないとM5Stackを再起動するたびに「オンラインになりました」を送って
+    // しまう。Telegram pollerが最初のgetUpdatesを実行しないのと同じ考え方。
+    let mut notified_online: Option<bool> = None;
+    let mut notify_streak: u8 = 0;
 
     loop {
         // Wi-Fi切断時は一定間隔で再接続を試す。
@@ -227,6 +246,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &mut telegram_started,
                     &power_lock,
                     &telegram_state,
+                    &mut notifier,
                     &app_config,
                 );
             }
@@ -250,6 +270,31 @@ fn main() -> Result<(), Box<dyn Error>> {
             if now_online != status.pc_online {
                 status.pc_online = now_online;
                 println!("PC status changed: online={}", status.pc_online);
+            }
+
+            // 画面表示は即座に切り替えるが、Telegram通知だけは同じ結果を
+            // NOTIFY_STABLE_POLLS回連続で観測してから送る。瞬断やPC再起動中の
+            // 短い揺れで通知が連投されるのを防ぐ。
+            match notified_online {
+                None => notified_online = Some(now_online),
+                Some(prev) if prev == now_online => notify_streak = 0,
+                Some(_) => {
+                    notify_streak += 1;
+                    if notify_streak >= NOTIFY_STABLE_POLLS {
+                        notified_online = Some(now_online);
+                        notify_streak = 0;
+                        if let Some(notifier) = notifier.as_ref() {
+                            notifier.notify(
+                                if now_online {
+                                    "PCがオンラインになりました。"
+                                } else {
+                                    "PCがオフラインになりました。"
+                                }
+                                .to_string(),
+                            );
+                        }
+                    }
+                }
             }
             if matches!(screen, Screen::Main) {
                 ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
