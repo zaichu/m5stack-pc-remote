@@ -82,6 +82,53 @@ where
     Ok(())
 }
 
+/// バッテリー状態。AXP192から読んだ電圧を残量へ概算したもの。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Battery {
+    pub percent: u8,
+    /// USB給電中(VBUS検出)。給電中は残量表示より充電中であることを優先して出す。
+    pub charging: bool,
+}
+
+/// バッテリー電圧とVBUS検出を読む。I2Cが応答しない場合はNone。
+pub fn read_battery<I2C, E>(axp: &mut Axp192<I2C>) -> Option<Battery>
+where
+    I2C: embedded_hal::i2c::I2c<Error = E>,
+{
+    let volts = axp.get_battery_voltage().ok()?;
+    Some(Battery {
+        percent: percent_from_volts(volts),
+        charging: axp.get_vbus_present().unwrap_or(false),
+    })
+}
+
+/// Li-Poの放電カーブは中央が平坦なので、電圧を単純に線形換算すると
+/// 中盤で大きくずれる。代表点を結ぶ折れ線で概算する。
+/// 精度は数%程度で、残量の目安を出す用途に限る。
+fn percent_from_volts(volts: f32) -> u8 {
+    const CURVE: [(f32, f32); 6] = [
+        (3.30, 0.0),
+        (3.60, 10.0),
+        (3.70, 25.0),
+        (3.85, 50.0),
+        (4.00, 75.0),
+        (4.20, 100.0),
+    ];
+
+    if volts <= CURVE[0].0 {
+        return 0;
+    }
+    for pair in CURVE.windows(2) {
+        let (v_low, p_low) = pair[0];
+        let (v_high, p_high) = pair[1];
+        if volts < v_high {
+            let ratio = (volts - v_low) / (v_high - v_low);
+            return (p_low + ratio * (p_high - p_low)) as u8;
+        }
+    }
+    100
+}
+
 pub struct DisplayPins {
     pub sclk: Gpio18,
     pub mosi: Gpio23,

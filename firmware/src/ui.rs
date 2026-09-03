@@ -16,7 +16,7 @@ use embedded_graphics::primitives::{
 };
 use embedded_graphics::text::{Alignment, Text};
 
-use crate::board::{Core2Display, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::board::{Battery, Core2Display, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::bridge_client::PowerAction;
 
 /// 配色。1箇所にまとめて画面全体のトーンを揃える。
@@ -145,6 +145,8 @@ pub struct Status<'a> {
     pub telegram: TelegramState,
     /// Telegramの /lock で操作が禁止されている状態。
     pub locked: bool,
+    /// バッテリー状態。読み取れていないときはNone。
+    pub battery: Option<Battery>,
     pub toast: Option<&'a str>,
 }
 
@@ -213,7 +215,7 @@ fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<()
         "TG",
         status.telegram.color(),
     )?;
-    draw_lamp(
+    let next = draw_lamp(
         display,
         next,
         "WIFI",
@@ -223,6 +225,25 @@ fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<()
             palette::NG
         },
     )?;
+
+    if let Some(battery) = status.battery {
+        // 充電中は残量より「給電されている」ことを優先して示す。
+        let label = if battery.charging {
+            "CHG".to_string()
+        } else {
+            format!("{}%", battery.percent)
+        };
+        let color = if battery.charging {
+            palette::ACCENT
+        } else if battery.percent >= 40 {
+            palette::OK
+        } else if battery.percent >= 15 {
+            palette::WARN
+        } else {
+            palette::NG
+        };
+        draw_lamp(display, next, &label, color)?;
+    }
     Ok(())
 }
 
