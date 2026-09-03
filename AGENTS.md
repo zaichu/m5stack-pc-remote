@@ -19,6 +19,6 @@
 - ソースコードの識別子は英語、コメントとドキュメントは日本語または英語のどちらでもよいが、ユーザー向け説明は日本語を優先する。
 - `.githooks/` はローカルで早期に事故を止める入口であり、品質ゲートの正本は `Makefile` と `.claude/skills/verify/SKILL.md` に置く。
 - `git add .` / `git add -A` は使わない。stageは明示パス指定または `git add -p` にする。
-- mainへ直接pushしない。短期作業branchとPRを使う。
+- mainへ直接pushしない。短期作業branchとPRを使う。ブランチ名は `{type}/{issue-number}-{slug}` とし、Issue には着手時に Assignee と「着手します PR #xx」コメントで明示的に紐付ける。PR本文には `Fixes #N` / `Refs #N` を必ず含める。
 - Codexは設計・レビュー・リリース判断を担当し、Claudeは実装・テスト・PR作成を担当する運用を標準とする。
 - Codexがコード、テスト、スクリプト、ドキュメントを直接書いた場合は、PR作成前または作成後にClaudeへ逆レビューを依頼する。できない場合は理由と残リスクをPR本文に書く。
