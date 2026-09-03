@@ -52,6 +52,7 @@ fn start_online_services(
     sntp: &mut Option<esp_idf_svc::sntp::EspSntp<'static>>,
     telegram_started: &mut bool,
     power_lock: &telegram::PowerLock,
+    operation_lock: &telegram::OperationLock,
     telegram_state: &Arc<Mutex<telegram::State>>,
     notifier: &mut Option<telegram::Notifier>,
     app_config: &Arc<AppConfig>,
@@ -74,7 +75,11 @@ fn start_online_services(
     }
 
     if !*telegram_started && telegram::is_configured(app_config.as_ref()) {
-        let client = telegram::Client::new(Arc::clone(power_lock), Arc::clone(app_config));
+        let client = telegram::Client::new(
+            Arc::clone(power_lock),
+            operation_lock.clone(),
+            Arc::clone(app_config),
+        );
         let state_handle = Arc::clone(telegram_state);
         // long pollingでUIやSTATUS更新を止めないよう、Telegramは専用スレッドで動かす。
         match std::thread::Builder::new()
@@ -133,6 +138,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         wifi_connected: false,
         pc_online: false,
         telegram: TelegramState::Disabled,
+        locked: false,
         toast: None,
     };
     let mut toast_text: Option<String> = None;
@@ -146,6 +152,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // UI操作とTelegram操作からの電源操作を直列化する。
     let power_lock: telegram::PowerLock = Arc::new(Mutex::new(()));
+    // Telegramの /lock で操作を止められるようにする。パネル操作にも効かせるため
+    // UIループとTelegramスレッドで共有する。
+    let operation_lock = telegram::OperationLock::default();
     let telegram_state = Arc::new(Mutex::new(telegram::State::Disabled));
     let mut sntp: Option<esp_idf_svc::sntp::EspSntp<'static>> = None;
     let mut telegram_started = false;
@@ -177,6 +186,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &mut sntp,
             &mut telegram_started,
             &power_lock,
+            &operation_lock,
             &telegram_state,
             &mut notifier,
             &app_config,
@@ -245,6 +255,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &mut sntp,
                     &mut telegram_started,
                     &power_lock,
+                    &operation_lock,
                     &telegram_state,
                     &mut notifier,
                     &app_config,
@@ -301,6 +312,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
+        // ロック状態はTelegramスレッド側から変わるので、画面表示へ反映する。
+        let now_locked = operation_lock.is_locked();
+        if now_locked != status.locked {
+            status.locked = now_locked;
+            if matches!(screen, Screen::Main) {
+                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+            }
+        }
+
         // タッチの立ち上がりだけを見ることで、1回のタップで1回だけ実行する。
         let touch_point = match touch.get_touch_event() {
             Ok(event) => event.p1.map(|p| (p.x as i32, p.y as i32)),
@@ -310,6 +330,23 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if let Some((x, y)) = touch_point {
             if !touch_was_down {
+                // ロック中はどのボタンも実行しない。無反応だと故障と区別が
+                // つかないため、理由をトーストで返す。
+                if status.locked
+                    && (ui::WAKE_BUTTON.contains(x, y)
+                        || ui::REBOOT_BUTTON.contains(x, y)
+                        || ui::SHUTDOWN_BUTTON.contains(x, y)
+                        || ui::OK_BUTTON.contains(x, y))
+                {
+                    toast_text = Some("Locked (/unlock in Telegram)".to_string());
+                    toast_at = Instant::now();
+                    screen = Screen::Main;
+                    ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                    touch_was_down = touch_down;
+                    std::thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
+
                 match screen {
                     Screen::Main => {
                         if ui::WAKE_BUTTON.contains(x, y) {
