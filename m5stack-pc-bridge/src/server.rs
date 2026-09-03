@@ -17,7 +17,7 @@ use crate::{
     app_config::AgentConfig,
     audit_log,
     auth::{verify_request, AuthConfig, AuthError, NonceStore},
-    power::{run_power_action, PowerAction},
+    power::{run_power_action, PowerAction, PowerResult},
 };
 
 #[derive(Clone)]
@@ -108,6 +108,13 @@ async fn shutdown(
     command(state, method, uri, headers, body, PowerAction::Shutdown).await
 }
 
+/// `command`のblockingパートでの失敗。どちらも500を返すが、`Audit`は
+/// 電源操作を実行していないことを意味する。
+enum CommandFailure {
+    Audit(std::io::Error),
+    Power(anyhow::Error),
+}
+
 async fn command(
     state: AppState,
     method: Method,
@@ -126,32 +133,47 @@ async fn command(
                 return (StatusCode::BAD_REQUEST, "confirm must be true").into_response();
             }
 
-            // fail-closed: 監査ログを残せない場合は電源操作そのものを実行しない。
-            if let Err(err) = audit_log::append(action.as_str(), state.dry_run, "accepted") {
-                tracing::error!("failed to write audit log: {err}");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to write audit log",
-                )
-                    .into_response();
-            }
+            // 監査ログ(open+writeln+sync_all)も電源操作(shutdown.exeの起動)も
+            // blocking I/O。asyncワーカースレッドを塞がないよう、まとめて
+            // blockingスレッドへ逃がす。fail-closed(監査ログを残せないなら
+            // 電源操作を実行しない)の順序はこのクロージャ内で維持している。
+            let dry_run = state.dry_run;
+            let outcome =
+                tokio::task::spawn_blocking(move || -> Result<PowerResult, CommandFailure> {
+                    audit_log::append(action.as_str(), dry_run, "accepted")
+                        .map_err(CommandFailure::Audit)?;
 
-            match run_power_action(action, state.dry_run) {
-                Ok(result) => {
-                    if let Err(err) = audit_log::append(action.as_str(), state.dry_run, "ok") {
+                    let result = run_power_action(action, dry_run);
+                    let label = if result.is_ok() { "ok" } else { "failed" };
+                    if let Err(err) = audit_log::append(action.as_str(), dry_run, label) {
                         tracing::error!("failed to write audit log result: {err}");
                     }
-                    (StatusCode::OK, Json(result)).into_response()
-                }
-                Err(err) => {
-                    if let Err(log_err) =
-                        audit_log::append(action.as_str(), state.dry_run, "failed")
-                    {
-                        tracing::error!("failed to write audit log result: {log_err}");
-                    }
+                    result.map_err(CommandFailure::Power)
+                })
+                .await;
+
+            match outcome {
+                Ok(Ok(result)) => (StatusCode::OK, Json(result)).into_response(),
+                Ok(Err(CommandFailure::Audit(err))) => {
+                    tracing::error!("failed to write audit log: {err}");
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("power command failed: {err}"),
+                        "failed to write audit log",
+                    )
+                        .into_response()
+                }
+                Ok(Err(CommandFailure::Power(err))) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("power command failed: {err}"),
+                )
+                    .into_response(),
+                Err(join_err) => {
+                    // blockingタスク自体が落ちた場合、電源操作まで到達したか
+                    // 判別できない。監査ログを見て判断する。
+                    tracing::error!("power command task failed: {join_err}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "power command task failed",
                     )
                         .into_response()
                 }
