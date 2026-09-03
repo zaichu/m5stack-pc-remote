@@ -11,7 +11,7 @@
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use embedded_svc::http::client::Client as HttpClient;
@@ -85,15 +85,24 @@ fn install_root_ca() -> Result<(), Box<dyn Error>> {
 }
 
 /// global CA storeはプロセス全体で1つなので、pollingスレッドと通知スレッドの
-/// どちらが先に走っても登録が1回だけになるようにする。
-static ROOT_CA_ONCE: Once = Once::new();
+/// どちらが先に走っても登録が1回になるようにする。
+///
+/// `Once`は使わない。`Once`は失敗しても「完了」扱いになるため、最初の呼び出しが
+/// 一時的なエラー(heap不足等)で失敗すると、以降どのスレッドも再試行できず、
+/// CA store未設定のままHTTPSを使い続けてしまう。成功フラグ + Mutexにして、
+/// 失敗した場合は次の呼び出しで再試行できるようにする。
+static ROOT_CA_INSTALLED: AtomicBool = AtomicBool::new(false);
+static ROOT_CA_LOCK: Mutex<()> = Mutex::new(());
 
-fn ensure_root_ca() {
-    ROOT_CA_ONCE.call_once(|| {
-        if let Err(e) = install_root_ca() {
-            println!("telegram: root CA install failed: {e}");
-        }
-    });
+fn ensure_root_ca() -> Result<(), Box<dyn Error>> {
+    // 毒されたMutexでも初期化は続行してよい(共有している状態はフラグだけ)。
+    let _guard = ROOT_CA_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if ROOT_CA_INSTALLED.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    install_root_ca()?;
+    ROOT_CA_INSTALLED.store(true, Ordering::Release);
+    Ok(())
 }
 
 /// private chatではchat_idがuser_idと一致するため、許可ユーザーIDをそのまま
@@ -237,8 +246,13 @@ pub fn start_notifier(config: Arc<AppConfig>) -> Option<Notifier> {
     let spawned = std::thread::Builder::new()
         .stack_size(12 * 1024)
         .spawn(move || {
-            ensure_root_ca();
             while let Ok(text) = rx.recv() {
+                // CA store未設定のまま送るとTLS検証が成立しない。失敗した回は
+                // 送信を諦め、次のメッセージで再試行する。
+                if let Err(e) = ensure_root_ca() {
+                    println!("telegram: root CA install failed: {e}");
+                    continue;
+                }
                 api.send_message(chat_id, &text);
             }
         });
@@ -627,7 +641,11 @@ impl Client {
 
     /// 専用スレッドでlong pollingを継続する。
     pub fn run(mut self, state: Arc<Mutex<State>>) {
-        ensure_root_ca();
+        if let Err(e) = ensure_root_ca() {
+            println!("telegram: root CA install failed: {e}");
+            *state.lock().unwrap() = State::Error;
+            return;
+        }
 
         // NTP同期を短時間だけ待つ。未同期なら電源操作の送信側で拒否する。
         net::wait_for_time_sync(Duration::from_secs(10));
