@@ -27,3 +27,14 @@ pub fn exe_dir_file(name: &str) -> std::path::PathBuf {
 pub fn default_config_path() -> std::path::PathBuf {
     exe_dir_file("config.toml")
 }
+
+/// 既定パスから設定を読み込む。パス解決とエラー整形を一元化する。
+///
+/// `windows_service` の foreground/service 両経路と、通常の `main` で同じ
+/// 挙動にするためここに置く。エラー文に secret は含まれない
+///（`AgentConfig::validate` が汎化したメッセージを返す）。
+pub fn load_default_config() -> anyhow::Result<app_config::AgentConfig> {
+    let path = default_config_path();
+    app_config::AgentConfig::from_path(&path)
+        .map_err(|e| anyhow::anyhow!("failed to load {}: {e}", path.display()))
+}

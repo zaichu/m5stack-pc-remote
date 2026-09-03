@@ -1,13 +1,15 @@
-use std::{fs, path::Path};
+use std::{fs, net::SocketAddr, path::Path};
 
 use serde::Deserialize;
 
 const PLACEHOLDER_SHARED_SECRET: &str = "replace-with-a-long-random-shared-secret";
+const PLACEHOLDER_TELEGRAM_TOKEN: &str = "replace-with-your-telegram-bot-token";
 const MIN_SHARED_SECRET_LEN: usize = 32;
+const MAX_SKEW_SECONDS: i64 = 3600;
 
 // `shared_secret` と `telegram_bot_token` を含むため `Debug` は手書きし、値を出力しない。
 // ログや panic メッセージへ `{:?}` で secret が漏れる事故を防ぐ。
-#[derive(Clone, Deserialize)]
+#[derive(Deserialize)]
 pub struct AgentConfig {
     pub bind: String,
     pub shared_secret: String,
@@ -68,6 +70,19 @@ impl AgentConfig {
         }
         if self.allowed_skew_seconds <= 0 {
             anyhow::bail!("allowed_skew_seconds must be positive");
+        }
+        if self.allowed_skew_seconds > MAX_SKEW_SECONDS {
+            anyhow::bail!("allowed_skew_seconds must be at most {MAX_SKEW_SECONDS} seconds");
+        }
+        self.bind
+            .parse::<SocketAddr>()
+            .map_err(|e| anyhow::anyhow!("bind is not a valid socket address: {e}"))?;
+        if self
+            .telegram_bot_token
+            .as_deref()
+            .is_some_and(|t| t == PLACEHOLDER_TELEGRAM_TOKEN)
+        {
+            anyhow::bail!("telegram_bot_token must not be the placeholder value");
         }
         Ok(())
     }

@@ -19,6 +19,7 @@ use crate::{
     auth::{verify_request, AuthConfig, AuthError, NonceStore},
     power::{run_power_action, PowerAction, PowerResult},
 };
+use pc_remote_signing::PowerAction as SharedPowerAction;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -54,12 +55,14 @@ pub fn router(config: AgentConfig) -> Router {
         alert,
     };
 
-    Router::new()
-        .route("/status", get(status))
-        .route("/reboot", post(reboot))
-        .route("/shutdown", post(shutdown))
-        .layer(DefaultBodyLimit::max(128))
-        .with_state(state)
+    let mut router = Router::new().route("/status", get(status));
+    for action in SharedPowerAction::ALL {
+        router = match action {
+            SharedPowerAction::Reboot => router.route(action.path(), post(reboot)),
+            SharedPowerAction::Shutdown => router.route(action.path(), post(shutdown)),
+        };
+    }
+    router.layer(DefaultBodyLimit::max(128)).with_state(state)
 }
 
 pub async fn serve(config: AgentConfig) -> anyhow::Result<()> {

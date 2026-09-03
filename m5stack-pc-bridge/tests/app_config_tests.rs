@@ -40,3 +40,41 @@ shared_secret = "too-short"
 
     assert!(err.to_string().contains("at least 32"));
 }
+
+#[test]
+fn rejects_invalid_bind() {
+    let input = r#"
+bind = "not-an-address"
+shared_secret = "0123456789abcdef0123456789abcdef"
+"#;
+
+    let err = AgentConfig::from_toml_str(input).unwrap_err();
+
+    assert!(err.to_string().contains("socket address"));
+}
+
+#[test]
+fn rejects_excessive_skew() {
+    let input = r#"
+bind = "127.0.0.1:18080"
+shared_secret = "0123456789abcdef0123456789abcdef"
+allowed_skew_seconds = 3601
+"#;
+
+    let err = AgentConfig::from_toml_str(input).unwrap_err();
+
+    assert!(err.to_string().contains("at most"));
+}
+
+#[test]
+fn rejects_placeholder_telegram_token() {
+    let input = r#"
+bind = "127.0.0.1:18080"
+shared_secret = "0123456789abcdef0123456789abcdef"
+telegram_bot_token = "replace-with-your-telegram-bot-token"
+"#;
+
+    let err = AgentConfig::from_toml_str(input).unwrap_err();
+
+    assert!(err.to_string().contains("placeholder"));
+}

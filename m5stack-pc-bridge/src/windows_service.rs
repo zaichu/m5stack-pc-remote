@@ -14,7 +14,6 @@ use windows_service::service::{
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 use windows_service::{define_windows_service, service_dispatcher};
 
-use crate::app_config::AgentConfig;
 use crate::server;
 
 pub const SERVICE_NAME: &str = "M5StackPcBridge";
@@ -42,9 +41,7 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 fn run_foreground() -> anyhow::Result<()> {
-    let config_path = crate::default_config_path();
-    let config = AgentConfig::from_path(&config_path)
-        .map_err(|e| anyhow::anyhow!("failed to load {}: {e}", config_path.display()))?;
+    let config = crate::load_default_config()?;
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(server::serve(config))
 }
@@ -124,9 +121,7 @@ fn run_and_report_status(
         ServiceExitCode::Win32(0),
     )?;
 
-    let config_path = crate::default_config_path();
-    let config = AgentConfig::from_path(&config_path)
-        .map_err(|e| anyhow::anyhow!("failed to load {}: {e}", config_path.display()))?;
+    let config = crate::load_default_config()?;
 
     let runtime = tokio::runtime::Runtime::new()?;
     let (graceful_tx, graceful_rx) = tokio::sync::oneshot::channel::<()>();

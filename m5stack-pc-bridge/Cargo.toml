@@ -15,7 +15,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 time = { version = "0.3", features = ["serde", "formatting"] }
-tokio = { version = "1.39", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
+tokio = { version = "1.39", features = ["macros", "net", "rt-multi-thread", "signal"] }
 toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -24,6 +24,7 @@ ureq = { version = "3.4", default-features = false, features = ["rustls", "json"
 # Windows Serviceとして動かすためのSCM連携。ホスト(Linux/CI)側のbuild/test/clippyは
 # このcrateを引き込まないので、cfg(windows)以外の環境には影響しない。
 [target.'cfg(windows)'.dependencies]
+tokio = { version = "1.39", features = ["sync"] }
 windows-service = "0.8"
 
 [dev-dependencies]
