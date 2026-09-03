@@ -14,6 +14,8 @@ cargo build --release
 
 `config.toml` の `shared_secret` は32文字以上の長いランダム値へ変更してください。`config.example.toml` のプレースホルダー値や短すぎる値のままでは起動しません。`dry_run = true` の間は実際の電源操作を実行しません。
 
+任意設定として `telegram_bot_token` と `telegram_chat_id` を両方書くと、HTTP認証に失敗したリクエストが3件たまった時点でTelegramへアラートを送ります(最短送信間隔1時間)。省略した場合は通知しないだけで、電源操作の動作には影響しません。このファイルへbot tokenを置くことのリスク評価は `docs/security.md` を参照してください。
+
 ## 動作確認(対話実行)
 
 Serviceとしてインストールする前に、コンソールから直接動かして確認できます。

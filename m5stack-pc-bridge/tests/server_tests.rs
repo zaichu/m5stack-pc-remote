@@ -14,6 +14,8 @@ fn config() -> AgentConfig {
         shared_secret: "local-development-secret".to_string(),
         allowed_skew_seconds: 60,
         dry_run: true,
+        telegram_bot_token: None,
+        telegram_chat_id: None,
     }
 }
 

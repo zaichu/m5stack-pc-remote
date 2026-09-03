@@ -1,0 +1,108 @@
+//! HTTP認証失敗が続いたときに、Telegramへアラートを送る。
+//!
+//! bot tokenをWindows側にも置くことになるが、
+//! - このconfig.tomlには既に`shared_secret`(電源操作を直接authorizeする、より強い鍵)がある
+//! - ファイルを読める攻撃者は既にそのPC上におり、`shutdown.exe`を直接実行できる
+//! - 同じtokenはM5Stack側のflash(暗号化なし)に平文で載っており、そちらの方が保護が弱い
+//!
+//! ため、全体のリスクはほとんど変わらないと判断して許容している。詳細は
+//! `docs/security.md` と Issue #43 を参照。
+
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use crate::app_config::AgentConfig;
+
+/// 何回失敗がたまったらアラートを送るか。1回目から送ると、
+/// 時計ずれ等の単発の失敗でも鳴ってしまう。
+const ALERT_THRESHOLD: u32 = 3;
+/// アラートの最短送信間隔。スキャンや連投で通知が埋まらないようにする。
+const ALERT_INTERVAL: Duration = Duration::from_secs(3600);
+/// Telegram APIへの接続・応答待ちの上限。電源操作の応答を巻き込まないよう短くする。
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Default)]
+struct AlertState {
+    failures: u32,
+    last_sent: Option<Instant>,
+}
+
+pub struct AlertNotifier {
+    bot_token: String,
+    chat_id: i64,
+    state: Mutex<AlertState>,
+}
+
+impl AlertNotifier {
+    /// bot tokenとchat_idが両方設定されているときだけ有効にする。
+    pub fn from_config(config: &AgentConfig) -> Option<Self> {
+        let bot_token = config.telegram_bot_token.clone()?;
+        let chat_id = config.telegram_chat_id?;
+        if bot_token.trim().is_empty() {
+            return None;
+        }
+        Some(Self {
+            bot_token,
+            chat_id,
+            state: Mutex::new(AlertState::default()),
+        })
+    }
+
+    /// 認証失敗を1件記録し、閾値と送信間隔を満たしていれば送信すべき件数を返す。
+    fn record(&self) -> Option<u32> {
+        // Mutexが毒された場合でもリクエスト処理は続けたいので、失敗時は通知を諦める。
+        let mut state = self.state.lock().ok()?;
+        state.failures += 1;
+        if state.failures < ALERT_THRESHOLD {
+            return None;
+        }
+
+        let now = Instant::now();
+        if let Some(sent) = state.last_sent {
+            if now.duration_since(sent) < ALERT_INTERVAL {
+                return None;
+            }
+        }
+
+        let count = state.failures;
+        state.failures = 0;
+        state.last_sent = Some(now);
+        Some(count)
+    }
+
+    /// 認証失敗を記録し、必要ならバックグラウンドでアラートを送る。
+    ///
+    /// 送信はHTTPSで数秒かかり得るため、リクエスト処理スレッドでは待たない。
+    pub fn record_auth_failure(&self, notifier: std::sync::Arc<Self>) {
+        let Some(count) = self.record() else {
+            return;
+        };
+
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = notifier.send_alert(count) {
+                // 失敗理由にURL(tokenを含む)を出さない。
+                tracing::warn!("failed to send auth failure alert: {e}");
+            }
+        });
+    }
+
+    fn send_alert(&self, count: u32) -> Result<(), ureq::Error> {
+        // 通知本文には送信元IPやヘッダー値を含めない。攻撃者が自由に決められる
+        // 文字列を自分のチャットへ流すと、なりすましや誘導の材料になるため。
+        let text = format!(
+            "m5stack-pc-bridge: 認証に失敗したリクエストを{count}件検知しました。\n電源操作は実行されていません。"
+        );
+
+        // URLにbot tokenが入るため、エラーメッセージにもログにも出さない。
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
+        ureq::post(&url)
+            .config()
+            .timeout_global(Some(SEND_TIMEOUT))
+            .build()
+            .send_json(serde_json::json!({
+                "chat_id": self.chat_id,
+                "text": text,
+            }))?;
+        Ok(())
+    }
+}

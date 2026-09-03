@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 use tokio::net::TcpListener;
 
 use crate::{
+    alert::AlertNotifier,
     app_config::AgentConfig,
     audit_log,
     auth::{verify_request, AuthConfig, AuthError, NonceStore},
@@ -24,6 +25,8 @@ pub struct AppState {
     auth: Arc<AuthConfig>,
     nonces: Arc<NonceStore>,
     dry_run: bool,
+    /// 認証失敗アラートの送信先。config未設定なら None(通知しないだけ)。
+    alert: Option<Arc<AlertNotifier>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,6 +43,7 @@ struct CommandRequest {
 }
 
 pub fn router(config: AgentConfig) -> Router {
+    let alert = AlertNotifier::from_config(&config).map(Arc::new);
     let state = AppState {
         auth: Arc::new(AuthConfig {
             secret: config.shared_secret.into_bytes(),
@@ -47,6 +51,7 @@ pub fn router(config: AgentConfig) -> Router {
         }),
         nonces: Arc::new(NonceStore::default()),
         dry_run: config.dry_run,
+        alert,
     };
 
     Router::new()
@@ -154,6 +159,9 @@ async fn command(
         }
         Err(err) => {
             tracing::warn!("power command authentication failed: {err}");
+            if let Some(alert) = state.alert.as_ref() {
+                alert.record_auth_failure(Arc::clone(alert));
+            }
             (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
         }
     }

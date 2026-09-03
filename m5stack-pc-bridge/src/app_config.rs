@@ -5,7 +5,7 @@ use serde::Deserialize;
 const PLACEHOLDER_SHARED_SECRET: &str = "replace-with-a-long-random-shared-secret";
 const MIN_SHARED_SECRET_LEN: usize = 32;
 
-// `shared_secret` を含むため `Debug` は手書きし、値を出力しない。
+// `shared_secret` と `telegram_bot_token` を含むため `Debug` は手書きし、値を出力しない。
 // ログや panic メッセージへ `{:?}` で secret が漏れる事故を防ぐ。
 #[derive(Clone, Deserialize)]
 pub struct AgentConfig {
@@ -15,6 +15,12 @@ pub struct AgentConfig {
     pub allowed_skew_seconds: i64,
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
+    /// 認証失敗アラートの送信先。両方揃ったときだけ通知を有効にする。
+    /// 未設定なら通知しないだけで、電源操作の動作には影響しない。
+    #[serde(default)]
+    pub telegram_bot_token: Option<String>,
+    #[serde(default)]
+    pub telegram_chat_id: Option<i64>,
 }
 
 impl std::fmt::Debug for AgentConfig {
@@ -24,6 +30,11 @@ impl std::fmt::Debug for AgentConfig {
             .field("shared_secret", &"[REDACTED]")
             .field("allowed_skew_seconds", &self.allowed_skew_seconds)
             .field("dry_run", &self.dry_run)
+            .field(
+                "telegram_bot_token",
+                &self.telegram_bot_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("telegram_chat_id", &self.telegram_chat_id)
             .finish()
     }
 }
