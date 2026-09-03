@@ -44,7 +44,7 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 - `TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` は `firmware/config.toml` に置き、m5stack-pc-bridge用の `BRIDGE_SHARED_SECRET` とは分離する。Telegramや外部中継先には `BRIDGE_SHARED_SECRET` を渡さない。
 - どちらもSerialログ、画面表示、コミット、PR本文には出さない。`config.example.toml` にはダミー値だけを置く。
 - `from.id` を文字列として `TELEGRAM_ALLOWED_USER_ID` と厳密一致で比較する。一致しないupdateは処理も返信もしない。`callback_query`(インラインボタン)の `from.id` も同様に厳密一致で検証し、一致しない場合はpending確認を操作せず、`answerCallbackQuery` で短い拒否文言だけ返す(`sendMessage` による通常返信はしない)。
-- `/reboot` / `/shutdown` は即実行しない。6文字の確認nonceをRAM上だけに生成し、`TELEGRAM_CONFIRM_TTL_MS` で失効させる。確認メッセージには確定ボタン(再起動/シャットダウン)とキャンセルボタンのインラインキーボードを付ける。
+- `/reboot` / `/shutdown` は即実行しない。6文字の確認nonceをRAM上だけに生成し、`TELEGRAM_CONFIRM_TTL_SECS`（秒、既定 60秒）で失効させる。確認メッセージには確定ボタン(再起動/シャットダウン)とキャンセルボタンのインラインキーボードを付ける。
 - 確定ボタン・キャンセルボタン・従来の確認コマンド (`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>`) のいずれも、nonce一致・TTL内・actionの種類(reboot/shutdown)一致のときだけ実行する。ボタンの `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの1-64byte制限内)で、古いメッセージのボタンや別action/別nonceのボタンは一致しないため通らない。
 - nonceは実行の成功/失敗、キャンセル、またはnonce不一致・期限切れに関わらず1回で消費し、以降の確定ボタン・キャンセルボタン・`/confirm_*` では再利用できない。これにより同じ確認要求へのnonce総当たりを防ぐ。
 - `callback_query` はTelegramの仕様どおり、認可の成否や処理結果によらず必ず `answerCallbackQuery` を呼び、クライアント側のボタン読み込み状態を終える。

@@ -71,22 +71,22 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 
 対応するNVS key:
 
-| NVS key | config.toml key | 用途 |
-|---|---|
-| `wifi_ssid` | `wifi_ssid` | Wi-Fi SSID |
-| `wifi_pass` | `wifi_password` | Wi-Fi password |
-| `pc_mac` | `pc_mac_address` | Wake-on-LAN送信先MACアドレス |
-| `wol_port` | `wol_port` | Wake-on-LAN送信先port |
-| `status_addr` | `pc_status_addr` | STATUS確認先TCP address |
-| `bridge_port` | `bridge_port` | m5stack-pc-bridge port |
-| `bridge_secret` | `bridge_shared_secret` | m5stack-pc-bridge HMAC secret |
-| `pc_ip` | `pc_ip_address` | m5stack-pc-bridge接続先IP |
-| `tg_token` | `telegram_bot_token` | Telegram bot token |
-| `tg_user_id` | `telegram_allowed_user_id` | 許可するTelegram user id |
-| `tg_poll_secs` | `telegram_long_poll_timeout_seconds` | Telegram long polling timeout |
-| `tg_ttl_secs` | `telegram_confirm_ttl_secs` | 再起動/シャットダウン確認TTL |
-| `report_hour` | `daily_report_hour` | 定期レポートを送るローカル時刻(0-23、範囲外で無効) |
-| `tz_offset` | `timezone_offset_hours` | UTCからのローカル時刻のずれ(JSTなら9) |
+| NVS key | config.toml key | 必須/任意 | 用途 |
+|---|---|---|---|
+| `wifi_ssid` | `wifi_ssid` | 必須 | Wi-Fi SSID |
+| `wifi_pass` | `wifi_password` | 必須 | Wi-Fi password |
+| `pc_mac` | `pc_mac_address` | 必須 | Wake-on-LAN送信先MACアドレス |
+| `wol_port` | `wol_port` | 必須 | Wake-on-LAN送信先port |
+| `status_addr` | `pc_status_addr` | 必須 | STATUS確認先TCP address |
+| `bridge_port` | `bridge_port` | 必須 | m5stack-pc-bridge port |
+| `bridge_secret` | `bridge_shared_secret` | 必須 | m5stack-pc-bridge HMAC secret |
+| `pc_ip` | `pc_ip_address` | 必須 | m5stack-pc-bridge接続先IP |
+| `tg_token` | `telegram_bot_token` | 必須 | Telegram bot token |
+| `tg_user_id` | `telegram_allowed_user_id` | 必須 | 許可するTelegram user id |
+| `tg_poll_secs` | `telegram_long_poll_timeout_seconds` | 必須 | Telegram long polling timeout |
+| `tg_ttl_secs` | `telegram_confirm_ttl_secs` | 必須 | 再起動/シャットダウン確認TTL |
+| `report_hour` | `daily_report_hour` | 任意（既定 -1、無効） | 定期レポートを送るローカル時刻(0-23、範囲外で無効) |
+| `tz_offset` | `timezone_offset_hours` | 任意（既定 0） | UTCからのローカル時刻のずれ(JSTなら9) |
 
 この表は `scripts/config_keys.py` が `firmware/build.rs` と `src/app_config.rs` から
 導出する対応と機械的に突合される(`make config-key-check`、`make check`に含まれる)。
