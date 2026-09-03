@@ -315,21 +315,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                         if ui::WAKE_BUTTON.contains(x, y) {
                             println!("WAKE tapped at x={x} y={y}");
                             let _guard = power_lock.lock().unwrap();
-                            toast_text = Some(
-                                match net::send_wake_on_lan(
-                                    &app_config.pc_mac_address,
-                                    app_config.wol_port,
-                                ) {
-                                    Ok(()) => {
-                                        println!("WOL sent");
-                                        "Magic packet sent".to_string()
-                                    }
-                                    Err(e) => {
-                                        println!("WOL failed: {e}");
-                                        "WOL failed".to_string()
-                                    }
-                                },
+                            let wol_result = net::send_wake_on_lan(
+                                &app_config.pc_mac_address,
+                                app_config.wol_port,
                             );
+                            let (toast, report) = match wol_result {
+                                Ok(()) => {
+                                    println!("WOL sent");
+                                    ("Magic packet sent", "WOLを送信しました。")
+                                }
+                                Err(e) => {
+                                    println!("WOL failed: {e}");
+                                    ("WOL failed", "WOL送信に失敗しました。")
+                                }
+                            };
+                            notify_panel_action(notifier.as_ref(), report);
+                            toast_text = Some(toast.to_string());
                             toast_at = Instant::now();
                             ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
                         } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
@@ -349,18 +350,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                         } else if ui::OK_BUTTON.contains(x, y) {
                             println!("{} confirmed", action.slug());
                             let _guard = power_lock.lock().unwrap();
-                            toast_text = Some(
+                            let (toast, report) =
                                 match bridge_client::send_command(action, app_config.as_ref()) {
-                                    Ok(code) if bridge_client::is_accepted(code) => {
-                                        "Command accepted".into()
-                                    }
-                                    Ok(code) => format!("Command rejected ({code})"),
+                                    Ok(code) if bridge_client::is_accepted(code) => (
+                                        "Command accepted".to_string(),
+                                        format!("{}を受け付けました。", action.label_ja()),
+                                    ),
+                                    Ok(code) => (
+                                        format!("Command rejected ({code})"),
+                                        format!("{}が拒否されました。({code})", action.label_ja()),
+                                    ),
                                     Err(e) => {
                                         println!("bridge command failed: {e}");
-                                        "Command failed".to_string()
+                                        (
+                                            "Command failed".to_string(),
+                                            format!("{}に失敗しました。", action.label_ja()),
+                                        )
                                     }
-                                },
-                            );
+                                };
+                            notify_panel_action(notifier.as_ref(), &report);
+                            toast_text = Some(toast);
                             toast_at = Instant::now();
                             screen = Screen::Main;
                             ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
@@ -379,6 +388,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// 本体パネルからの操作結果をTelegramへ通知する。
+///
+/// Telegram経由の操作はその場でチャットへ返信されるが、パネル操作は画面の
+/// トーストで完結してしまう。外出中に「誰かが本体を触った」ことへ気づける
+/// ように、パネル操作であることが分かる文言で送る。
+fn notify_panel_action(notifier: Option<&telegram::Notifier>, text: &str) {
+    if let Some(notifier) = notifier {
+        notifier.notify(format!("[本体パネル操作] {text}"));
     }
 }
 
