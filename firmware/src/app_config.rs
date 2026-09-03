@@ -24,6 +24,10 @@ pub struct AppConfig {
     pub telegram_allowed_user_id: String,
     pub telegram_long_poll_timeout_seconds: u32,
     pub telegram_confirm_ttl_secs: u64,
+    /// 定期レポートを送るローカル時刻(0-23)。範囲外なら送らない。
+    pub daily_report_hour: i64,
+    /// UTCからのローカル時刻のずれ(時間)。JSTなら9。
+    pub timezone_offset_hours: i64,
 }
 
 impl AppConfig {
@@ -57,6 +61,8 @@ impl AppConfig {
             telegram_allowed_user_id: build_config::TELEGRAM_ALLOWED_USER_ID.to_string(),
             telegram_long_poll_timeout_seconds: build_config::TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
             telegram_confirm_ttl_secs: build_config::TELEGRAM_CONFIRM_TTL_SECS,
+            daily_report_hour: build_config::DAILY_REPORT_HOUR,
+            timezone_offset_hours: build_config::TIMEZONE_OFFSET_HOURS,
         }
     }
 
@@ -82,6 +88,8 @@ impl AppConfig {
             &mut self.telegram_long_poll_timeout_seconds,
         );
         replace_number(nvs, "tg_ttl_secs", &mut self.telegram_confirm_ttl_secs);
+        replace_number(nvs, "report_hour", &mut self.daily_report_hour);
+        replace_number(nvs, "tz_offset", &mut self.timezone_offset_hours);
     }
 }
 

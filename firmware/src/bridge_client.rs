@@ -14,10 +14,6 @@ use esp_idf_svc::io::Write;
 
 use crate::app_config::AppConfig;
 
-/// 2023-11-14より古い時刻は、NTP同期前の時計として扱って拒否する。
-/// m5stack-pc-bridgeでもtimestampを検証するが、送信前に止めた方が原因が分かりやすい。
-const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
-
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const BODY: &str = r#"{"confirm":true}"#;
 
@@ -61,7 +57,9 @@ impl PowerAction {
 
 fn unix_now() -> Result<u64, Box<dyn Error>> {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    if secs < MIN_VALID_UNIX_TIME {
+    // NTP同期前の時計で署名しても、bridge側のtimestamp検証で弾かれる。
+    // 送信前に止めた方が原因が分かりやすい。
+    if secs < crate::net::MIN_VALID_UNIX_TIME {
         return Err("system clock is not NTP-synced yet".into());
     }
     Ok(secs)
