@@ -115,6 +115,10 @@ fn percent_from_volts(volts: f32) -> u8 {
         (4.20, 100.0),
     ];
 
+    // 5%刻みへ丸める。電圧のわずかな揺れで表示が1%ずつ動くと、変化検知で
+    // 画面を描き直してしまいちらつく。精度的にも1%単位に意味はない。
+    let round5 = |p: f32| ((p / 5.0).round() * 5.0) as u8;
+
     if volts <= CURVE[0].0 {
         return 0;
     }
@@ -123,7 +127,7 @@ fn percent_from_volts(volts: f32) -> u8 {
         let (v_high, p_high) = pair[1];
         if volts < v_high {
             let ratio = (volts - v_low) / (v_high - v_low);
-            return (p_low + ratio * (p_high - p_low)) as u8;
+            return round5(p_low + ratio * (p_high - p_low));
         }
     }
     100
