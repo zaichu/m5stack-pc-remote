@@ -8,15 +8,22 @@ pub mod server;
 #[cfg(windows)]
 pub mod windows_service;
 
-/// 設定ファイルの既定パス。実行ファイルと同じディレクトリの`config.toml`を見る。
+/// 実行ファイルと同じディレクトリにある`name`のパスを返す。
 ///
 /// Windows ServiceはSCMから起動されるとカレントディレクトリが`%SystemRoot%\System32`
-/// になるため、CWD相対パスに依存すると `--config` を省略したときに設定を見失う。
-/// `install.ps1` は実行ファイルと`config.toml`を同じディレクトリへ配置するため、
-/// 実行ファイルの場所を基準にすることでService/対話実行のどちらでも同じ挙動にする。
-pub fn default_config_path() -> std::path::PathBuf {
+/// になるため、CWD相対パスに依存すると設定やログの場所を見失う。`install.ps1` は
+/// 実行ファイルと関連ファイルを同じディレクトリへ配置するため、実行ファイルの場所を
+/// 基準にすることでService/対話実行のどちらでも同じ挙動にする。
+///
+/// 実行ファイルの場所が取れない場合はCWD相対へフォールバックする。
+pub fn exe_dir_file(name: &str) -> std::path::PathBuf {
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("config.toml")))
-        .unwrap_or_else(|| std::path::PathBuf::from("config.toml"))
+        .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
+        .unwrap_or_else(|| std::path::PathBuf::from(name))
+}
+
+/// 設定ファイルの既定パス。`--config` 省略時に使う。
+pub fn default_config_path() -> std::path::PathBuf {
+    exe_dir_file("config.toml")
 }

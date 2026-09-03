@@ -17,40 +17,21 @@ use crate::app_config::AppConfig;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const BODY: &str = r#"{"confirm":true}"#;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PowerAction {
-    Reboot,
-    Shutdown,
+/// 電源操作の識別子はwire protocolの一部なので `pc-remote-signing` が正本。
+/// firmware側は再エクスポートして使う。
+pub use pc_remote_signing::PowerAction;
+
+/// 日本語の表示文言。wire protocolではないのでshared crateへは置かない。
+/// `PowerAction` は他crateの型で inherent method を足せないため拡張traitにする。
+pub trait PowerActionLabel {
+    fn label_ja(self) -> &'static str;
 }
 
-impl PowerAction {
-    pub fn path(self) -> &'static str {
-        match self {
-            PowerAction::Reboot => "/reboot",
-            PowerAction::Shutdown => "/shutdown",
-        }
-    }
-
-    pub fn label_ja(self) -> &'static str {
+impl PowerActionLabel for PowerAction {
+    fn label_ja(self) -> &'static str {
         match self {
             PowerAction::Reboot => "再起動",
             PowerAction::Shutdown => "シャットダウン",
-        }
-    }
-
-    /// Telegram callback_data内で使う識別子。`:` 区切りで解析するため小文字の単語にする。
-    pub fn slug(self) -> &'static str {
-        match self {
-            PowerAction::Reboot => "reboot",
-            PowerAction::Shutdown => "shutdown",
-        }
-    }
-
-    pub fn from_slug(slug: &str) -> Option<Self> {
-        match slug {
-            "reboot" => Some(PowerAction::Reboot),
-            "shutdown" => Some(PowerAction::Shutdown),
-            _ => None,
         }
     }
 }

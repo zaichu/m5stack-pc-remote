@@ -7,14 +7,9 @@ const AUDIT_LOG_MAX_BYTES: u64 = 1_000_000;
 static AUDIT_LOG_LOCK: Mutex<()> = Mutex::new(());
 
 /// 監査ログの既定パス。実行ファイルと同じディレクトリの`audit.log`。
-///
-/// Windows ServiceのCWDは`%SystemRoot%\System32`になるため、CWD相対ではなく実行
-/// ファイルの場所を基準にする。config.tomlでのpath上書きは提供しない。
+/// config.tomlでのpath上書きは提供しない。
 pub fn path() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("audit.log")))
-        .unwrap_or_else(|| PathBuf::from("audit.log"))
+    crate::exe_dir_file("audit.log")
 }
 
 /// 認証成功かつ`confirm=true`のREBOOT/SHUTDOWNだけを1行追記する。

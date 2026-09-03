@@ -2,20 +2,9 @@ use std::process::Command;
 
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy)]
-pub enum PowerAction {
-    Reboot,
-    Shutdown,
-}
-
-impl PowerAction {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            PowerAction::Reboot => "reboot",
-            PowerAction::Shutdown => "shutdown",
-        }
-    }
-}
+/// 電源操作の識別子はwire protocolの一部なので `pc-remote-signing` が正本。
+/// bridge側は再エクスポートして使う。
+pub use pc_remote_signing::PowerAction;
 
 #[derive(Debug, Serialize)]
 pub struct PowerResult {
@@ -49,7 +38,7 @@ where
     }
 
     Ok(PowerResult {
-        action: action.as_str(),
+        action: action.slug(),
         dry_run,
         command,
     })

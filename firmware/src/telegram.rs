@@ -20,7 +20,7 @@ use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConne
 use serde_json::{json, Value};
 
 use crate::app_config::AppConfig;
-use crate::bridge_client::{self, PowerAction};
+use crate::bridge_client::{self, PowerAction, PowerActionLabel};
 use crate::net;
 use crate::telegram_root_ca::TELEGRAM_ROOT_CA_PEM;
 
@@ -296,17 +296,10 @@ impl DailyReport {
             return None;
         }
 
-        let online = net::check_pc_online(&config.pc_status_addr, Duration::from_millis(800));
+        let online = net::check_pc_online(&config.pc_status_addr, net::STATUS_PROBE_TIMEOUT);
         Some((
             day,
-            format!(
-                "定期レポート\nPC: {}",
-                if online {
-                    "オンライン"
-                } else {
-                    "オフライン"
-                }
-            ),
+            format!("定期レポート\nPC: {}", net::pc_online_label_ja(online)),
         ))
     }
 
@@ -448,14 +441,10 @@ impl Client {
     }
 
     fn status_text(&self) -> String {
-        let online = net::check_pc_online(&self.config.pc_status_addr, Duration::from_millis(800));
+        let online = net::check_pc_online(&self.config.pc_status_addr, net::STATUS_PROBE_TIMEOUT);
         format!(
             "PC: {}\n操作: {}\nM5Stack: Rust firmware",
-            if online {
-                "オンライン"
-            } else {
-                "オフライン"
-            },
+            net::pc_online_label_ja(online),
             if self.operation_lock.is_locked() {
                 "ロック中"
             } else {
@@ -565,7 +554,8 @@ impl Client {
             }
             "/unlock" => {
                 self.operation_lock.set(false);
-                self.api.send_message(chat_id, "操作のロックを解除しました。");
+                self.api
+                    .send_message(chat_id, "操作のロックを解除しました。");
             }
             "/wake" => {
                 let _guard = lock_power(&self.power_lock);
@@ -659,7 +649,8 @@ impl Client {
         }
 
         if !valid {
-            self.api.answer_callback_query(&id, "期限切れまたは処理済みです");
+            self.api
+                .answer_callback_query(&id, "期限切れまたは処理済みです");
             if chat_id != 0 {
                 let reply = format!(
                     "有効な{}確認がありません。期限切れ、使用済み、またはnonce不一致です。\nもう一度 /{} から実行してください。",
@@ -749,7 +740,9 @@ impl Client {
                 break;
             }
             if body.len() + read > RESPONSE_MAX_BYTES {
-                return Err(format!("getUpdates response exceeds {RESPONSE_MAX_BYTES} bytes").into());
+                return Err(
+                    format!("getUpdates response exceeds {RESPONSE_MAX_BYTES} bytes").into(),
+                );
             }
             body.extend_from_slice(&chunk[..read]);
         }

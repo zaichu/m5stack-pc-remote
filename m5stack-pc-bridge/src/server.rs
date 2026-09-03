@@ -140,12 +140,12 @@ async fn command(
             let dry_run = state.dry_run;
             let outcome =
                 tokio::task::spawn_blocking(move || -> Result<PowerResult, CommandFailure> {
-                    audit_log::append(action.as_str(), dry_run, "accepted")
+                    audit_log::append(action.slug(), dry_run, "accepted")
                         .map_err(CommandFailure::Audit)?;
 
                     let result = run_power_action(action, dry_run);
                     let label = if result.is_ok() { "ok" } else { "failed" };
-                    if let Err(err) = audit_log::append(action.as_str(), dry_run, label) {
+                    if let Err(err) = audit_log::append(action.slug(), dry_run, label) {
                         tracing::error!("failed to write audit log result: {err}");
                     }
                     result.map_err(CommandFailure::Power)
