@@ -19,7 +19,7 @@ impl Wifi {
     /// station interfaceを設定して起動し、ネットワークが上がるまで待つ。
     /// 初回接続専用。失敗時はModemが破棄されるため、再試行は `connect_retry()` を使う。
     pub fn connect(
-        modem: Modem,
+        modem: Modem<'static>,
         nvs: EspDefaultNvsPartition,
         ssid: &str,
         password: &str,
@@ -37,12 +37,12 @@ impl Wifi {
         ssid: &str,
         password: &str,
     ) -> Result<Self, Box<dyn Error>> {
-        let modem = unsafe { Modem::new() };
+        let modem = unsafe { Modem::steal() };
         Self::connect_with_modem(modem, nvs, ssid, password)
     }
 
     fn connect_with_modem(
-        modem: Modem,
+        modem: Modem<'static>,
         nvs: EspDefaultNvsPartition,
         ssid: &str,
         password: &str,

@@ -16,9 +16,9 @@ use embedded_hal_bus::i2c::RefCellDevice;
 use esp_idf_hal::delay::{Delay, FreeRtos};
 use esp_idf_hal::gpio::{AnyIOPin, Gpio15, Gpio18, Gpio23, Gpio5, Output, PinDriver};
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver, I2C0};
-use esp_idf_hal::prelude::*;
 use esp_idf_hal::spi::config::{Config as SpiConfig, DriverConfig, Duplex};
 use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver, SPI2};
+use esp_idf_hal::units::FromValueType;
 use ft6x36::Ft6x36;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9342CRgb565;
@@ -83,14 +83,14 @@ where
 }
 
 pub struct DisplayPins {
-    pub sclk: Gpio18,
-    pub mosi: Gpio23,
-    pub dc: Gpio15,
-    pub cs: Gpio5,
+    pub sclk: Gpio18<'static>,
+    pub mosi: Gpio23<'static>,
+    pub dc: Gpio15<'static>,
+    pub cs: Gpio5<'static>,
 }
 
 pub type Core2Display<'d> = mipidsi::Display<
-    SpiInterface<'static, SpiDeviceDriver<'d, SpiDriver<'d>>, PinDriver<'d, Gpio15, Output>>,
+    SpiInterface<'static, SpiDeviceDriver<'d, SpiDriver<'d>>, PinDriver<'d, Output>>,
     ILI9342CRgb565,
     mipidsi::NoResetPin,
 >;
@@ -98,7 +98,7 @@ pub type Core2Display<'d> = mipidsi::Display<
 /// SPI経由でILI9342Cを初期化する。LCDリセットはAXP192 GPIO4側で行うため、
 /// 先に `init_power` を実行しておく。
 pub fn init_display<'d>(
-    spi: SPI2,
+    spi: SPI2<'d>,
     pins: DisplayPins,
 ) -> Result<Core2Display<'d>, Box<dyn std::error::Error>> {
     // MISOは使わない。設定するとfull-duplex扱いになり、利用可能なSPI clockが
@@ -114,7 +114,7 @@ pub fn init_display<'d>(
     // 画面からの読み取りはしないためhalf-duplex/write-onlyで駆動する。
     // M5GFXも同じ方針で40MHz書き込みを使う。
     let spi_config = SpiConfig::new()
-        .baudrate(40.MHz().into())
+        .baudrate(40_u32.MHz().into())
         .write_only(true)
         .duplex(Duplex::Half3Wire);
     let spi_device = SpiDeviceDriver::new(spi_driver, Some(pins.cs), &spi_config)?;
@@ -136,11 +136,11 @@ pub fn init_display<'d>(
 }
 
 pub fn new_i2c<'d>(
-    i2c: I2C0,
-    sda: AnyIOPin,
-    scl: AnyIOPin,
+    i2c: I2C0<'d>,
+    sda: AnyIOPin<'d>,
+    scl: AnyIOPin<'d>,
 ) -> Result<I2cDriver<'d>, esp_idf_sys::EspError> {
-    let config = I2cConfig::new().baudrate(400.kHz().into());
+    let config = I2cConfig::new().baudrate(400_u32.kHz().into());
     I2cDriver::new(i2c, sda, scl, &config)
 }
 
