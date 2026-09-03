@@ -278,6 +278,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
+            let previous_online = status.pc_online;
+            let previous_battery = status.battery;
             // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
             status.battery = board::read_battery(&mut axp);
             let now_online = net::check_pc_online(&app_config.pc_status_addr, STATUS_PROBE_TIMEOUT);
@@ -310,7 +312,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            if matches!(screen, Screen::Main) {
+            // 表示内容が変わったときだけ描き直す。`draw_main`は全画面消去から
+            // 始まるため、10秒ごとに無条件で呼ぶとその周期で画面がちらつく。
+            if matches!(screen, Screen::Main)
+                && (status.pc_online != previous_online || status.battery != previous_battery)
+            {
                 ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
             }
         }
