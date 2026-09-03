@@ -23,9 +23,9 @@ use pc_remote_signing::PowerAction as SharedPowerAction;
 
 #[derive(Clone)]
 pub struct AppState {
-    config: Arc<AgentConfig>,
     auth: Arc<AuthConfig>,
     nonces: Arc<NonceStore>,
+    dry_run: bool,
     /// 認証失敗アラートの送信先。config未設定なら None(通知しないだけ)。
     alert: Option<Arc<AlertNotifier>>,
 }
@@ -45,14 +45,13 @@ struct CommandRequest {
 
 pub fn router(config: AgentConfig) -> Router {
     let alert = AlertNotifier::from_config(&config).map(Arc::new);
-    let config = Arc::new(config);
     let state = AppState {
         auth: Arc::new(AuthConfig {
-            secret: config.shared_secret.clone().into_bytes(),
+            secret: config.shared_secret.into_bytes(),
             allowed_skew_seconds: config.allowed_skew_seconds,
         }),
         nonces: Arc::new(NonceStore::default()),
-        config: Arc::clone(&config),
+        dry_run: config.dry_run,
         alert,
     };
 
@@ -141,7 +140,7 @@ async fn command(
             // blocking I/O。asyncワーカースレッドを塞がないよう、まとめて
             // blockingスレッドへ逃がす。fail-closed(監査ログを残せないなら
             // 電源操作を実行しない)の順序はこのクロージャ内で維持している。
-            let dry_run = state.config.dry_run;
+            let dry_run = state.dry_run;
             let outcome =
                 tokio::task::spawn_blocking(move || -> Result<PowerResult, CommandFailure> {
                     audit_log::append(action.slug(), dry_run, "accepted")

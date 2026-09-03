@@ -2,12 +2,14 @@
 # config.toml は .gitignore 対象なのでコミットしない。
 
 bind = "0.0.0.0:18080"
+# 有効な SocketAddr（例: 0.0.0.0:18080）でないと起動時に失敗する。
 
 # firmware/config.toml の bridge_shared_secret と同じ値にする(HMAC-SHA256署名の検証に使う)。
 # 32文字以上の長いランダム値にする。placeholderのままでは起動しない。
 shared_secret = "replace-with-a-long-random-shared-secret"
 
 allowed_skew_seconds = 60
+# 1..3600 の範囲で指定する。0 以下や 3600 超は起動時に失敗する。
 
 # true の間は実際のshutdown/rebootを実行しない。実機確認が済むまでtrueのままにする。
 dry_run = true
@@ -17,6 +19,7 @@ dry_run = true
 #
 # telegram_bot_token は firmware/config.toml と同じbot tokenでよい。このファイルへ
 # tokenを置くことのリスク評価は docs/security.md を参照。
+# placeholder のままでは起動時に失敗する。
 # telegram_chat_id は firmware側の telegram_allowed_user_id と同じ数値を入れる。
 # telegram_bot_token = "replace-with-your-telegram-bot-token"
 # telegram_chat_id = 123456789
