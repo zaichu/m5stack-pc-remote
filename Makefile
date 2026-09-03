@@ -18,6 +18,9 @@ clippy:
 
 test:
 	cargo test --manifest-path m5stack-pc-bridge/Cargo.toml
+	# shared/はfirmwareとbridgeが共有する実装。path依存なので
+	# bridge側のcargo testでは走らず、明示的に実行する必要がある。
+	cargo test --manifest-path shared/pc-remote-signing/Cargo.toml
 
 agent-windows-build:
 	@if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$$' && command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then \
