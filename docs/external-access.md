@@ -42,10 +42,13 @@ M5Stackが `getUpdates` を定期実行またはlong pollingし、許可ユー�
 
 ### コマンド
 
-- `/status`
-- `/wake`
-- `/reboot`
-- `/shutdown`
+- `/status` — PC状態を表示
+- `/wake` — Wake-on-LANを送信
+- `/reboot` — 確認後に再起動
+- `/shutdown` — 確認後にシャットダウン
+- `/lock` — 電源操作を一時的に禁止
+- `/unlock` — `/lock` を解除
+- `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` — 確認の手入力フォールバック（ボタンでも可）
 
 `/reboot` と `/shutdown` は即実行しません。M5Stackは日本語の確認メッセージを返し、短時間だけ有効な確認nonceを生成します。メッセージには「再起動」/「シャットダウン」ボタンと「キャンセル」ボタンのインラインキーボードが付き、タップ1回で確定/キャンセルできます。
 
@@ -189,7 +192,7 @@ M5Stack IP: 192.168.1.50
 - `from.id` が `TELEGRAM_ALLOWED_USER_ID` と一致しないupdateは無視し、返信しない。`update_id` は次回 `offset` として保持し、再処理しない。起動直後の最初の1バッチは、オフライン中に来たコマンドを実行しないよう、offset調整のみ行い実行はしない。
 - `/status` はPC ONLINE/OFFLINE、Wi-Fi状態、M5Stack local IPを返す。TCP connect probeを使う。
 - `/wake` はWake-on-LAN送信処理を呼び、成功/失敗を返信する。
-- `/reboot` / `/shutdown` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_MS` でTTL)を発行し、確定/キャンセルのインラインキーボード付きで `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を案内する。
+ - `/reboot` / `/shutdown` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_SECS`（秒、既定 60秒）でTTL)を発行し、確定/キャンセルのインラインキーボード付きで `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を案内する。
 - 確定ボタン・キャンセルボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、m5stack-pc-bridgeへのHMAC署名付きPOSTを呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
 - ボタンの `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの64byte制限内)。`callback_query` の `from.id` もメッセージと同様に `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、一致しない場合はpending確認を操作せず、Telegram仕様どおり `answerCallbackQuery` だけ短い拒否文言付きで返す(通常のメッセージ返信はしない)。
 - HTTP失敗時は5秒から60秒への指数バックオフを行い、画面状態を `Telegram: error` にする。

@@ -44,9 +44,11 @@ m5stack-pc-bridge のポートをインターネットへ直接公開しませ�
 - m5stack-pc-bridge: Rust
 - 認証: HMAC-SHA256 + timestamp + nonce
 
-Rust版はWi-Fi / WOL / STATUS / タッチUI / REBOOT / SHUTDOWN / Telegram経由操作まで実機確認済みです。
+Rust版はWi-Fi / WOL / STATUS / タッチUI / REBOOT / SHUTDOWN / Telegram経由操作（Phase 5D: `/status` `/wake` `/reboot` `/shutdown` のコマンド実行まで確認済み、Phase 5E インラインボタンは実装済み・実機確認待ち）まで実機確認済みです。
 
 ## セットアップ: Rust firmware
+
+事前に `cargo install espup ldproxy espflash && espup install --targets esp32` が必要です（詳細は `firmware/README.md` 参照）。
 
 ```bash
 cd firmware
@@ -160,7 +162,7 @@ Telegramアプリから許可したuser idのアカウントで、bot宛てに�
 
 - `/status`: PCのONLINE/OFFLINE、Wi-Fi RSSI、M5Stack IPを返信します。
 - `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
-- `/reboot` / `/shutdown`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」または「シャットダウン」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を手入力しても構いません(後方互換)。nonceは `TELEGRAM_CONFIRM_TTL_MS` の間だけ有効で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
+ - `/reboot` / `/shutdown`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」または「シャットダウン」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を手入力しても構いません(後方互換)。nonceは `TELEGRAM_CONFIRM_TTL_SECS`（秒）の間だけ有効（既定 60秒）で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
 - `/lock` / `/unlock`: 旅行中などに誤操作・不正操作を防ぐため、電源操作を一時的に禁止します。ロック中は `/wake` `/reboot` `/shutdown` と確認ボタンをすべて拒否し、**M5Stack本体のタッチ操作も同様に拒否**します(画面に `LOCKED` と表示されます)。`/lock` `/unlock` `/status` はロック中でも受け付けます。ロック状態はメモリ上だけで保持するため、M5Stackを再起動すると解除されます。
 
 なお、次の出来事はこちらから操作しなくてもTelegramへ通知されます。
