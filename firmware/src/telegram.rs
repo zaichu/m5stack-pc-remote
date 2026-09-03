@@ -27,6 +27,12 @@ use crate::telegram_root_ca::TELEGRAM_ROOT_CA_PEM;
 const PLACEHOLDER_TOKEN: &str = "replace-with-your-telegram-bot-token";
 const PLACEHOLDER_USER_ID: &str = "replace-with-your-telegram-user-id";
 
+/// 未許可ユーザーからのアクセスが何回たまったらアラートを送るか。
+/// 1回目から送ると、無関係なbot巡回でも鳴ってしまう。
+const UNAUTHORIZED_ALERT_THRESHOLD: u32 = 3;
+/// アラートの最短送信間隔。スキャンや連投で通知が埋まらないようにする。
+const UNAUTHORIZED_ALERT_INTERVAL: Duration = Duration::from_secs(3600);
+
 const BACKOFF_MIN: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPONSE_BUFFER: usize = 4096;
@@ -115,6 +121,9 @@ pub struct Client {
     operation_lock: OperationLock,
     config: Arc<AppConfig>,
     api: Api,
+    /// 未許可アクセスの検知数と、直近でアラートを送った時刻。
+    unauthorized_count: u32,
+    unauthorized_alert_at: Option<Instant>,
 }
 
 impl Api {
@@ -259,6 +268,40 @@ impl Client {
                 config: Arc::clone(&config),
             },
             config,
+            unauthorized_count: 0,
+            unauthorized_alert_at: None,
+        }
+    }
+
+    /// 未許可ユーザーからのアクセスを記録し、閾値を超えたらアラートを送る。
+    ///
+    /// 通知には送信者のIDやメッセージ本文を一切含めない。相手が自由に決められる
+    /// 文字列をそのまま自分のチャットへ流すと、なりすましや誘導の材料になるため。
+    fn record_unauthorized_access(&mut self) {
+        self.unauthorized_count += 1;
+        if self.unauthorized_count < UNAUTHORIZED_ALERT_THRESHOLD {
+            return;
+        }
+
+        let now = Instant::now();
+        if let Some(sent_at) = self.unauthorized_alert_at {
+            if now.duration_since(sent_at) < UNAUTHORIZED_ALERT_INTERVAL {
+                return;
+            }
+        }
+
+        let count = self.unauthorized_count;
+        self.unauthorized_count = 0;
+        self.unauthorized_alert_at = Some(now);
+        println!("telegram: unauthorized access detected ({count})");
+
+        if let Some(chat_id) = allowed_chat_id(self.config.as_ref()) {
+            self.api.send_message(
+                chat_id,
+                &format!(
+                    "未許可ユーザーからのアクセスを{count}回検知しました。\n操作は実行されていません。"
+                ),
+            );
         }
     }
 
@@ -437,6 +480,7 @@ impl Client {
         if from_id.to_string() != self.config.telegram_allowed_user_id {
             // 権限がない場合はpending確認を触らず、Telegram側の読み込み状態だけ終わらせる。
             self.api.answer_callback_query(&id, "権限がありません");
+            self.record_unauthorized_access();
             return;
         }
 
@@ -503,7 +547,9 @@ impl Client {
     fn handle_message(&mut self, message: &Value) {
         let from_id = message["from"]["id"].as_i64().unwrap_or_default();
         if from_id.to_string() != self.config.telegram_allowed_user_id {
-            // 権限がないユーザーには返信しない。
+            // 権限がないユーザーには返信しない(相手にbotの存在を確かめさせない)。
+            // 自分宛のアラートだけ、閾値を超えたときに送る。
+            self.record_unauthorized_access();
             return;
         }
         let chat_id = message["chat"]["id"].as_i64().unwrap_or_default();
