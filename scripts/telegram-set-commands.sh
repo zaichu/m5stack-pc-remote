@@ -14,8 +14,18 @@ token="$(
     "${config_file}"
 )"
 
-if [[ -z "${token}" || "${token}" == "replace-with-your-telegram-bot-token" ]]; then
+# placeholderのままではTelegram APIへ投げずに止める。READMEが案内する
+# placeholderは config.example.toml と同じ値に統一してあるが、旧READMEの値
+# (123456789:your-real-bot-token) が残っている可能性もあるため両方拒否する。
+# token形式(<数字>:<英数字等>)に合わない値もここで止める。値は表示しない。
+if [[ -z "${token}" || "${token}" == "replace-with-your-telegram-bot-token" || "${token}" == "123456789:your-real-bot-token" ]]; then
   echo "telegram_bot_token is not configured in firmware/config.toml." >&2
+  echo "Copy firmware/config.example.toml to firmware/config.toml and set a real bot token." >&2
+  exit 1
+fi
+
+if ! [[ "${token}" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
+  echo "telegram_bot_token in firmware/config.toml does not look like a Telegram bot token (<digits>:<secret>)." >&2
   exit 1
 fi
 
@@ -37,11 +47,20 @@ commands='[
   {"command":"settings","description":"設定の現在値と変更・ロック操作"}
 ]'
 
-response="$(
+# curlの失敗時は set -e で黙って終わらせず、tokenをredactした上で理由を出す。
+# 失敗の大半は無効なtoken(401)かネットワーク到達性の問題である。
+curl_stderr="$(mktemp)"
+if ! response="$(
   curl -fsS -X POST "https://api.telegram.org/bot${token}/setMyCommands" \
     -H "Content-Type: application/json" \
-    --data "{\"commands\":${commands}}"
-)"
+    --data "{\"commands\":${commands}}" 2>"${curl_stderr}"
+)"; then
+  echo "Failed to call Telegram setMyCommands. Check the network connection and that telegram_bot_token in firmware/config.toml is correct." >&2
+  perl -pe 's#bot[0-9]+:[A-Za-z0-9_-]+#bot<redacted>#g' "${curl_stderr}" >&2 || true
+  rm -f "${curl_stderr}"
+  exit 1
+fi
+rm -f "${curl_stderr}"
 
 ok="$(printf '%s' "${response}" | perl -ne 'print $1 if /"ok"\s*:\s*(true|false)/')"
 if [[ "${ok}" != "true" ]]; then
