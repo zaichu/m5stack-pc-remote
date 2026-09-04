@@ -45,6 +45,7 @@ impl AppConfig {
             }
         }
 
+        app_config.clamp_ranges();
         app_config
     }
 
@@ -69,6 +70,31 @@ impl AppConfig {
 
     /// NVSに値があれば上書きする。keyを複数渡した場合は先に見つかったものを使う
     /// (2つ目以降は旧key)。NVSのkeyは15文字までなので短縮名になっている。
+    /// 範囲を持つ値が明らかに不正なら既定値へ戻す。
+    ///
+    /// NVSはビルド時configを迂回して値を差し込めるため、build.rs側の検証だけでは
+    /// 素通りする。`timezone_offset_hours` に極端な値が入ると
+    /// `telegram.rs` の `unix + offset * 3600` で日付が大きくずれ、定期レポートが
+    /// 意図しない時刻に出る。
+    fn clamp_ranges(&mut self) {
+        // 実在するUTCオフセットの範囲(UTC-12〜UTC+14)。
+        if !(-12..=14).contains(&self.timezone_offset_hours) {
+            println!(
+                "timezone_offset_hours={} は範囲外(-12..=14)です。0として扱います",
+                self.timezone_offset_hours
+            );
+            self.timezone_offset_hours = 0;
+        }
+        // 0-23が有効時刻。範囲外は「無効(送らない)」を意味する -1 に寄せる。
+        if !(0..=23).contains(&self.daily_report_hour) && self.daily_report_hour != -1 {
+            println!(
+                "daily_report_hour={} は範囲外です。無効(-1)として扱います",
+                self.daily_report_hour
+            );
+            self.daily_report_hour = -1;
+        }
+    }
+
     fn apply_nvs(&mut self, nvs: &EspNvs<NvsDefault>) {
         replace(nvs, &["wifi_ssid"], &mut self.wifi_ssid);
         replace(nvs, &["wifi_pass"], &mut self.wifi_password);
@@ -98,22 +124,39 @@ impl AppConfig {
 /// NVSから読めて、かつ目的の型へparseできたときだけ上書きする。
 /// `String` も `FromStr` を実装しているため、文字列と数値を同じ関数で扱える。
 /// 壊れた値が入っていてもビルド時configへフォールバックする。
+///
+/// ログにはkey名だけを出し、値は出さない。ここを通る値にはWi-Fiパスワードや
+/// bot tokenが含まれる。
 fn replace<T>(nvs: &EspNvs<NvsDefault>, keys: &[&str], target: &mut T)
 where
     T: std::str::FromStr,
 {
-    let found = keys
+    let Some((key, raw)) = keys
         .iter()
-        .find_map(|key| read_string(nvs, key))
-        .and_then(|raw| raw.parse().ok());
-    if let Some(value) = found {
-        *target = value;
+        .find_map(|key| read_string(nvs, key).map(|raw| (*key, raw)))
+    else {
+        return;
+    };
+    match raw.parse() {
+        Ok(value) => *target = value,
+        // 無言でfallbackすると、NVSへ壊れた値(" 80" や "abc")が入っていても
+        // 気づけない。設定したはずの値が効かない理由が分かるようにする。
+        Err(_) => println!(
+            "NVS `{key}` の値を解釈できませんでした。ビルド時configを使います"
+        ),
     }
 }
 
 fn read_string(nvs: &EspNvs<NvsDefault>, key: &str) -> Option<String> {
     let len = nvs.str_len(key).ok().flatten()?;
-    if len == 0 || len > MAX_STRING_LEN {
+    if len == 0 {
+        println!("NVS `{key}` が空です。ビルド時configを使います");
+        return None;
+    }
+    if len > MAX_STRING_LEN {
+        println!(
+            "NVS `{key}` が長すぎます({len} > {MAX_STRING_LEN})。ビルド時configを使います"
+        );
         return None;
     }
 

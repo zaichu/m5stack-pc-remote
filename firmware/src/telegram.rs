@@ -87,10 +87,15 @@ impl OperationLock {
 }
 
 pub fn is_configured(config: &AppConfig) -> bool {
-    !config.telegram_bot_token.is_empty()
-        && config.telegram_bot_token != PLACEHOLDER_TOKEN
-        && !config.telegram_allowed_user_id.is_empty()
-        && config.telegram_allowed_user_id != PLACEHOLDER_USER_ID
+    // 前後の空白を除いてから判定する。config.tomlやNVSに ` token ` のような
+    // 値が入っていると、完全一致だけではplaceholder判定をすり抜け、無効な
+    // tokenのままHTTPSを試し続けることになる。
+    let token = config.telegram_bot_token.trim();
+    let user_id = config.telegram_allowed_user_id.trim();
+    !token.is_empty()
+        && token != PLACEHOLDER_TOKEN
+        && !user_id.is_empty()
+        && user_id != PLACEHOLDER_USER_ID
 }
 
 /// ピン留めしたルートCAをesp-tlsのglobal CA storeへ登録する。
@@ -489,7 +494,7 @@ impl DailyReport {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
             .as_secs() as i64;
-        if unix < net::MIN_VALID_UNIX_TIME as i64 {
+        if !net::is_ntp_synced(unix) {
             return None;
         }
         let local = unix + config.timezone_offset_hours * 3600;

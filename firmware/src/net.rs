@@ -11,8 +11,17 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
 /// これより古いUNIX時刻はNTP未同期とみなす(2023-11-14相当)。
-/// 署名のtimestampと定期レポートの時刻判定で共通に使う。
-pub const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
+/// 判定は `is_ntp_synced` に集約しているので、直接比較せずそちらを使う。
+const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
+
+/// 与えたUNIX時刻がNTP同期済みとみなせるか。
+///
+/// 以前は定数を公開して呼び出し側がそれぞれ比較しており、u64・i64・`<`・`>=` が
+/// 混在していた。判定式が分散すると、閾値を変えたときの更新漏れや符号違いの
+/// 取り違えが起きるため、1関数に寄せる。
+pub fn is_ntp_synced(unix_seconds: i64) -> bool {
+    unix_seconds >= MIN_VALID_UNIX_TIME as i64
+}
 
 /// PCの死活確認に使うTCP接続タイムアウト。UI更新ループとTelegramの応答生成で
 /// 同じ値を使う。長くすると画面の更新周期とTelegramの応答が遅くなる。
@@ -171,7 +180,7 @@ pub fn wait_for_time_sync(timeout: Duration) -> bool {
     loop {
         let synced = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() >= MIN_VALID_UNIX_TIME)
+            .map(|d| is_ntp_synced(d.as_secs() as i64))
             .unwrap_or(false);
         if synced {
             return true;
