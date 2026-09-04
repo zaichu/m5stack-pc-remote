@@ -513,12 +513,30 @@ impl Client {
         )
     }
 
-    /// `/settings` の応答。現在値と変更コマンドの案内を返す。
+    /// `/settings` の応答。現在値と、そこから実行できる操作を案内する。
+    ///
+    /// `/set_*` と `/lock` `/unlock` はTelegramのコマンド一覧(setMyCommands)へ
+    /// 登録しない。日常的に使うのは電源操作だけで、設定変更とロックまで一覧に出すと
+    /// 選びにくくなるため。代わりに、この応答を入口にして辿れるようにする。
+    /// 現在値をそのまま埋めた実行例を出し、コピーして値だけ書き換えれば使えるようにする。
     fn settings_text(&self) -> String {
         let (pc_ip_address, pc_status_addr, wol_port) = self.settings.snapshot();
+        let (lock_state, lock_hint) = if self.operation_lock.is_locked() {
+            ("ロック中", "/unlock で解除できます。")
+        } else {
+            ("解除中", "/lock で電源操作を一時的に禁止できます。")
+        };
         format!(
-            "現在の設定:\nPC IPアドレス: {pc_ip_address}\nSTATUS確認先: {pc_status_addr}\n\
-             WOLポート: {wol_port}\n\n変更するには /set_ip /set_status_addr /set_wol_port を使ってください。"
+            "現在の設定\n\
+             ・PC IPアドレス: {pc_ip_address}\n\
+             ・STATUS確認先: {pc_status_addr}\n\
+             ・WOLポート: {wol_port}\n\
+             ・操作ロック: {lock_state}\n\
+             \n変更するには、以下をコピーして値を書き換えて送信してください。\n\
+             /set_ip {pc_ip_address}\n\
+             /set_status_addr {pc_status_addr}\n\
+             /set_wol_port {wol_port}\n\
+             \n{lock_hint}"
         )
     }
 
