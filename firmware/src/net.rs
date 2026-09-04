@@ -2,7 +2,7 @@
 
 use std::error::Error;
 use std::io;
-use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 use esp_idf_hal::modem::Modem;
@@ -154,12 +154,29 @@ pub fn send_wake_on_lan(mac_text: &str, port: u16) -> Result<(), Box<dyn Error>>
 /// STATUS相当の疎通確認。接続成功または即時refusedならPCは応答あり、
 /// timeoutなら電源OFFまたは到達不能として扱う。
 pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
-    let Ok(mut addrs) = addr_text.to_socket_addrs() else {
+    // IPリテラルならDNSを引かずに済ませる。`to_socket_addrs()` はホスト名だと
+    // 名前解決を伴い、UIループから10秒ごとに呼ばれるここでブロックする。
+    // DNSが遅い・落ちている環境では、そのぶん画面もタッチ処理も止まる。
+    if let Ok(addr) = addr_text.parse::<SocketAddr>() {
+        return probe(addr, timeout);
+    }
+
+    let Ok(addrs) = addr_text.to_socket_addrs() else {
         return false;
     };
-    let Some(addr) = addrs.next() else {
-        return false;
-    };
+    // A/AAAAの両方を持つホスト名では、先頭1件だけ試すと到達可能な方を
+    // 取りこぼしてOFFLINEと誤判定する。順に試して1つでも通れば ONLINE とする。
+    for addr in addrs {
+        if probe(addr, timeout) {
+            return true;
+        }
+    }
+    false
+}
+
+/// TCP connectで到達性だけを見る。`ConnectionRefused` は「相手は居るが
+/// そのportで待っていない」なので、PCは起動しているとみなす。
+fn probe(addr: SocketAddr, timeout: Duration) -> bool {
     match TcpStream::connect_timeout(&addr, timeout) {
         Ok(_) => true,
         Err(e) => e.kind() == io::ErrorKind::ConnectionRefused,

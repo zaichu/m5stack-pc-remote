@@ -27,6 +27,12 @@ use crate::net;
 use crate::settings::RuntimeSettings;
 use crate::telegram_root_ca::TELEGRAM_ROOT_CA_PEM;
 
+/// ロック中でも受け付けるコマンド。これ以外はロック中に拒否する(default-deny)。
+///
+/// 参照系と、ロックの切り替えだけ。ここへ追加するときは「ロック中の利用者に
+/// 許してよいか」を必ず考えること。
+const ALLOWED_WHILE_LOCKED: [&str; 4] = ["/status", "/settings", "/lock", "/unlock"];
+
 const PLACEHOLDER_TOKEN: &str = "replace-with-your-telegram-bot-token";
 const PLACEHOLDER_USER_ID: &str = "replace-with-your-telegram-user-id";
 
@@ -315,6 +321,12 @@ impl ConfigChange {
     }
 }
 
+/// 確認待ちは**同時に1件だけ**保持する。意図的な仕様。
+///
+/// `/reboot` の直後に `/shutdown` を送ると前の確認は無効になり、古いボタンは
+/// 「有効な確認がありません」になる。操作ごとにスロットを分けると、古い確認が
+/// 生き続けて「いつ押されるか分からないボタン」が増える。電源操作という性質上、
+/// 最後に意図した1件だけを有効にするほうが安全なため、この形を維持する。
 struct Pending {
     kind: PendingKind,
     nonce: String,
@@ -885,21 +897,16 @@ impl Client {
     }
 
     fn dispatch_command(&mut self, chat_id: i64, command: &str, args: &str) {
-        // 操作系コマンドはロック中に一切実行しない。ロックの切り替えと状態確認は
-        // ロック中でも受け付ける(そうしないと解除できない)。`/settings`は
-        // `/status`と同枠の参照系として、ロック中でも読める。
-        const LOCKED_COMMANDS: [&str; 9] = [
-            "/wake",
-            "/reboot",
-            "/shutdown",
-            "/confirm_reboot",
-            "/confirm_shutdown",
-            "/set_ip",
-            "/set_status_addr",
-            "/set_wol_port",
-            "/confirm_set",
-        ];
-        if self.operation_lock.is_locked() && LOCKED_COMMANDS.contains(&command) {
+        // ロック中に通すコマンドだけを列挙する(default-deny)。
+        //
+        // 以前は逆に「ロック中に禁止するコマンド」を列挙していたが、それだと
+        // コマンドを追加したときに列挙し忘れると、ロック中でも実行できてしまう。
+        // 失敗の向きが危険側なので反転させた。いまは列挙し忘れるとロック中に
+        // 使えなくなるだけで、安全側に倒れる。
+        //
+        // ロックの解除自体を通さないとロックから戻れないので `/unlock` は必須。
+        // `/lock` は冪等、`/status` `/settings` は参照のみなので通す。
+        if self.operation_lock.is_locked() && !ALLOWED_WHILE_LOCKED.contains(&command) {
             self.api.send_message(
                 chat_id,
                 "操作はロック中です。/unlock で解除してから実行してください。",
@@ -1206,7 +1213,11 @@ impl Client {
         };
 
         let parsed: Value = serde_json::from_slice(&body)?;
-        let results = parsed["result"].as_array().cloned().unwrap_or_default();
+        // `result` が配列でない応答(APIエラー本文など)を空扱いで握り潰すと、
+        // 異常に気づけないまま無言で回り続ける。エラーにしてbackoffへ回す。
+        let Some(results) = parsed["result"].as_array().cloned() else {
+            return Err("getUpdates response has no result array".into());
+        };
         let dispatch = self.initial_sync_done;
         self.process_updates(&results, dispatch);
         self.initial_sync_done = true;
