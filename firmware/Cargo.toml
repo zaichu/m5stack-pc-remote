@@ -21,6 +21,8 @@ ft6x36 = "0.6"
 mipidsi = "0.10"
 # m5stack-pc-bridgeと共有するHMAC署名wire protocol実装。
 pc-remote-signing = { path = "../shared/pc-remote-signing" }
+# Telegramから変更する設定値のvalidation。host側でテストできるよう分離してある。
+config-validation = { path = "../shared/config-validation" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
