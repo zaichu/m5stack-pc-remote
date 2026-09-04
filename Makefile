@@ -1,5 +1,5 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-windows-build agent-check \
-	firmware-build firmware-nvs-image firmware-package \
+	firmware-build firmware-nvs-image firmware-package ota-readiness-check \
 	config-key-check agent-roles-check docs-consistency-check pr-issue-link-check secret-path-check secret-scan shell-syntax-check diff-check check git-pre-commit git-pre-push
 
 install: install-hooks
@@ -50,6 +50,11 @@ firmware-nvs-image:
 # `check` へは入れない(espflashが必須で、OTA配信を行う端末でだけ使うため)。
 firmware-package:
 	bash ./scripts/package-firmware.sh
+
+# OTA前の readiness check。実機作業を行う端末でだけ意味があるため、
+# `check` へは入れない(CI等のconfigが無い環境では警告してskipする)。
+ota-readiness-check:
+	bash ./scripts/check-ota-readiness.sh
 
 config-key-check:
 	python3 ./scripts/config_keys.py check
