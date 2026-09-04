@@ -186,8 +186,12 @@ async fn tampered_signature_is_rejected() {
         b"",
     );
     // 末尾を書き換えて別人の署名にする。
-    signature.pop();
-    signature.push('0');
+    //
+    // 必ず「元と違う文字」へ置き換える。`push('0')` 固定にすると、署名末尾が
+    // たまたま '0' のときに署名が変化せず、正当なリクエストのまま200が返って
+    // このテストが1/16で落ちる。署名はtimestamp依存で毎回変わるためflakeになる。
+    let last = signature.pop().expect("signature is not empty");
+    signature.push(if last == '0' { '1' } else { '0' });
 
     let response = app
         .oneshot(
