@@ -66,3 +66,67 @@ fn stays_full_when_no_expired_entries() {
         "should reject when store is full with no expired entries"
     );
 }
+
+// ===== Issue #136: nonce 入力検証の固定 =====
+//
+// `insert_once` の実装は MAX_NONCE_LEN(=64) 超過と使用文字種
+// (英数字と `-_.` のみ) を検査する。これらの検査を削除する変異を
+// 入れても既存テストは全て緑のままだったため、境界を固定する。
+
+/// MAX_NONCE_LEN(=64) ちょうどは受け付け、65文字は拒否すること。
+#[test]
+fn rejects_nonce_longer_than_max_len() {
+    let store = NonceStore::default();
+    let base = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+    assert!(
+        store.insert_once(&"a".repeat(64), base.unix_timestamp(), base, 60),
+        "64-char nonce should be accepted"
+    );
+    assert!(
+        !store.insert_once(&"a".repeat(65), base.unix_timestamp(), base, 60),
+        "65-char nonce should be rejected"
+    );
+}
+
+/// 許可された文字種 (英数字と `-_.`) は受け付けること。
+#[test]
+fn accepts_nonce_with_allowed_characters() {
+    let store = NonceStore::default();
+    let base = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+    for (i, nonce) in ["abcXYZ012", "with-dash_and.dot", "---___...", "a"]
+        .iter()
+        .enumerate()
+    {
+        assert!(
+            store.insert_once(nonce, base.unix_timestamp(), base, 60),
+            "allowed nonce {i} ({nonce}) should be accepted"
+        );
+    }
+}
+
+/// 空白や記号を含む nonce は拒否すること。
+#[test]
+fn rejects_nonce_with_disallowed_characters() {
+    let store = NonceStore::default();
+    let base = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+    for nonce in [
+        "has space",
+        "tab\there",
+        "semi;colon",
+        "slash/x",
+        "bang!",
+        "colon:x",
+        "at@sign",
+        "hash#tag",
+        "plus+plus",
+        "uni\u{00e7}ode",
+    ] {
+        assert!(
+            !store.insert_once(nonce, base.unix_timestamp(), base, 60),
+            "nonce {nonce:?} should be rejected"
+        );
+    }
+}
