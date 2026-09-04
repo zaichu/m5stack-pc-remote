@@ -1,6 +1,6 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-windows-build agent-check \
 	firmware-build firmware-nvs-image \
-	config-key-check pr-issue-link-check secret-path-check secret-scan diff-check check git-pre-commit git-pre-push
+	config-key-check pr-issue-link-check secret-path-check secret-scan shell-syntax-check diff-check check git-pre-commit git-pre-push
 
 install: install-hooks
 
@@ -23,9 +23,14 @@ test:
 	cargo test --manifest-path shared/pc-remote-signing/Cargo.toml
 	cargo test --manifest-path shared/config-validation/Cargo.toml
 
+# toolchainが無い開発端末では警告してskipするが、CI(CI=1)では必ず実行する。
+# skipを成功扱いのままにすると、ローカルで通ったものがCIで初めて落ちる。
 agent-windows-build:
 	@if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$$' && command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then \
 		cargo build --manifest-path m5stack-pc-bridge/Cargo.toml --release --target x86_64-pc-windows-gnu; \
+	elif [ -n "$$CI" ]; then \
+		echo "ERROR: CIでは x86_64-pc-windows-gnu target / mingw-w64 が必須です。" >&2; \
+		exit 1; \
 	else \
 		echo "WARNING: x86_64-pc-windows-gnu target / mingw-w64 not found; skipping m5stack-pc-bridge Windows cross-build."; \
 	fi
@@ -55,7 +60,13 @@ secret-scan:
 diff-check:
 	git diff --check
 
-check: diff-check secret-path-check secret-scan config-key-check agent-check firmware-build
+# scripts配下のbash構文チェック。verify SKILL.mdが `make check` と並べて
+# 挙げているのに `check` へ入っておらず、ローカルで通してもCIの別ステップで
+# 落ちることがあった。同じ内容をここへ含めて一致させる。
+shell-syntax-check:
+	bash -n scripts/*.sh
+
+check: diff-check secret-path-check secret-scan config-key-check shell-syntax-check agent-check firmware-build
 
 git-pre-commit: fmt-check secret-path-check diff-check
 

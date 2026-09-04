@@ -34,8 +34,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # CI=1 を渡すと、toolchain欠如によるskipをerrorへ格上げする。
+      # ローカルでskipされた検査がCIでは必ず走るようにして、両者の結果を一致させる。
+      # bash構文チェックは `make check` に含めているので個別ステップは持たない。
       - name: Run quality gate
+        env:
+          CI: "1"
         run: make check
-
-      - name: Check shell scripts
-        run: bash -n scripts/*.sh

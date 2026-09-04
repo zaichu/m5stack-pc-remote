@@ -17,10 +17,18 @@ pub mod windows_service;
 ///
 /// 実行ファイルの場所が取れない場合はCWD相対へフォールバックする。
 pub fn exe_dir_file(name: &str) -> std::path::PathBuf {
-    std::env::current_exe()
+    if let Some(path) = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
-        .unwrap_or_else(|| std::path::PathBuf::from(name))
+    {
+        path
+    } else {
+        tracing::warn!(
+            "current_exe() が取得できず CWD 相対パスへフォールバックします: {}",
+            name
+        );
+        std::path::PathBuf::from(name)
+    }
 }
 
 /// 設定ファイルの既定パス。`--config` 省略時に使う。
