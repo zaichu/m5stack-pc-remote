@@ -41,6 +41,32 @@ shared_secret = "too-short"
     assert!(err.to_string().contains("at least 32"));
 }
 
+// MIN_SHARED_SECRET_LEN(32)の境界を固定する。下限を16へ緩めると31文字が
+// 通ってしまい、このテストが落ちる。
+#[test]
+fn rejects_shared_secret_one_char_below_minimum() {
+    let secret = "a".repeat(31);
+    assert_eq!(secret.len(), 31);
+    let input = format!("bind = \"127.0.0.1:18080\"\nshared_secret = \"{secret}\"\n");
+
+    let err = AgentConfig::from_toml_str(&input).unwrap_err();
+
+    assert!(err.to_string().contains("at least 32"));
+}
+
+// 32文字ちょうどは受け入れる。下限を33へ厳格化するとこのテストが落ちる。
+#[test]
+fn accepts_shared_secret_at_minimum_length() {
+    let input = r#"
+bind = "127.0.0.1:18080"
+shared_secret = "0123456789abcdef0123456789abcdef"
+"#;
+
+    let cfg = AgentConfig::from_toml_str(input).unwrap();
+
+    assert_eq!(cfg.shared_secret, "0123456789abcdef0123456789abcdef");
+}
+
 #[test]
 fn rejects_invalid_bind() {
     let input = r#"
@@ -64,6 +90,49 @@ allowed_skew_seconds = 3601
     let err = AgentConfig::from_toml_str(input).unwrap_err();
 
     assert!(err.to_string().contains("at most"));
+}
+
+// MAX_SKEW_SECONDS(3600)の境界を固定する。上限を3599へ厳格化すると
+// 3600ちょうどが通らなくなり、このテストが落ちる。
+#[test]
+fn accepts_skew_at_maximum() {
+    let input = r#"
+bind = "127.0.0.1:18080"
+shared_secret = "0123456789abcdef0123456789abcdef"
+allowed_skew_seconds = 3600
+"#;
+
+    let cfg = AgentConfig::from_toml_str(input).unwrap();
+
+    assert_eq!(cfg.allowed_skew_seconds, 3600);
+}
+
+// `allowed_skew_seconds <= 0` の拒否を固定する。条件を `< 0` へ緩めると
+// 0が通ってしまい、`rejects_zero_allowed_skew` が落ちる。
+#[test]
+fn rejects_zero_allowed_skew() {
+    let input = r#"
+bind = "127.0.0.1:18080"
+shared_secret = "0123456789abcdef0123456789abcdef"
+allowed_skew_seconds = 0
+"#;
+
+    let err = AgentConfig::from_toml_str(input).unwrap_err();
+
+    assert!(err.to_string().contains("positive"));
+}
+
+#[test]
+fn rejects_negative_allowed_skew() {
+    let input = r#"
+bind = "127.0.0.1:18080"
+shared_secret = "0123456789abcdef0123456789abcdef"
+allowed_skew_seconds = -60
+"#;
+
+    let err = AgentConfig::from_toml_str(input).unwrap_err();
+
+    assert!(err.to_string().contains("positive"));
 }
 
 #[test]

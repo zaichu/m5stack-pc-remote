@@ -109,6 +109,52 @@ impl AlertNotifier {
 mod tests {
     use super::*;
 
+    /// `from_config` 用の設定を組み立てる。secret相当はテスト用ダミーを使う。
+    fn config_with_telegram(token: Option<&str>, chat_id: Option<i64>) -> AgentConfig {
+        AgentConfig {
+            bind: "127.0.0.1:0".to_string(),
+            shared_secret: "local-development-secret".to_string(),
+            allowed_skew_seconds: 60,
+            dry_run: true,
+            telegram_bot_token: token.map(str::to_string),
+            telegram_chat_id: chat_id,
+        }
+    }
+
+    #[test]
+    fn from_config_returns_none_without_token() {
+        let config = config_with_telegram(None, Some(1));
+
+        assert!(AlertNotifier::from_config(&config).is_none());
+    }
+
+    // 空tokenのガードを削除すると `Some` になってしまい、このテストが落ちる。
+    #[test]
+    fn from_config_returns_none_with_empty_or_blank_token() {
+        for token in ["", "   "] {
+            let config = config_with_telegram(Some(token), Some(1));
+
+            assert!(
+                AlertNotifier::from_config(&config).is_none(),
+                "token={token:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_config_returns_none_without_chat_id() {
+        let config = config_with_telegram(Some("dummy-bot-token"), None);
+
+        assert!(AlertNotifier::from_config(&config).is_none());
+    }
+
+    #[test]
+    fn from_config_returns_some_when_both_are_set() {
+        let config = config_with_telegram(Some("dummy-bot-token"), Some(1));
+
+        assert!(AlertNotifier::from_config(&config).is_some());
+    }
+
     #[test]
     fn redacts_bot_token_from_error_text() {
         let notifier = AlertNotifier::for_test("123456:SECRET-TOKEN");
