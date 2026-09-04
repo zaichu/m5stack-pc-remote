@@ -42,11 +42,55 @@ Codex CLI は現在いずれの役割にも就いていません。セカンド�
 OpenCode:
 
 ```bash
-opencode run --dir <worktree> --auto -m opencode/muse-spark-1.3-contributor-free "<request>"
+bash scripts/run-agent.sh \
+  --model opencode/muse-spark-1.3-contributor-free \
+  --dir <worktree> \
+  --prompt-file <file>
 ```
 
-モデルは必ず `-m` で明示します。省略すると既定モデルで動き、結果が期待と違ったとき
+モデルは必ず `--model` で明示します。省略すると既定モデルで動き、結果が期待と違ったとき
 **どのモデルの出力なのか後から特定できません**。
+
+`opencode run` を直接叩かず、必ずこのラッパーを通してください。素の `opencode run` は
+タイムアウトを持たず、上流のレート制限で再試行が固まると**無限に待ちます**。
+`run-agent.sh` はログが伸びなくなったことを検知して数分で打ち切り、原因のエラー行を
+表示します。終了コード 2 が「停止検知による打ち切り」です。
+
+### 大きな作業は1回のプロンプトへ詰め込まない
+
+`--continue` でターンを分け、**対話的に進めてください。**
+
+```bash
+# 1ターン目: 調査と方針だけ
+bash scripts/run-agent.sh --model <model> --dir <worktree> --prompt-file step1.md
+# 内容を確認してから
+# 2ターン目以降: 実装 → テスト → 検証、と刻む
+bash scripts/run-agent.sh --model <model> --dir <worktree> --prompt-file step2.md --continue
+```
+
+一括で渡すと、エージェント内部のループが長くなり(実測で `step=60` まで到達)、
+リクエストが肥大して上流のレート制限を踏みやすくなります。
+
+刻む利点は他にもあります。
+
+- **途中経過が見える。** 一括だと完了まで出力が一切返らない(実際に5時間ゼロだった)
+- **途中で軌道修正できる。** 方針が違ったときに、終わってから300行を読み直さずに済む
+- **ハングしても1ターン分しか失わない**
+
+### 並列で走らせすぎない
+
+**同時に走らせるのは1本まで**にしてください。2026-09-05 に3本を並列で回したところ、
+プロバイダのレート制限(`rate_limit_exceeded`、ログに185回)を誘発し、
+2本が5時間ハングして成果0で終わりました。速く終わらせるつもりが逆効果になります。
+
+### 進捗の確認
+
+「プロセスが生きている」と「進んでいる」は別です。上の事故では `ps` 上は正常に見え、
+CPUも少し使っていました。確認するのは次の3つです。
+
+- `~/.local/share/opencode/log/opencode.log` の更新時刻
+- worktree のファイル変更 (`git status --short`)
+- CPU時間 (`ps -o etime,time`) — 経過時間に対して極端に小さければ待機している
 
 Codex CLI:
 
