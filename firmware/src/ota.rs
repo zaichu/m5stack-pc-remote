@@ -256,6 +256,20 @@ fn download_and_flash(
                 if read == 0 {
                     break;
                 }
+                // Issue #130-2: manifest申告を超える分はflashへ書かず即座に
+                // 打ち切る。終端まで書いてから突き合わせで落とすと、slot上限まで
+                // 無駄な消去・書き込みが続く。判定式はhostでテストできるよう
+                // `config_validation` へ置いてある。早期returnで `update` が
+                // Dropされ `esp_ota_abort` するため、boot切替は起きない。
+                // 書く前に判定し、超過分を1バイトも書かない。
+                let incoming = received + read as u64;
+                if config_validation::ota_received_too_large(incoming, manifest.size) {
+                    return Err(OtaImageError::SizeMismatch {
+                        expected: manifest.size,
+                        actual: incoming,
+                    }
+                    .into());
+                }
                 hashing.update(&chunk[..read]);
                 update
                     .write(&chunk[..read])

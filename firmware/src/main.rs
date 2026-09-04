@@ -67,6 +67,9 @@ fn start_online_services(
     notifier: &mut Option<telegram::Notifier>,
     app_config: &Arc<AppConfig>,
     settings: &Arc<RuntimeSettings>,
+    // Telegramのpollingスレッドと通知スレッドで共有するTLS直列化ロック
+    // (Issue #127。mbedTLSは実質同時1本のため、両スレッドで同じものを渡す)。
+    https_lock: &telegram::HttpsLock,
 ) {
     if sntp.is_none() {
         // m5stack-pc-bridgeはtimestampを検証するため、電源操作前に時計同期が必要になる。
@@ -82,7 +85,11 @@ fn start_online_services(
 
     if notifier.is_none() {
         // PC状態変化などをUIループから送るための送信専用スレッド。
-        *notifier = telegram::start_notifier(Arc::clone(app_config), Arc::clone(settings));
+        *notifier = telegram::start_notifier(
+            Arc::clone(app_config),
+            Arc::clone(settings),
+            https_lock.clone(),
+        );
     }
 
     if !*telegram_started && telegram::is_configured(app_config.as_ref()) {
@@ -91,6 +98,7 @@ fn start_online_services(
             operation_lock.clone(),
             Arc::clone(app_config),
             Arc::clone(settings),
+            https_lock.clone(),
         );
         let state_handle = Arc::clone(telegram_state);
         // long pollingでUIやSTATUS更新を止めないよう、Telegramは専用スレッドで動かす。
@@ -175,6 +183,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sntp: Option<esp_idf_svc::sntp::EspSntp<'static>> = None;
     let mut telegram_started = false;
     let mut notifier: Option<telegram::Notifier> = None;
+    // Telegramのpollingスレッドと通知スレッドで共有するTLS直列化ロック。
+    // mbedTLSは実質同時1本のため、両スレッドへ同じものを渡す(Issue #127)。
+    let https_lock: telegram::HttpsLock = Arc::new(Mutex::new(()));
     if !telegram::is_configured(app_config.as_ref()) {
         println!("telegram: disabled (token or user id is a placeholder)");
     }
@@ -207,6 +218,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &mut notifier,
             &app_config,
             &settings,
+            &https_lock,
         );
     }
 
@@ -279,6 +291,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &mut notifier,
                     &app_config,
                     &settings,
+                    &https_lock,
                 );
             }
         }

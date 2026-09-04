@@ -55,6 +55,46 @@ pub enum State {
 /// タッチUIとTelegramスレッドからの電源操作を直列化するロック。
 pub type PowerLock = Arc<Mutex<()>>;
 
+/// Telegram HTTPS接続の直列化ロック(Issue #127)。
+///
+/// ESP32のmbedTLSヒープでは実質同時に1本のTLS接続しか張れず、pollingスレッドの
+/// long poll保持中に通知スレッドが `sendMessage` を開くと2本目が
+/// `ESP_ERR_HTTP_CONNECT` で失敗し、通知が黙って消える(ログにも残らない)。
+/// 以前の「接続を閉じ切ってから次を開く」構造は単一スレッド内の順序付けで、
+/// スレッド間には効かなかった。
+///
+/// 方式: pollingスレッドと通知スレッドで1つの `HttpsLock` を共有し、`post_json`
+/// (全POSTの単一choke point)と `poll_once` のGET取得部で握る。`main.rs` で作り
+/// 両スレッドへ渡す形にし、global staticにはしない(`PowerLock` と同じ扱い。
+/// 共有関係が呼び出し側から見え、hostテスト可能な純粋部品と切り分けやすいため)。
+/// 検討した代替案:
+/// - 通知をpollingスレッドへ集約する一元化: 遅延の上限は同じ(下記)なのに
+///   pollingループとキュー排出・定期レポートの責務が絡み、差分が大きくなる。
+/// - try_lockで空振り時に捨てる: 再び黙って消える。後回しにするなら結局待ちで
+///   あり、Mutex待ちと変わらない。
+///   よって待ち行列つきのMutex共有が最小差分で確実、と判断した。
+///
+/// トレードオフ: long poll中(最大 `long_poll_timeout+10` 秒)は通知スレッドが
+/// ロック待ちになり、通知が最大そのぶん遅れる。ただしUIループは止めない
+/// (`Notifier::notify` はmpsc送信だけで即戻る)。「遅れて届く」は許容し、
+/// 「黙って消える」は許さない、という選択である。遅延を縮めたい場合は
+/// `telegram_long_poll_timeout_seconds` を小さくする(設定で調整可能)。
+///
+/// デッドロック回避: このロックはleafとして扱う。握っている間に他のロック
+/// (power/state)を取らず、他のロックの内側でも取らない(現状の全送信箇所は
+/// この順序を守っている。`run_power_action` 等はpowerを関数内で取り切り、
+/// 送信前に離す)。`poll_once` はGET取得部だけをスコープへ閉じ込め、
+/// `process_updates` の送信はロックを離してから行い再取得にする。std Mutexは
+/// 再入不可のため、握ったまま `send_message` 系を呼ぶと自己デッドロックする。
+/// 送信箇所を増やすときもこの順序を守ること。
+/// poison時は `lock_power` と同じ扱いで回復する(守るのは `()` のため)。
+pub type HttpsLock = Arc<Mutex<()>>;
+
+/// Telegram HTTPSの排他を取る。poisonしていても排他は維持する。
+pub fn lock_https(https_lock: &HttpsLock) -> std::sync::MutexGuard<'_, ()> {
+    https_lock.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// 電源操作の排他を取る。poisonしていても排他は維持する。
 ///
 /// `lock()` の `Result` をそのまま束縛すると、poison時(保持中に他スレッドが
@@ -96,8 +136,11 @@ pub fn is_configured(config: &AppConfig) -> bool {
     // 前後の空白を除いてから判定する。config.tomlやNVSに ` token ` のような
     // 値が入っていると、完全一致だけではplaceholder判定をすり抜け、無効な
     // tokenのままHTTPSを試し続けることになる。
+    // user_id側の正規化は `config_validation` に一本化し、chat_id化・ID照合と
+    // 同じ値を使う(Issue #130-1)。
     let token = config.telegram_bot_token.trim();
-    let user_id = config.telegram_allowed_user_id.trim();
+    let user_id =
+        config_validation::normalize_telegram_user_id(&config.telegram_allowed_user_id);
     !token.is_empty()
         && token != PLACEHOLDER_TOKEN
         && !user_id.is_empty()
@@ -139,12 +182,16 @@ fn ensure_root_ca() -> Result<(), Box<dyn Error>> {
 /// private chatではchat_idがuser_idと一致するため、許可ユーザーIDをそのまま
 /// 送信先として使う。能動送信(pollingの応答ではない通知)で必要になる。
 fn allowed_chat_id(config: &AppConfig) -> Option<i64> {
-    config.telegram_allowed_user_id.parse::<i64>().ok()
+    // Issue #130-1: パース前にtrimする。正規化は `config_validation` に一本化し、
+    // `is_configured`・ID照合と同じ値を使う(3箇所が別々にtrimするとまたずれる)。
+    config_validation::parse_telegram_user_id(&config.telegram_allowed_user_id)
 }
 
 /// Bot APIへのHTTP呼び出し。pollingスレッドと通知スレッドの両方から使う。
+/// 両スレッドは同じ `HttpsLock` を共有し、TLS接続を直列化する(Issue #127)。
 struct Api {
     config: Arc<AppConfig>,
+    https: HttpsLock,
 }
 
 /// 確認待ちの操作。電源操作(REBOOT/SHUTDOWN)と設定変更(/set_*)の両方が、
@@ -374,6 +421,11 @@ impl Api {
     fn post_json(&self, method: &str, body: &Value) -> Result<(), Box<dyn Error>> {
         use esp_idf_svc::io::Write;
 
+        // Issue #127: mbedTLSは実質同時1本。pollingスレッドと通知スレッドの両方が
+        // この関数を通るため、ここを単一のchoke pointとして直列化する。
+        // 保持中はHTTP送受信だけを行い、他のロックは取らない(leaf扱い)。
+        let _https_guard = lock_https(&self.https);
+
         let payload = serde_json::to_string(body)?;
         let url = self.api_url(method);
         let mut client = self.http_client()?;
@@ -557,14 +609,19 @@ impl Notifier {
 
 /// 通知送信スレッドを起動し、UIスレッド用のハンドルを返す。
 /// Telegram未設定、または許可ユーザーIDがchat_idとして使えない場合はNone。
-pub fn start_notifier(config: Arc<AppConfig>, settings: Arc<RuntimeSettings>) -> Option<Notifier> {
+/// `https` はpollingスレッドと共有するTLS直列化ロック(Issue #127)。
+pub fn start_notifier(
+    config: Arc<AppConfig>,
+    settings: Arc<RuntimeSettings>,
+    https: HttpsLock,
+) -> Option<Notifier> {
     if !is_configured(config.as_ref()) {
         return None;
     }
     let chat_id = allowed_chat_id(config.as_ref())?;
 
     let (tx, rx) = mpsc::channel::<String>();
-    let api = Api { config };
+    let api = Api { config, https };
     let spawned = std::thread::Builder::new()
         .stack_size(12 * 1024)
         .spawn(move || {
@@ -587,7 +644,12 @@ pub fn start_notifier(config: Arc<AppConfig>, settings: Arc<RuntimeSettings>) ->
                 }
 
                 if let Some(text) = queued {
-                    api.send_message(chat_id, &text);
+                    // Issue #127: 以前は戻り値を捨てており、TLS衝突時の失敗が
+                    // 黙って消えた。直列化した今も送信自体は失敗し得るため、
+                    // 失敗の事実だけログへ残す(本文・tokenは出さない)。
+                    if !api.send_message(chat_id, &text) {
+                        println!("telegram: queued notify failed");
+                    }
                 }
                 // 送信できた日だけ既済にする。失敗した場合は次のループで
                 // 再送する(送信時刻のうちは何度でも試す)。
@@ -614,6 +676,7 @@ impl Client {
         operation_lock: OperationLock,
         config: Arc<AppConfig>,
         settings: Arc<RuntimeSettings>,
+        https: HttpsLock,
     ) -> Self {
         Self {
             last_update_id: 0,
@@ -624,6 +687,7 @@ impl Client {
             operation_lock,
             api: Api {
                 config: Arc::clone(&config),
+                https,
             },
             config,
             settings,
@@ -984,7 +1048,12 @@ impl Client {
     fn handle_callback_query(&mut self, callback: &Value) {
         let id = callback["id"].as_str().unwrap_or_default().to_string();
         let from_id = callback["from"]["id"].as_i64().unwrap_or_default();
-        if from_id.to_string() != self.config.telegram_allowed_user_id {
+        // Issue #130-1: 設定値の前後空白を除いてから照合する。正規化は
+        // `config_validation` に一本化し、`is_configured`・chat_id化と同じ値を使う。
+        if !config_validation::telegram_user_id_matches(
+            &self.config.telegram_allowed_user_id,
+            from_id,
+        ) {
             // 権限がない場合はpending確認を触らず、Telegram側の読み込み状態だけ終わらせる。
             self.api.answer_callback_query(&id, "権限がありません");
             self.record_unauthorized_access();
@@ -1090,7 +1159,11 @@ impl Client {
 
     fn handle_message(&mut self, message: &Value) {
         let from_id = message["from"]["id"].as_i64().unwrap_or_default();
-        if from_id.to_string() != self.config.telegram_allowed_user_id {
+        // Issue #130-1: callback側と同じ正規化で照合する。
+        if !config_validation::telegram_user_id_matches(
+            &self.config.telegram_allowed_user_id,
+            from_id,
+        ) {
             // 権限がないユーザーには返信しない(相手にbotの存在を確かめさせない)。
             // 自分宛のアラートだけ、閾値を超えたときに送る。
             self.record_unauthorized_access();
@@ -1186,7 +1259,17 @@ impl Client {
         // 「ボタンを押してもトーストが出ない(answerCallbackQueryだけ落ちる)」
         // という形で表面化した。clientとresponseをこのブロックへ閉じ込め、
         // dropさせてから `process_updates` を呼ぶ。
+        //
+        // Issue #127: このブロックは通知スレッドとも共有のHTTPSロックで守る。
+        // 以前の構造は単一スレッド内の順序付けで、通知スレッドの `sendMessage`
+        // とは同期していなかった。`process_updates` の送信はこのブロックの
+        // 外=ロックを離してから行い、再取得にする(std Mutexは再入不可のため、
+        // 握ったまま送ると自己デッドロックする)。
         let body = {
+            // long pollは最大 `long_poll_timeout+10` 秒この接続を保持するため、
+            // その間通知スレッドはロック待ちになる(通知が遅れる上限)。
+            // 握らないと2本同時TLSで通知側が落ち、黙って消える。
+            let _https_guard = lock_https(&self.api.https);
             let mut client = self.api.http_client()?;
             let request = client.request(Method::Get, &url, &[])?;
             let mut response = request.submit()?;
