@@ -34,6 +34,33 @@ if (-not (Test-Path $ExePath)) {
 }
 
 if (-not (Test-Path $ConfigPath)) {
+    # 既に動いているinstall先のconfig.tomlがある状態で、手元のconfig.tomlだけが
+    # 無い場合に新しいsecretを生成すると、install先の設定を上書きしてM5Stackとの
+    # 対応が壊れる(firmware側のbridge_shared_secretはNVSに焼かれており、
+    # PowerShell側からは変更できない)。復旧にはM5StackのUSB再書き込みが要る。
+    #
+    # これはgit管理外のconfig.tomlを持たない worktree からinstall.ps1を実行すると
+    # 必ず踏む。既存を尊重して黙って続行するのではなく、明示的に止める。
+    $installedConfigForReuse = "$InstallDir\config.toml"
+    if (Test-Path $installedConfigForReuse) {
+        throw @"
+$ConfigPath がありませんが、install先に既存の設定があります:
+  $installedConfigForReuse
+
+このまま進めると新しい shared_secret を生成して既存設定を上書きし、
+M5Stackとの対応が壊れます(復旧にはM5StackのUSB再書き込みが必要)。
+
+次のいずれかを行ってください。
+  1) 既存設定をそのまま使う(推奨):
+       Copy-Item "$installedConfigForReuse" "$ConfigPath"
+     を実行してから install.ps1 を再実行する
+  2) 意図的に新しいsecretへ入れ替える場合:
+       -ConfigPath に新しい設定ファイルを明示的に渡す
+     firmware/config.toml の bridge_shared_secret も同じ値へ更新し、
+     M5StackをUSBで再書き込みすること
+"@
+    }
+
     $examplePath = "$PSScriptRoot\config.example.toml"
     if (-not (Test-Path $examplePath)) {
         throw "Config file not found: $ConfigPath"
