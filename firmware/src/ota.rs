@@ -1,0 +1,334 @@
+// OTA Phase 3 クライアント: manifest取得 → 署名検証 → 非activeスロットへ書込 → reboot。
+//
+// 公開関数 `run_ota_update` を Phase 4 (トリガー: UI / Telegram) から呼ぶ。
+// UIやTelegramコマンドからの起動は本Phaseの範囲外のため実装しない。
+//
+// ## 接続とヒープの制約 (必読)
+//
+// ESP32 の mbedTLS ヒープでは実質同時に1本のTLS接続しか張れず、2本目を開くと
+// `ESP_ERR_HTTP_CONNECT` で失敗する(実機確認済み。`telegram.rs` の `poll_once`
+// 内コメントを参照)。
+//
+// ただし bridge への接続は plain HTTP (`http://`) なので、この module が張る
+// manifest取得とバイナリ取得の2本は mbedTLS を使わず、TLS本数の制約には当たらない。
+// それでも1本ずつ開閉する構造にしてあるのは、2MB転送中のピークヒープを下げるため。
+// (各fetchを `{}` スコープへ閉じ込め、検証・書込は接続を持たない状態で行う。)
+//
+// 呼び出し側 (Phase 4) への制約はこちらが本命:
+// **Telegram long polling のHTTPS接続を開いたままこの関数を呼ばないこと。**
+// polling 側が mbedTLS のヒープを掴んだままだと、OTAのHTTPクライアントと
+// OTA書込バッファに回すヒープが足りなくなる。呼ぶ前に polling 接続を閉じ切ること。
+//
+// ## メモリ
+//
+// firmwareは2MB級のため、`Vec` へ全体を読んでから書くことはしない(ヒープ不足で
+// 落ちる)。`OTA_CHUNK_SIZE` 単位で read → OTA slotへwrite → SHA-256へupdate を
+// 回す。チャンクを1024Bにした根拠:
+//   - メイン8KB / ワーカー12KB級のスタックに載る小ささ (telegram.rs も
+//     getUpdatesの読み取りを512Bチャンクにしている)
+//   - `esp_ota_write` は任意長を受け付けるため、小さくしても正しく書ける
+//   - LAN内HTTPでは1KBずつでも転送律速にならない
+//
+// ## OTA backendの選択
+//
+// `esp_idf_svc::ota::EspOta` を使う。`esp_ota_begin/write/end/set_boot_partition`
+// のsafe wrapperで、新しい依存も `esp_idf_sys` のunsafe直呼びも要らない。
+// 中断時は `EspOtaUpdate` を `complete` せずDropするだけで `esp_ota_abort` が
+// 走るため、後始末が漏れない。
+//
+// ## ロールバック
+//
+// `sdkconfig.defaults` の `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` により、
+// `complete()` でboot partitionを切り替えても新slotはpending扱いのままで、
+// 起動後に自分をvalidとマークしない限り再起動時に旧slotへ戻る。
+// そのvalidマーク (起動自己診断) は Phase 4 の担当で、本Phaseでは行わない。
+//
+// ## 純粋関数とテスト
+//
+// manifestのJSONパース・署名検証・size/sha256突き合わせ・ストリーミングSHA-256は
+// ハードウェアに依存しないため `pc-remote-signing` に置き、hostでテストしている
+// (`cargo test --manifest-path shared/pc-remote-signing/Cargo.toml` の `ota_tests`)。
+// このmoduleはESP-IDF上でのHTTP取得とOTA slot操作だけを受け持つ。
+
+// Phase 3では「呼べる状態」までを作り、トリガーの配線はPhase 4で行う。それまで
+// `run_ota_update` を呼ぶ箇所が無く、firmwareビルドでdead_code警告が12件出て
+// 新しい警告を埋もれさせるため、このmoduleに限って抑制する。
+// **Phase 4でトリガーを配線したらこの allow を外すこと。**
+#![allow(dead_code)]
+
+use std::error::Error;
+use std::fmt;
+use std::time::Duration;
+
+use embedded_svc::http::client::{Client as HttpClient, Response as HttpResponse};
+use embedded_svc::http::Method;
+use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
+use esp_idf_svc::ota::EspOta;
+
+use pc_remote_signing::{
+    parse_manifest_json, verify_manifest, verify_ota_image, OtaImageError, OtaManifest,
+    OtaManifestError, StreamingSha256,
+};
+
+use crate::app_config::AppConfig;
+
+/// 署名付きリクエスト対象のパス。wire protocol上は `pc-remote-signing` の
+/// canonical文字列へ入るため、bridge側 (`server.rs`) と一致させること。
+pub const MANIFEST_PATH: &str = "/firmware/manifest";
+pub const FIRMWARE_PATH: &str = "/firmware";
+
+/// ストリーミング書き込みの1回分。選定根拠はmodule冒頭の「メモリ」を参照。
+pub const OTA_CHUNK_SIZE: usize = 1024;
+
+/// manifest応答の受け入れ上限。manifestは数百BのJSONなので十分に余裕がある。
+/// ESP32のヒープ保護のため、超過分は読まずにエラーにする
+/// (`telegram.rs` の `RESPONSE_MAX_BYTES` と同じ考え方)。
+pub const MANIFEST_MAX_BYTES: usize = 4096;
+
+/// manifest取得の受信タイムアウト。数百Bの応答がLANで返るのを待つだけ。
+const MANIFEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// バイナリ取得の受信タイムアウト。2MB級の転送中にflash書込で間が空くため、
+/// manifestより長めに取る。
+const FIRMWARE_TIMEOUT: Duration = Duration::from_secs(30);
+/// 進捗ログを出す間隔。2MBを1KBずつ読むと2000回を超えるため、毎回出さない。
+const PROGRESS_INTERVAL_BYTES: u64 = 256 * 1024;
+
+/// OTAの失敗。ログ・エラーメッセージにsecretや本文は含めない。
+/// URL全体も持たず、endpointは識別用の固定ラベルだけにする。
+#[derive(Debug)]
+pub enum OtaError {
+    /// NTP未同期。署名してもbridge側のtimestamp検証で弾かれるため送らない。
+    ClockNotSynced,
+    /// HTTP clientの生成・送信・読み取りの失敗。値はespのエラー文言のみ。
+    Transport(String),
+    /// 200以外のステータス。`endpoint` は `MANIFEST_PATH` 等の固定ラベル。
+    UnexpectedStatus {
+        endpoint: &'static str,
+        status: u16,
+    },
+    ResponseTooLarge,
+    Manifest(OtaManifestError),
+    Image(OtaImageError),
+    /// OTA slot操作 (`EspOta`) の失敗。値はespのエラー文言のみ。
+    Ota(String),
+}
+
+impl fmt::Display for OtaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OtaError::ClockNotSynced => write!(f, "system clock is not NTP-synced yet"),
+            OtaError::Transport(reason) => write!(f, "firmware fetch failed: {reason}"),
+            OtaError::UnexpectedStatus { endpoint, status } => {
+                write!(f, "firmware {endpoint} returned {status}")
+            }
+            OtaError::ResponseTooLarge => write!(f, "firmware manifest is too large"),
+            OtaError::Manifest(e) => write!(f, "{e}"),
+            OtaError::Image(e) => write!(f, "{e}"),
+            OtaError::Ota(reason) => write!(f, "OTA write failed: {reason}"),
+        }
+    }
+}
+
+impl Error for OtaError {}
+
+impl From<OtaManifestError> for OtaError {
+    fn from(e: OtaManifestError) -> Self {
+        OtaError::Manifest(e)
+    }
+}
+
+impl From<OtaImageError> for OtaError {
+    fn from(e: OtaImageError) -> Self {
+        OtaError::Image(e)
+    }
+}
+
+/// OTAを実行する。Phase 4 (UI / Telegramトリガー) から呼ぶ公開関数。
+///
+/// 1. `GET /firmware/manifest` を署名付きリクエストで取得し、署名を検証する。
+///    検証に失敗したらダウンロードへ進まず即座に中止する。
+/// 2. `GET /firmware` でバイナリをストリーミング取得し、非activeスロットへ書く。
+/// 3. 書きながら計算したSHA-256と受信サイズをmanifestと突き合わせ、
+///    不一致ならboot切替をせず中止する。
+/// 4. すべて成功したときだけbootパーティションを切り替えてrebootする。
+///    成功時はこの関数は戻らない。
+///
+/// # 前提
+///
+/// 呼び出し時点で他のTLS接続 (特にTelegram long polling のHTTPS接続) が
+/// 開いていないこと。開いたままだとmbedTLSのヒープ不足で2本目の接続が
+/// `ESP_ERR_HTTP_CONNECT` で失敗する。Phase 4側でpolling接続を閉じ切ってから
+/// 呼ぶこと。詳細はmodule冒頭の「TLS同時接続の制約」を参照。
+///
+/// `pc_ip_address` はTelegram経由で実行時に変更できるため、`AppConfig` ではなく
+/// 呼び出し側から都度渡してもらう (`bridge_client::send_command` と同じ扱い)。
+pub fn run_ota_update(config: &AppConfig, pc_ip_address: &str) -> Result<(), OtaError> {
+    let manifest = fetch_manifest(config, pc_ip_address)?;
+    download_and_flash(&manifest, config, pc_ip_address)?;
+    println!("ota: update complete, rebooting");
+    esp_idf_svc::hal::reset::restart()
+}
+
+/// 署名付き `GET /firmware/manifest` でmanifestを取得・検証する。
+///
+/// HTTP接続はこの関数内の `{}` スコープで閉じ切る。パースと署名検証は
+/// 接続を持たない状態で行い、検証失敗時はバイナリ取得へ進まない。
+fn fetch_manifest(config: &AppConfig, pc_ip_address: &str) -> Result<OtaManifest, OtaError> {
+    // HTTP接続は `with_signed_get` の中で閉じ切る。パースと署名検証は
+    // 接続を持たない状態で行い、検証失敗時はバイナリ取得へ進まない。
+    let body = with_signed_get(
+        config,
+        pc_ip_address,
+        MANIFEST_PATH,
+        MANIFEST_TIMEOUT,
+        |response| {
+            if response.status() != 200 {
+                return Err(OtaError::UnexpectedStatus {
+                    endpoint: MANIFEST_PATH,
+                    status: response.status(),
+                });
+            }
+            let mut body = Vec::new();
+            let mut chunk = [0u8; 512];
+            loop {
+                let read = response
+                    .read(&mut chunk)
+                    .map_err(|e| OtaError::Transport(e.to_string()))?;
+                if read == 0 {
+                    break;
+                }
+                if body.len() + read > MANIFEST_MAX_BYTES {
+                    return Err(OtaError::ResponseTooLarge);
+                }
+                body.extend_from_slice(&chunk[..read]);
+            }
+            Ok(body)
+        },
+    )?;
+    let manifest = parse_manifest_json(&body)?;
+    verify_manifest(&manifest, config.bridge_shared_secret.as_bytes())?;
+    println!(
+        "ota: manifest version={} size={} verified",
+        manifest.version, manifest.size
+    );
+    Ok(manifest)
+}
+
+/// 署名検証済みのmanifestだけを受け取り、バイナリを非activeスロットへ書く。
+///
+/// `manifest` は必ず `fetch_manifest` で検証済みのものを渡すこと。
+/// 未検証のmanifestで呼ぶと、攻撃者の用意したimageを書き込みかねない。
+/// HTTP接続は `{}` スコープで閉じ切り、突き合わせは接続を持たない状態で行う。
+/// size/sha256のどちらかが不一致なら `complete` せずに抜ける:
+/// `EspOtaUpdate` のDropが `esp_ota_abort` し、boot partitionは切り替わらない
+/// (`esp_ota_end` を呼んでいないためbootloaderはそのslotを新規imageとして扱わない)。
+fn download_and_flash(
+    manifest: &OtaManifest,
+    config: &AppConfig,
+    pc_ip_address: &str,
+) -> Result<(), OtaError> {
+    let mut ota = EspOta::new().map_err(|e| OtaError::Ota(e.to_string()))?;
+    let mut update = ota
+        .initiate_update()
+        .map_err(|e| OtaError::Ota(e.to_string()))?;
+
+    let mut hashing = StreamingSha256::new();
+    let mut received: u64 = 0;
+    let mut reported: u64 = 0;
+    with_signed_get(
+        config,
+        pc_ip_address,
+        FIRMWARE_PATH,
+        FIRMWARE_TIMEOUT,
+        |response| {
+            if response.status() != 200 {
+                return Err(OtaError::UnexpectedStatus {
+                    endpoint: FIRMWARE_PATH,
+                    status: response.status(),
+                });
+            }
+            // 早期return時は `update` がDropされて `esp_ota_abort` する。
+            let mut chunk = [0u8; OTA_CHUNK_SIZE];
+            loop {
+                let read = response
+                    .read(&mut chunk)
+                    .map_err(|e| OtaError::Transport(e.to_string()))?;
+                if read == 0 {
+                    break;
+                }
+                hashing.update(&chunk[..read]);
+                update
+                    .write(&chunk[..read])
+                    .map_err(|e| OtaError::Ota(e.to_string()))?;
+                received += read as u64;
+                if received - reported >= PROGRESS_INTERVAL_BYTES {
+                    reported = received;
+                    println!("ota: received {received}/{} bytes", manifest.size);
+                }
+            }
+            Ok(())
+        },
+    )?;
+    // 2本目の接続はここで閉じた。以降はflash済みデータの突き合わせだけを行う。
+
+    // size と sha256 の両方を見る。どちらか不一致なら `?` で抜け、
+    // `update` のDrop (= abort) によりboot切替は行われない。
+    verify_ota_image(manifest, received, &hashing.finish_hex())?;
+    println!("ota: image verified ({received} bytes), activating");
+    update
+        .complete()
+        .map_err(|e| OtaError::Ota(e.to_string()))?;
+    Ok(())
+}
+
+/// HMAC署名付きGETを送り、応答の読み取りを `f` に任せる。bodyは空
+/// (`GET /firmware*` は読み取り専用で署名対象bodyは空。bridge側の
+/// `verify_headers` も `b""` で検証する)。
+///
+/// `f` から戻った時点でclient/responseはdropされ、接続は完全に閉じる。
+/// manifest取得とバイナリ取得はこの関数を別々に呼ぶため、同時には1本しか
+/// 開かない (module冒頭の「TLS同時接続の制約」を参照)。
+fn with_signed_get<T>(
+    config: &AppConfig,
+    pc_ip_address: &str,
+    path: &'static str,
+    timeout: Duration,
+    f: impl FnOnce(&mut HttpResponse<&mut EspHttpConnection>) -> Result<T, OtaError>,
+) -> Result<T, OtaError> {
+    let timestamp = crate::bridge_client::unix_now()
+        .map_err(|_| OtaError::ClockNotSynced)?;
+    let request_nonce = crate::bridge_client::nonce();
+    let signature = pc_remote_signing::sign_request(
+        config.bridge_shared_secret.as_bytes(),
+        "GET",
+        path,
+        timestamp as i64,
+        &request_nonce,
+        b"",
+    );
+
+    // URL全体はログへ出さない (IPを含むため)。エラー時はendpointラベルだけ使う。
+    let url = format!("http://{pc_ip_address}:{}{path}", config.bridge_port);
+    let mut client = HttpClient::wrap(
+        EspHttpConnection::new(&HttpConfiguration {
+            timeout: Some(timeout),
+            ..Default::default()
+        })
+        .map_err(|e| OtaError::Transport(e.to_string()))?,
+    );
+
+    let timestamp_text = timestamp.to_string();
+    let headers = [
+        ("X-Timestamp", timestamp_text.as_str()),
+        ("X-Nonce", request_nonce.as_str()),
+        ("X-Signature", signature.as_str()),
+    ];
+    let request = client
+        .request(Method::Get, &url, &headers)
+        .map_err(|e| OtaError::Transport(e.to_string()))?;
+    let mut response = request
+        .submit()
+        .map_err(|e| OtaError::Transport(e.to_string()))?;
+    // `f` の実行中だけ接続が開く。戻ったらclientごとdropして閉じ切る。
+    f(&mut response)
+}

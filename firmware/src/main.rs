@@ -2,6 +2,7 @@ mod app_config;
 mod board;
 mod bridge_client;
 mod net;
+mod ota;
 mod settings;
 mod telegram;
 mod telegram_root_ca;

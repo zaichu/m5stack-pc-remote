@@ -36,7 +36,8 @@ impl PowerActionLabel for PowerAction {
     }
 }
 
-fn unix_now() -> Result<u64, Box<dyn Error>> {
+/// Unix時刻(秒)。NTP未同期ならエラーにする。OTAの署名付きGETでも使う。
+pub(crate) fn unix_now() -> Result<u64, Box<dyn Error>> {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     // NTP同期前の時計で署名しても、bridge側のtimestamp検証で弾かれる。
     // 送信前に止めた方が原因が分かりやすい。
@@ -47,7 +48,8 @@ fn unix_now() -> Result<u64, Box<dyn Error>> {
 }
 
 /// リプレイ防止用nonce。ハードウェア乱数と単調増加時刻を組み合わせる。
-fn nonce() -> String {
+/// OTAの署名付きGETでも使う。
+pub(crate) fn nonce() -> String {
     let random = unsafe { esp_idf_sys::esp_random() };
     let uptime = unsafe { esp_idf_sys::esp_timer_get_time() };
     format!("{random:x}-{uptime:x}")

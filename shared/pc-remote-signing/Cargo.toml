@@ -7,4 +7,8 @@ publish = false
 [dependencies]
 hex = "0.4"
 hmac = "0.13"
+# OTA manifest(JSON)の送受で使う。firmware/m5stack-pc-bridgeは既にserdeを持つが、
+# このcrate単体で `cargo test` できるよう直接依存として宣言する。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.11"
