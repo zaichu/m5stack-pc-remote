@@ -23,6 +23,7 @@ set -euo pipefail
 model=""
 dir=""
 prompt_file=""
+continue_session=""
 stall_minutes="${AGENT_STALL_MINUTES:-6}"
 max_minutes="${AGENT_MAX_MINUTES:-90}"
 log_file="${AGENT_LOG_FILE:-$HOME/.local/share/opencode/log/opencode.log}"
@@ -30,7 +31,10 @@ log_file="${AGENT_LOG_FILE:-$HOME/.local/share/opencode/log/opencode.log}"
 usage() {
   cat >&2 <<'USAGE'
 usage: run-agent.sh --model <model> --dir <worktree> --prompt-file <file>
-                    [--stall-minutes N] [--max-minutes M]
+                    [--continue | --session <id>] [--stall-minutes N] [--max-minutes M]
+
+  --continue       直前のセッションを継続する(対話的に小さく刻むときに使う)
+  --session <id>   指定したセッションを継続する
 
   --stall-minutes  ログが伸びない状態がこの分数続いたら打ち切る (既定 6)
   --max-minutes    進んでいても全体でこの分数を超えたら打ち切る (既定 90)
@@ -48,6 +52,8 @@ while [[ $# -gt 0 ]]; do
     --model) model="$2"; shift 2 ;;
     --dir) dir="$2"; shift 2 ;;
     --prompt-file) prompt_file="$2"; shift 2 ;;
+    --continue) continue_session="--continue"; shift ;;
+    --session) continue_session="--session $2"; shift 2 ;;
     --stall-minutes) stall_minutes="$2"; shift 2 ;;
     --max-minutes) max_minutes="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -86,7 +92,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-opencode run --dir "$dir" --auto -m "$model" "$(cat "$prompt_file")" >"$out_file" 2>&1 &
+# 大きな作業を1回のプロンプトへ詰め込むと、エージェント内部のループが長くなり
+# (実測で step=60 まで到達)、リクエストが肥大して上流のレート制限を踏みやすい。
+# `--continue` でターンを分けると各リクエストが小さくなり、途中経過も見える。
+# 分割の指針は docs/agent-roles.md を参照。
+# shellcheck disable=SC2086 # continue_session は「空」か「2語」のどちらかで、分割させたい
+opencode run --dir "$dir" --auto $continue_session -m "$model" "$(cat "$prompt_file")" >"$out_file" 2>&1 &
 agent_pid=$!
 
 # 打ち切り時は子プロセスを確実に止める。opencodeはこのシェルの子なので
