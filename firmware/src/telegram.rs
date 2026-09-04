@@ -36,6 +36,11 @@ const ALLOWED_WHILE_LOCKED: [&str; 4] = ["/status", "/settings", "/lock", "/unlo
 const PLACEHOLDER_TOKEN: &str = "replace-with-your-telegram-bot-token";
 const PLACEHOLDER_USER_ID: &str = "replace-with-your-telegram-user-id";
 
+/// `/status` で返すfirmwareのバージョン。`firmware/Cargo.toml` の `version` が正本。
+/// OTAで配るイメージの版と同じ値になるため、更新の成否を利用者が確認できる
+/// (`scripts/package-firmware.sh` も同じ `version` から `firmware.version` を作る)。
+const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 const BACKOFF_MIN: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPONSE_BUFFER: usize = 4096;
@@ -736,14 +741,18 @@ impl Client {
     fn status_text(&self) -> String {
         let online =
             net::check_pc_online(&self.settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
+        // firmwareのバージョンを必ず含める。これが無いと、`/update` で更新したあとに
+        // 新版が動いているのかを利用者が確認できない。実際、初回のOTA(Issue #79)では
+        // シリアルで otadata を読むまで成否を判定できなかった。
         format!(
-            "PC: {}\n操作: {}\nM5Stack: Rust firmware",
+            "PC: {}\n操作: {}\nM5Stack: Rust firmware {}",
             net::pc_online_label_ja(online),
             if self.operation_lock.is_locked() {
                 "ロック中"
             } else {
                 "可能"
-            }
+            },
+            FIRMWARE_VERSION
         )
     }
 
