@@ -158,6 +158,19 @@ enum Callback {
     SetLock(bool),
 }
 
+impl Callback {
+    /// ログ用の種別名。nonceや値は含めない。
+    fn log_label(&self) -> &'static str {
+        match self {
+            Callback::Decision { confirm: true, .. } => "confirm",
+            Callback::Decision { confirm: false, .. } => "cancel",
+            Callback::EditSetting(_) => "setedit",
+            Callback::SetLock(true) => "lock:on",
+            Callback::SetLock(false) => "lock:off",
+        }
+    }
+}
+
 /// callback_dataが指す確認の対象。値そのもの(新しいIP等)はcallback_dataに
 /// 入れない(Codexレビュー方針)。nonceだけで、実際の中身は`pending`側が持つ。
 enum CallbackTarget {
@@ -373,14 +386,16 @@ impl Api {
     /// Telegramの確認ボタンを1行で送る。callback_dataはTelegram上限内に収める。
     /// インラインキーボード付きで送る。`rows` は行の配列。
     fn send_message_with_keyboard(&self, chat_id: i64, text: &str, rows: Value) {
-        let _ = self.post_json(
+        if let Err(e) = self.post_json(
             "sendMessage",
             &json!({
                 "chat_id": chat_id,
                 "text": text,
                 "reply_markup": { "inline_keyboard": rows }
             }),
-        );
+        ) {
+            println!("telegram: sendMessage(keyboard) failed: {e}");
+        }
     }
 
     fn send_message_with_confirm_buttons(
@@ -404,7 +419,7 @@ impl Api {
     /// 返信欄を開いた状態でプロンプトを送る。値の入力を1往復で終わらせるため、
     /// コマンドを打ち直させずTelegram側の返信UIへ誘導する。
     fn send_force_reply(&self, chat_id: i64, text: &str, placeholder: &str) {
-        let _ = self.post_json(
+        if let Err(e) = self.post_json(
             "sendMessage",
             &json!({
                 "chat_id": chat_id,
@@ -414,7 +429,9 @@ impl Api {
                     "input_field_placeholder": placeholder,
                 }
             }),
-        );
+        ) {
+            println!("telegram: sendMessage(force_reply) failed: {e}");
+        }
     }
 
     /// callback_queryへ応答し、Telegramクライアント側の読み込み表示を終わらせる。
@@ -423,7 +440,11 @@ impl Api {
         if !text.is_empty() {
             body["text"] = json!(text);
         }
-        let _ = self.post_json("answerCallbackQuery", &body);
+        // 失敗を握り潰すと「ボタンを押しても何も起きない」だけになり、
+        // 原因の切り分けができない。応答本文は出さず、失敗の事実だけ残す。
+        if let Err(e) = self.post_json("answerCallbackQuery", &body) {
+            println!("telegram: answerCallbackQuery failed: {e}");
+        }
     }
 }
 
@@ -773,8 +794,11 @@ impl Client {
         );
         let confirm_data = format!("confirm:config:{nonce}");
         let cancel_data = format!("cancel:config:{nonce}");
+        // ボタンのラベルは動作にする。電源操作は「再起動」「シャットダウン」が
+        // そのまま動作として読めるが、設定変更で項目名(「PC IPアドレス」)を
+        // 出すと「キャンセル」と並んだときに何が起きるか読めない。
         self.api
-            .send_message_with_confirm_buttons(chat_id, &text, label, &confirm_data, &cancel_data);
+            .send_message_with_confirm_buttons(chat_id, &text, "登録", &confirm_data, &cancel_data);
     }
 
     /// 確認nonceを検証し、結果に関わらず消費する(再利用させないため)。
@@ -948,9 +972,12 @@ impl Client {
 
         let data = callback["data"].as_str().unwrap_or_default();
         let Some(parsed) = Self::parse_callback_data(data) else {
+            // nonceを含み得るためdata本体は出さない。種類だけ分かれば切り分けできる。
+            println!("telegram: callback rejected (unparsable)");
             self.api.answer_callback_query(&id, "無効なボタンです");
             return;
         };
+        println!("telegram: callback {}", parsed.log_label());
 
         // ロック中はボタンからの実行も拒否する。ただし解除ボタンだけは通さないと
         // ロックから戻れなくなる(`/unlock` がロック中でも通るのと同じ扱い)。
@@ -1090,6 +1117,21 @@ impl Client {
                 continue;
             }
 
+            // 受信した種類だけ残す。本文やnonceは出さない。
+            // 「ボタンを押しても無反応」のとき、updateが届いていないのか
+            // 処理側で落ちているのかを切り分けるために必要。
+            let is_callback = item.get("callback_query").is_some_and(|v| !v.is_null());
+            println!(
+                "telegram: update {}",
+                if is_callback {
+                    "callback_query"
+                } else if item.get("message").is_some_and(|v| !v.is_null()) {
+                    "message"
+                } else {
+                    "other"
+                }
+            );
+
             if let Some(callback) = item.get("callback_query") {
                 if !callback.is_null() {
                     self.handle_callback_query(callback);
@@ -1105,34 +1147,49 @@ impl Client {
     }
 
     fn poll_once(&mut self) -> Result<(), Box<dyn Error>> {
+        // allowed_updatesはBot API側に前回値が残り続ける。省略すると、過去に
+        // 誰かが別の値で呼んだ設定を引きずってcallback_queryが届かなくなり得るため、
+        // 必要な種類を毎回明示する。値はJSON配列をpercent-encodeした固定文字列。
+        const ALLOWED_UPDATES: &str = "%5B%22message%22%2C%22callback_query%22%5D";
         let url = format!(
-            "{}?timeout={}&offset={}",
+            "{}?timeout={}&offset={}&allowed_updates={ALLOWED_UPDATES}",
             self.api.api_url("getUpdates"),
             self.config.telegram_long_poll_timeout_seconds,
             self.last_update_id
         );
-        let mut client = self.api.http_client()?;
-        let request = client.request(Method::Get, &url, &[])?;
-        let mut response = request.submit()?;
-        let status = response.status();
-        if status != 200 {
-            return Err(format!("getUpdates failed: {status}").into());
-        }
+        // long pollingの接続はここで閉じ切ってから、updateの処理へ移る。
+        //
+        // 処理側(answerCallbackQuery / sendMessage)は新しいHTTPS接続を張る。
+        // long pollingの接続を開いたまま2本目を張ると、ESP32ではmbedTLSの
+        // ヒープが足りず `ESP_ERR_HTTP_CONNECT` で失敗する。実機では
+        // 「ボタンを押してもトーストが出ない(answerCallbackQueryだけ落ちる)」
+        // という形で表面化した。clientとresponseをこのブロックへ閉じ込め、
+        // dropさせてから `process_updates` を呼ぶ。
+        let body = {
+            let mut client = self.api.http_client()?;
+            let request = client.request(Method::Get, &url, &[])?;
+            let mut response = request.submit()?;
+            let status = response.status();
+            if status != 200 {
+                return Err(format!("getUpdates failed: {status}").into());
+            }
 
-        let mut body = Vec::new();
-        let mut chunk = [0u8; 512];
-        loop {
-            let read = response.read(&mut chunk)?;
-            if read == 0 {
-                break;
+            let mut body = Vec::new();
+            let mut chunk = [0u8; 512];
+            loop {
+                let read = response.read(&mut chunk)?;
+                if read == 0 {
+                    break;
+                }
+                if body.len() + read > RESPONSE_MAX_BYTES {
+                    return Err(
+                        format!("getUpdates response exceeds {RESPONSE_MAX_BYTES} bytes").into(),
+                    );
+                }
+                body.extend_from_slice(&chunk[..read]);
             }
-            if body.len() + read > RESPONSE_MAX_BYTES {
-                return Err(
-                    format!("getUpdates response exceeds {RESPONSE_MAX_BYTES} bytes").into(),
-                );
-            }
-            body.extend_from_slice(&chunk[..read]);
-        }
+            body
+        };
 
         let parsed: Value = serde_json::from_slice(&body)?;
         let results = parsed["result"].as_array().cloned().unwrap_or_default();
