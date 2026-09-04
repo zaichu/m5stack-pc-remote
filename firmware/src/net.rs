@@ -145,6 +145,14 @@ pub fn send_wake_on_lan(mac_text: &str, port: u16) -> Result<(), Box<dyn Error>>
 /// STATUS相当の疎通確認。接続成功または即時refusedならPCは応答あり、
 /// timeoutなら電源OFFまたは到達不能として扱う。
 pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
+    // host名が A/AAAA 両方持つ場合や DNS 失敗時に false 誤判定し、毎回 DNS ブロッキングするのを避けるため、
+    // IP 直指定を優先し、パースできる場合は DNS を引かない。
+    if let Ok(addr) = addr_text.parse::<std::net::SocketAddr>() {
+        return matches!(
+            TcpStream::connect_timeout(&addr, timeout),
+            Ok(_) | Err(e) if e.kind() == io::ErrorKind::ConnectionRefused
+        );
+    }
     let Ok(mut addrs) = addr_text.to_socket_addrs() else {
         return false;
     };

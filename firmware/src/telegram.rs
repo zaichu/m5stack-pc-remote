@@ -906,7 +906,10 @@ impl Client {
         }
 
         let parsed: Value = serde_json::from_slice(&body)?;
-        let results = parsed["result"].as_array().cloned().unwrap_or_default();
+        let results = parsed["result"]
+            .as_array()
+            .cloned()
+            .ok_or_else(|| format!("getUpdates result is not an array: {}", parsed["result"]))?;
         let dispatch = self.initial_sync_done;
         self.process_updates(&results, dispatch);
         self.initial_sync_done = true;

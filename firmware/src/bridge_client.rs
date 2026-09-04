@@ -50,7 +50,7 @@ fn unix_now() -> Result<u64, Box<dyn Error>> {
 fn nonce() -> String {
     let random = unsafe { esp_idf_sys::esp_random() };
     let uptime = unsafe { esp_idf_sys::esp_timer_get_time() };
-    format!("{random:x}-{uptime:x}")
+    format!("{random:08x}-{uptime:08x}")
 }
 
 /// 署名済みの電源操作を送り、HTTPステータスコードを返す。2xxだけを受理扱いにする。
