@@ -19,6 +19,13 @@ else
   base="main"
 fi
 
+# Issue参照として認めるキーワード。GitHubがIssueをcloseするキーワード
+# (close/closes/closed/fix/fixes/fixed/resolve/resolves/resolved)に加えて、
+# closeを伴わない参照用の Refs を認める。
+# 以前は Fixes と Refs しか見ておらず、GitHub標準の `Closes #N` を書くと
+# 落ちていた(実際に踏んだ)。
+issue_ref_keywords='([Cc]lose[sd]?|[Ff]ix(e[sd])?|[Rr]esolve[sd]?|[Rr]efs?)'
+
 branch="$(git branch --show-current 2>/dev/null || true)"
 if [[ "$branch" == "main" ]]; then
   exit 0
@@ -50,18 +57,18 @@ if [[ -z "$issue" ]]; then
   # 既にPRが開いているブランチは後からリネームできない(GitHubのbranch rename
   # APIはhead branchを付け替えず、PRをcloseしてしまう。実際にPR #82で踏んだ)。
   # 命名だけを理由に、正しく紐づいているPRの更新を止めない。
-  if git log --format=%B "$base..HEAD" 2>/dev/null | grep -qE "(Fixes|Refs) #[0-9]+"; then
+  if git log --format=%B "$base..HEAD" 2>/dev/null | grep -qE "$issue_ref_keywords #[0-9]+"; then
     exit 0
   fi
   if command -v gh >/dev/null 2>&1; then
     if body="$(gh pr view --json body --jq .body 2>/dev/null)"; then
-      if echo "$body" | grep -qE "(Fixes|Refs) #[0-9]+"; then
+      if echo "$body" | grep -qE "$issue_ref_keywords #[0-9]+"; then
         exit 0
       fi
     fi
   fi
   echo "ERROR: ブランチ名 '$branch' に issue 番号が無く、PR本文/コミットにも Issue参照がありません。" >&2
-  echo "  ブランチ名を '{type}/{issue-number}-{slug}' にするか、PR本文へ 'Fixes #N' / 'Refs #N' を書いてください。" >&2
+  echo "  ブランチ名を '{type}/{issue-number}-{slug}' にするか、PR本文へ 'Closes #N' / 'Refs #N' を書いてください。" >&2
   echo "  対応するIssueが無い場合は、ブランチ名を 'no-issue/<slug>' にするか、PRに 'no-issue' labelを付けてください。" >&2
   exit 1
 fi
@@ -74,21 +81,21 @@ if ! git log --oneline "$base..HEAD" 2>/dev/null | grep -q .; then
 fi
 
 # 1) ローカルのコミットメッセージを優先して見る
-if git log --format=%B "$base..HEAD" 2>/dev/null | grep -qE "(Fixes|Refs) #$issue"; then
+if git log --format=%B "$base..HEAD" 2>/dev/null | grep -qE "$issue_ref_keywords #$issue"; then
   exit 0
 fi
 
 # 2) PRが既に存在すれば本文を見る（gh が無い/cached 失敗ならスキップ）
 if command -v gh >/dev/null 2>&1; then
   if body="$(gh pr view --json body --jq .body 2>/dev/null)"; then
-    if echo "$body" | grep -qE "(Fixes|Refs) #$issue"; then
+    if echo "$body" | grep -qE "$issue_ref_keywords #$issue"; then
       exit 0
     fi
   fi
 fi
 
-echo "ERROR: PR本文またはコミットに 'Fixes #$issue' / 'Refs #$issue' が見つかりません。" >&2
+echo "ERROR: PR本文またはコミットに Issue #$issue への参照が見つかりません。" >&2
 echo "  ブランチ: $branch" >&2
-echo "  期待: Fixes #$issue または Refs #$issue を PR本文末尾に記載してください。" >&2
+echo "  期待: Closes/Fixes/Resolves/Refs のいずれか + '#$issue' を PR本文末尾に記載してください。" >&2
 echo "  参考: .claude/skills/pr-workflow/SKILL.md の Issue Close Keywords を参照" >&2
 exit 1
