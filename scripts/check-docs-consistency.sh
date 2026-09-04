@@ -33,6 +33,9 @@ sys_json="${repo_root}/docs/architecture/system.json"
 sys_html="${repo_root}/docs/architecture/index.html"
 
 # 1. NVS size/offset (Issue #131 項目1)。0x6000 を書くと otadata へはみ出す。
+# バックティックはREADMEのMarkdown記法そのものを検索している。コマンド置換では
+# ないためシングルクォートが正しい。
+# shellcheck disable=SC2016
 if grep -q 'size `0x4000`' "${readme}"; then
   pass "README NVS size is 0x4000"
 else
@@ -63,6 +66,9 @@ else
   fail "provision script defaults must be offset 0x9000 / size 0x4000"
 fi
 
+# バックティックはREADMEのMarkdown記法そのものを検索している。コマンド置換では
+# ないためシングルクォートが正しい。
+# shellcheck disable=SC2016
 if grep -q 'offset `0x9000`' "${readme}"; then
   pass "README NVS offset is 0x9000"
 else

@@ -1,6 +1,6 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-windows-build agent-check \
 	firmware-build firmware-nvs-image firmware-package \
-	config-key-check agent-roles-check pr-issue-link-check secret-path-check secret-scan shell-syntax-check diff-check check git-pre-commit git-pre-push
+	config-key-check agent-roles-check docs-consistency-check pr-issue-link-check secret-path-check secret-scan shell-syntax-check diff-check check git-pre-commit git-pre-push
 
 install: install-hooks
 
@@ -59,6 +59,12 @@ config-key-check:
 agent-roles-check:
 	bash ./scripts/check-agent-roles.sh
 
+# ドキュメントの記述が実装と食い違っていないか検査する。
+# NVS sizeのように、誤ったまま手順を実行すると実機を壊す記述があるため、
+# 人手のレビューではなくCIで止める。
+docs-consistency-check:
+	bash ./scripts/check-docs-consistency.sh
+
 pr-issue-link-check:
 	bash ./scripts/check-pr-issue-link.sh
 
@@ -85,7 +91,7 @@ shell-syntax-check:
 		echo "WARNING: shellcheck not found; skipping lint (bash -n only)."; \
 	fi
 
-check: diff-check secret-path-check secret-scan config-key-check agent-roles-check shell-syntax-check agent-check firmware-build
+check: diff-check secret-path-check secret-scan config-key-check agent-roles-check docs-consistency-check shell-syntax-check agent-check firmware-build
 
 git-pre-commit: fmt-check secret-path-check diff-check
 
