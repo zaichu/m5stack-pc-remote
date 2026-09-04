@@ -51,8 +51,19 @@ fn default_dry_run() -> bool {
 
 impl AgentConfig {
     pub fn from_toml_str(input: &str) -> anyhow::Result<Self> {
-        let config: Self =
-            toml::from_str(input).map_err(|_| anyhow::anyhow!("config.tomlを解析できません"))?;
+        // toml::de::Error の Display は問題箇所の行を引用し、serdeの型不一致
+        // メッセージは値そのものを含む。どちらもconfig.tomlのsecretがログへ出る
+        // ため、エラーは伝播させず行番号だけを取り出す。値は一切含めない。
+        let config: Self = toml::from_str(input).map_err(|err| match err.span() {
+            Some(span) => {
+                let line = input
+                    .get(..span.start)
+                    .map(|head| head.matches('\n').count() + 1)
+                    .unwrap_or(1);
+                anyhow::anyhow!("config.tomlを解析できません({line}行目付近)")
+            }
+            None => anyhow::anyhow!("config.tomlを解析できません"),
+        })?;
         config.validate()?;
         Ok(config)
     }
