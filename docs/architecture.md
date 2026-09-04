@@ -36,8 +36,8 @@ m5stack-pc-bridgeはLAN内限定です。外部公開が必要な場合でも、
 
 ## 用語
 
-- **PC STATUS (TCP probe)**: M5Stack が `pc_status_addr` へ TCP connect probe して判定する PC の電源状態。`firmware/src/net.rs:148` が正本。
-- **Bridge health `/status`**: `m5stack-pc-bridge` プロセス自体のヘルスチェック（未認証、電源状態とは無関係）。`m5stack-pc-bridge/src/server.rs:83` が正本。
+- **PC STATUS (TCP probe)**: M5Stack が `pc_status_addr` へ TCP connect probe して判定する PC の電源状態。`firmware/src/net.rs` の `check_pc_online` / `probe` が正本（行番号は変わるためシンボルで参照）。
+- **Bridge health `/status`**: `m5stack-pc-bridge` プロセス自体のヘルスチェック（未認証、電源状態とは無関係）。`m5stack-pc-bridge/src/server.rs` の `/status` route 定義が正本（行番号は変わるためシンボルで参照）。
 
 ## 境界
 
