@@ -65,6 +65,14 @@ diff-check:
 # 落ちることがあった。同じ内容をここへ含めて一致させる。
 shell-syntax-check:
 	bash -n scripts/*.sh
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck scripts/*.sh; \
+	elif [ -n "$$CI" ]; then \
+		echo "ERROR: CIでは shellcheck が必須です。" >&2; \
+		exit 1; \
+	else \
+		echo "WARNING: shellcheck not found; skipping lint (bash -n only)."; \
+	fi
 
 check: diff-check secret-path-check secret-scan config-key-check shell-syntax-check agent-check firmware-build
 

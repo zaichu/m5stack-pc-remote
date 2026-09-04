@@ -23,8 +23,9 @@ Claude Code、Codex CLI、OpenCode等、複数のAIエージェントが同時�
 
 ```bash
 make check
-bash -n scripts/*.sh
 ```
+
+`bash -n scripts/*.sh` は `make check` に含まれます。gitleaks / shellcheck / mingw-w64 がない環境では該当検査を警告してスキップしますが、CI（`CI=1`）ではエラーになります。ローカルで通ったものが CI で初めて落ちるのを避けるためです。
 
 esp Rust toolchain やローカル `firmware/config.toml` がない環境では `make firmware-build` は警告だけ出してスキップします。実機作業前には esp toolchain を入れた環境で `cargo +esp build --release --target xtensa-esp32-espidf` を必ず実行してください。
 

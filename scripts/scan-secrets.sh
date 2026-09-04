@@ -2,8 +2,17 @@
 set -euo pipefail
 
 if command -v gitleaks >/dev/null 2>&1; then
+  # 設定は .gitleaks.toml を自動で読む。--redact で検出値そのものは出力しない。
   gitleaks detect --no-banner --redact --source .
   exit 0
+fi
+
+# fallback は既知パターンしか見ないため、gitleaks の代わりにはならない。
+# CIでは必ず gitleaks を通す。skipを成功扱いにすると、ローカルで通ったものが
+# 誰にも検査されないまま main へ入る。
+if [[ -n "${CI:-}" ]]; then
+  echo "ERROR: CIでは gitleaks が必須です。" >&2
+  exit 1
 fi
 
 echo "WARNING: gitleaks が見つからないため、fallback pattern scanを使います。" >&2
