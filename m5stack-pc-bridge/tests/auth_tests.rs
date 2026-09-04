@@ -181,3 +181,67 @@ fn rejects_tampered_body() {
 
     assert_eq!(err, AuthError::BadSignature);
 }
+
+#[test]
+fn rejects_signature_made_for_another_path() {
+    // `/reboot` 用の署名を `/shutdown` の検証へ渡すと BadSignature になる。
+    let cfg = config();
+    let store = NonceStore::default();
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    let body = br#"{"confirm":true}"#;
+    let signature = sign_request(
+        &cfg.secret,
+        "POST",
+        "/reboot",
+        now.unix_timestamp(),
+        "nonce-path-reuse",
+        body,
+    );
+
+    let err = verify_request(
+        &cfg,
+        &store,
+        "POST",
+        "/shutdown",
+        now.unix_timestamp(),
+        "nonce-path-reuse",
+        body,
+        &signature,
+        now,
+    )
+    .unwrap_err();
+
+    assert_eq!(err, AuthError::BadSignature);
+}
+
+#[test]
+fn rejects_signature_made_for_another_method() {
+    // POST 用の署名を `GET /firmware` の検証へ渡すと BadSignature になる。
+    let cfg = config();
+    let store = NonceStore::default();
+    let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    let body = b"";
+    let signature = sign_request(
+        &cfg.secret,
+        "POST",
+        "/firmware",
+        now.unix_timestamp(),
+        "nonce-method-reuse",
+        body,
+    );
+
+    let err = verify_request(
+        &cfg,
+        &store,
+        "GET",
+        "/firmware",
+        now.unix_timestamp(),
+        "nonce-method-reuse",
+        body,
+        &signature,
+        now,
+    )
+    .unwrap_err();
+
+    assert_eq!(err, AuthError::BadSignature);
+}

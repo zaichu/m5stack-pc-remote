@@ -41,7 +41,12 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 fn run_foreground() -> anyhow::Result<()> {
-    let config = crate::load_default_config()?;
+    // 動作確認用の foreground 実行では `--config` と `M5STACK_PC_BRIDGE_CONFIG` を
+    // 解釈する。`std::env::args()` はこのプロセスの起動引数であり、SCM が
+    // `service_main` へ渡す引数とは別物なので混同しないこと。
+    let cli_config = crate::parse_config_arg(std::env::args_os().skip(1));
+    let env_config = crate::env_config_path(std::env::var_os(crate::CONFIG_ENV_VAR));
+    let config = crate::load_foreground_config(cli_config, env_config)?;
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(server::serve(config))
 }
@@ -51,6 +56,9 @@ define_windows_service!(ffi_service_main, service_main);
 fn service_main(_arguments: Vec<OsString>) {
     // service_mainはWindows側の規約でResultを返せない。失敗はプロセスの異常終了として
     // SCMへ伝わり、install.ps1が設定するrecovery(自動再起動)に任せる。
+    // SCM が渡す `_arguments` は service の登録引数であり、foreground 実行時の
+    // `--config` とは別物なので意図的に無視する。service 起動時の設定パスは
+    // 変えず、常に実行ファイル横の config.toml を読む。
     if let Err(e) = run_service() {
         // Windows Serviceにはコンソールが無く、eprintln!はどこにも表示されない。
         // 実行ファイルと同じディレクトリのログファイルへ書き、起動失敗の原因を
@@ -121,6 +129,8 @@ fn run_and_report_status(
         ServiceExitCode::Win32(0),
     )?;
 
+    // service 起動時の設定は実行ファイル横に固定する。foreground 実行用の
+    // `--config` / 環境変数の解決はここでは行わない(挙動を変えないため)。
     let config = crate::load_default_config()?;
 
     let runtime = tokio::runtime::Runtime::new()?;
