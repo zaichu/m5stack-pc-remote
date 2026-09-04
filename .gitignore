@@ -21,6 +21,9 @@ firmware/sdkconfig
 firmware/managed_components/
 firmware/dependencies.lock
 
+# scripts/package-firmware.sh が作るOTA配信用イメージ。build成果物なのでcommitしない。
+firmware/dist/
+
 # Local env and secret files.
 .env
 .env.*
