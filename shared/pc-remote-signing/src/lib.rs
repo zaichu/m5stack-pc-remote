@@ -259,6 +259,38 @@ pub fn verify_ota_image(
     Ok(())
 }
 
+/// OTAの進捗率(0-100)。表示専用なので、異常な入力でもpanicせず丸める。
+///
+/// `total` が0のとき0除算になるため、進捗不明として0を返す。manifestのsizeは
+/// 検証前の値を表示に使うことがあり、0や実際より小さい値が来ても落とさない
+/// (不一致は `verify_ota_image` が書き込み後に弾く。表示はそれより手前で動く)。
+pub fn ota_progress_percent(received: u64, total: u64) -> u8 {
+    if total == 0 {
+        return 0;
+    }
+    // u64同士の乗算はオーバーフローし得る。`saturating_mul` だと巨大な値で
+    // 飽和して比率が壊れる(received == total でも100にならない)ため、
+    // u128へ広げてから計算する。
+    let received = received.min(total);
+    ((received as u128 * 100) / total as u128) as u8
+}
+
+/// Telegramへ出す進捗テキスト。1行のバーとパーセント、受信量を返す。
+///
+/// `editMessageText` で同じメッセージを書き換え続ける前提。Telegramは同一内容への
+/// 編集をエラー(400)にするため、呼び出し側は内容が変わるときだけ送ること。
+pub fn ota_progress_text(version: &str, received: u64, total: u64) -> String {
+    const CELLS: usize = 10;
+    let percent = ota_progress_percent(received, total);
+    let filled = (percent as usize * CELLS).div_ceil(100).min(CELLS);
+    let bar: String = "█".repeat(filled) + &"░".repeat(CELLS - filled);
+    format!(
+        "firmware更新中 ({version})\n[{bar}] {percent}%  {}KB / {}KB",
+        received / 1024,
+        total / 1024
+    )
+}
+
 /// ダウンロードしながらSHA-256を計算するストリーミングハーシャー。
 ///
 /// 背景: firmware(2MB級)を `Vec` へ全部読んでから `body_sha256_hex` すると
@@ -916,5 +948,50 @@ mod ota_tests {
         let text = ota_confirm_text(VERSION, SIZE);
         assert!(text.contains(VERSION), "{text}");
         assert!(text.contains(&SIZE.to_string()), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod ota_progress_tests {
+    use super::{ota_progress_percent, ota_progress_text};
+
+    #[test]
+    fn percent_handles_boundaries_without_panicking() {
+        // total=0 は0除算になる。進捗不明として0を返す。
+        assert_eq!(ota_progress_percent(0, 0), 0);
+        assert_eq!(ota_progress_percent(100, 0), 0);
+        assert_eq!(ota_progress_percent(0, 1000), 0);
+        assert_eq!(ota_progress_percent(500, 1000), 50);
+        assert_eq!(ota_progress_percent(1000, 1000), 100);
+        // 受信が想定を超えても100で頭打ちにする(表示が101%にならない)。
+        assert_eq!(ota_progress_percent(2000, 1000), 100);
+        // u64の上限付近でも saturating_mul でオーバーフローしない。
+        assert_eq!(ota_progress_percent(u64::MAX, u64::MAX), 100);
+    }
+
+    #[test]
+    fn text_shows_bar_percent_and_size() {
+        let text = ota_progress_text("0.3.0", 512 * 1024, 1024 * 1024);
+        assert!(text.contains("0.3.0"), "{text}");
+        assert!(text.contains("50%"), "{text}");
+        assert!(text.contains("512KB / 1024KB"), "{text}");
+        assert!(text.contains('█') && text.contains('░'), "{text}");
+    }
+
+    #[test]
+    fn bar_is_empty_at_zero_and_full_at_hundred() {
+        let zero = ota_progress_text("v", 0, 1000);
+        assert!(zero.contains("[░░░░░░░░░░]"), "{zero}");
+        let full = ota_progress_text("v", 1000, 1000);
+        assert!(full.contains("[██████████]"), "{full}");
+    }
+
+    #[test]
+    fn text_changes_as_download_advances() {
+        // 同一内容への editMessageText はTelegramが400にする。刻みごとに
+        // 文字列が変わることを固定しておく。
+        let a = ota_progress_text("v", 100 * 1024, 1000 * 1024);
+        let b = ota_progress_text("v", 200 * 1024, 1000 * 1024);
+        assert_ne!(a, b);
     }
 }

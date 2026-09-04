@@ -458,6 +458,66 @@ impl Api {
         Ok(())
     }
 
+    /// `sendMessage` を送り、作られたメッセージの `message_id` を返す。
+    ///
+    /// 進捗表示のように、後から `editMessageText` で同じメッセージを書き換える
+    /// 用途で使う。応答は数百Bなので上限を小さく取り、超えたら読み捨てる
+    /// (ヒープを守るため。本文が要るのは `message_id` だけ)。
+    fn send_message_returning_id(&self, chat_id: i64, text: &str) -> Option<i64> {
+        use esp_idf_svc::io::Write;
+
+        let _https_guard = lock_https(&self.https);
+
+        let body = json!({ "chat_id": chat_id, "text": text });
+        let payload = serde_json::to_string(&body).ok()?;
+        let url = self.api_url("sendMessage");
+        let mut client = self.http_client().ok()?;
+        let content_length = payload.len().to_string();
+        let headers = [
+            ("Content-Type", "application/json"),
+            ("Content-Length", content_length.as_str()),
+        ];
+        let mut request = client.request(Method::Post, &url, &headers).ok()?;
+        request.write_all(payload.as_bytes()).ok()?;
+        request.flush().ok()?;
+        let mut response = request.submit().ok()?;
+        if !(200..300).contains(&response.status()) {
+            println!("telegram: sendMessage failed: {}", response.status());
+            return None;
+        }
+
+        const MAX_BYTES: usize = 2048;
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 256];
+        loop {
+            let read = response.read(&mut chunk).ok()?;
+            if read == 0 || buf.len() + read > MAX_BYTES {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..read]);
+        }
+        let parsed: Value = serde_json::from_slice(&buf).ok()?;
+        parsed["result"]["message_id"].as_i64()
+    }
+
+    /// 既存メッセージの本文を差し替える。進捗表示の更新に使う。
+    ///
+    /// 失敗しても呼び出し側は処理を続けること。進捗表示は補助であり、
+    /// これを理由にOTAを中止しない。Telegramは同一内容への編集を400にするため、
+    /// 呼び出し側は内容が変わったときだけ呼ぶ。
+    fn edit_message_text(&self, chat_id: i64, message_id: i64, text: &str) -> bool {
+        match self.post_json(
+            "editMessageText",
+            &json!({ "chat_id": chat_id, "message_id": message_id, "text": text }),
+        ) {
+            Ok(()) => true,
+            Err(e) => {
+                println!("telegram: editMessageText failed: {e}");
+                false
+            }
+        }
+    }
+
     /// 送信できたらtrue。定期レポートのように「落としたくない」通知が
     /// 再送を判断できるようにする。
     ///
@@ -1043,23 +1103,56 @@ impl Client {
     /// `ota.rs` の冒頭コメントを参照。
     /// 成功時はrebootして戻らない。失敗時だけ結果文を送る。
     fn execute_ota_update(&self, chat_id: i64) {
-        if chat_id != 0 {
-            self.api.send_message(
+        // 進捗表示用のメッセージを1つ立て、以降は editMessageText で書き換える。
+        // 新しいメッセージを毎回送るとチャットが進捗で埋まるため。
+        //
+        // message_id が取れなくても更新は続ける(進捗が出ないだけ)。
+        let progress_message_id = if chat_id != 0 {
+            self.api.send_message_returning_id(
                 chat_id,
                 "firmware更新を開始します。完了すると自動で再起動します。",
-            );
-        }
-        let result = self.run_ota_update();
+            )
+        } else {
+            None
+        };
+
+        let result = self.run_ota_update(chat_id, progress_message_id);
         if chat_id != 0 {
             self.api.send_message(chat_id, &result);
         }
     }
 
     /// 電源操作ロックを取り、OTAを実行する。成功時は `restart()` で戻らない。
-    fn run_ota_update(&self) -> String {
+    fn run_ota_update(&self, chat_id: i64, progress_message_id: Option<i64>) -> String {
         let _guard = lock_power(&self.power_lock);
         let pc_ip_address = self.settings.pc_ip_address();
-        match crate::ota::run_ota_update(self.config.as_ref(), &pc_ip_address) {
+
+        // 直前に送った本文。Telegramは同一内容への editMessageText を400にするため、
+        // 変化したときだけ送る。
+        let mut last_text = String::new();
+        let mut on_progress = |manifest: &pc_remote_signing::OtaManifest, received: u64| {
+            let Some(message_id) = progress_message_id else {
+                return;
+            };
+            let text = pc_remote_signing::ota_progress_text(
+                &manifest.version,
+                received,
+                manifest.size,
+            );
+            if text == last_text {
+                return;
+            }
+            // 失敗しても握り潰す。進捗表示のためにOTAを止めない。
+            // `edit_message_text` の中でログは出る。
+            self.api.edit_message_text(chat_id, message_id, &text);
+            last_text = text;
+        };
+
+        match crate::ota::run_ota_update(
+            self.config.as_ref(),
+            &pc_ip_address,
+            &mut on_progress,
+        ) {
             // 成功時は `restart()` で戻らないため、ここへは来ない。防御的に残す。
             Ok(()) => "更新が完了しました。再起動します。".to_string(),
             Err(e) => {

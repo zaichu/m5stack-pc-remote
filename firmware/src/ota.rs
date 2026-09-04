@@ -191,9 +191,13 @@ impl From<OtaImageError> for OtaError {
 ///
 /// `pc_ip_address` はTelegram経由で実行時に変更できるため、`AppConfig` ではなく
 /// 呼び出し側から都度渡してもらう (`bridge_client::send_command` と同じ扱い)。
-pub fn run_ota_update(config: &AppConfig, pc_ip_address: &str) -> Result<(), OtaError> {
+pub fn run_ota_update(
+    config: &AppConfig,
+    pc_ip_address: &str,
+    on_progress: &mut dyn FnMut(&OtaManifest, u64),
+) -> Result<(), OtaError> {
     let manifest = fetch_verified_manifest(config, pc_ip_address)?;
-    download_and_flash(&manifest, config, pc_ip_address)?;
+    download_and_flash(&manifest, config, pc_ip_address, on_progress)?;
     println!("ota: update complete, rebooting");
     esp_idf_svc::hal::reset::restart()
 }
@@ -292,6 +296,7 @@ fn download_and_flash(
     manifest: &OtaManifest,
     config: &AppConfig,
     pc_ip_address: &str,
+    on_progress: &mut dyn FnMut(&OtaManifest, u64),
 ) -> Result<(), OtaError> {
     let mut ota = EspOta::new().map_err(|e| OtaError::Ota(e.to_string()))?;
     let mut update = ota
@@ -344,6 +349,11 @@ fn download_and_flash(
                 if received - reported >= PROGRESS_INTERVAL_BYTES {
                     reported = received;
                     println!("ota: received {received}/{} bytes", manifest.size);
+                    // 進捗の通知は補助であり、失敗してもOTAを中止しない。
+                    // コールバック側でエラーを握り潰す契約にしてある(戻り値を
+                    // 持たせない)。ここで `?` を使うと、Telegramが一時的に
+                    // 応答しないだけで更新全体が巻き戻ることになる。
+                    on_progress(manifest, received);
                 }
             }
             Ok(())
