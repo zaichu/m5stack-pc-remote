@@ -224,6 +224,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     ui::draw_main(&mut display, &status)?;
 
+    // 起動自己診断の材料。display初期化と描画がここまで `?` で通ったことが
+    // 「画面が動いた」の証拠になる。失敗していたらmain自体がErrで終わり、
+    // 下のvalidマークへは届かない(壊れたfirmwareはvalidにならない)。
+    let display_ok = true;
+    // OTA後の新slotをvalidとマークしたか。Wi-Fi接続中にSTATUS周期(10秒)で
+    // 再試行する。一時的な接続失敗だけで正常firmwareを戻さないため。
+    // `mark_app_valid_after_self_test` は未pendingの通常起動ではno-opなので、
+    // 毎起動呼んでも無害(詳細は `ota.rs` のコメントを参照)。
+    let mut ota_validated = false;
+    // 自己診断が通らなかったことを一度だけログへ出すためのフラグ。
+    let mut self_test_reported = false;
+
     let mut screen = Screen::Main;
     let mut status_at = Instant::now();
     // バッテリー読みはPC状態確認とは別周期で回す(Wi-Fi断でも止めないため)。
@@ -359,6 +371,39 @@ fn main() -> Result<(), Box<dyn Error>> {
                 && (status.pc_online != previous_online || status.battery != previous_battery)
             {
                 ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+            }
+
+            // 起動自己診断: 通ったときだけOTA後の新slotをvalidとマークする。
+            // 通らなければ何もしない(次回起動で旧slotへ戻る)。判定式の根拠は
+            // `pc_remote_signing::boot_self_test_passed` のコメントを参照。
+            // このブロックはWi-Fi接続中にしか走らないため、一時的な接続失敗は
+            // 次の周期で再試行される。失敗してもpanicしない(戻る方向が安全側)。
+            if !ota_validated && display_ok {
+                let checks = pc_remote_signing::BootChecks {
+                    display_ok,
+                    wifi_connected: status.wifi_connected,
+                };
+                match crate::ota::mark_app_valid_after_self_test(&checks) {
+                    Ok(true) => {
+                        ota_validated = true;
+                        println!("ota: boot self-test passed, marked app valid");
+                    }
+                    Ok(false) => {
+                        // 通らなかったことを一度だけ出す。これが無いと、
+                        // 「次回起動で旧slotへ戻る」状態がログから読み取れず、
+                        // OTA後の実機確認で正常との区別がつかない。10秒周期で
+                        // 出すと通常運用のログを埋めるため初回だけにする。
+                        if !self_test_reported {
+                            self_test_reported = true;
+                            println!(
+                                "ota: boot self-test not passed yet (wifi_connected={}); \
+                                 pending slot stays unvalidated and will roll back on reboot",
+                                status.wifi_connected
+                            );
+                        }
+                    }
+                    Err(e) => println!("ota: mark app valid failed (will retry): {e}"),
+                }
             }
         }
 

@@ -44,11 +44,13 @@ M5Stackが `getUpdates` を定期実行またはlong pollingし、許可ユー�
 - `/wake` — Wake-on-LANを送信
 - `/reboot` — 確認後に再起動
 - `/shutdown` — 確認後にシャットダウン
+- `/update` — 確認後にfirmwareを更新(OTA)
 - `/lock` — 電源操作を一時的に禁止
 - `/unlock` — `/lock` を解除
 - `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` — 確認の手入力フォールバック（ボタンでも可）
+- `/confirm_update <nonce>` — `/update` の確認の手入力フォールバック（ボタンでも可）
 
-`/reboot` と `/shutdown` は即実行しません。M5Stackは日本語の確認メッセージを返し、短時間だけ有効な確認nonceを生成します。メッセージには「再起動」/「シャットダウン」ボタンと「キャンセル」ボタンのインラインキーボードが付き、タップ1回で確定/キャンセルできます。
+`/reboot` と `/shutdown` と `/update` は即実行しません。M5Stackは日本語の確認メッセージを返し、短時間だけ有効な確認nonceを生成します。メッセージには「再起動」/「シャットダウン」ボタンと「キャンセル」ボタンのインラインキーボードが付き、タップ1回で確定/キャンセルできます。
 
 例:
 
@@ -112,6 +114,16 @@ M5Stack IP: 192.168.1.50
 4. M5Stackがm5stack-pc-bridgeへ既存のHMAC署名付きPOSTを送る。
 
 キャンセルボタンをタップした場合はpending確認だけを消費し、m5stack-pc-bridgeへは何も送りません。ボタン経由(`callback_query`)でも `from.id` を `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、Telegram仕様に従って `answerCallbackQuery` を必ず呼びます。m5stack-pc-bridge側の `confirm: true` 必須条件は維持します。
+
+## UPDATE (OTA)
+
+`/update` は以下の三段階です。
+
+1. M5Stackがm5stack-pc-bridgeの署名付きmanifestを取得・検証し、versionとsizeをTelegramへ提示して確認を求める(検証失敗時は更新へ進まない)。
+2. 許可ユーザーが確定ボタンをタップするか、`/confirm_update <nonce>` を送る。
+3. M5Stackがlong pollingのHTTPS接続を閉じてからOTA(非activeスロットへの書込とboot切替)を実行し、完了後に再起動する。
+
+`/update` は `/lock` 中は拒否されます。新しいfirmwareはpending状態で起動し、起動自己診断(画面初期化とWi-Fi接続の確認)を通過したときだけ自分をvalidとマークします。診断を通らないまま再起動すると旧slotへ自動で戻ります。
 
 ## poll間隔
 
