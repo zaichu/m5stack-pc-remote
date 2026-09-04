@@ -806,6 +806,33 @@ mod ota_tests {
         ));
     }
 
+    // Issue #136: `InvalidJson` の表示に manifest 本文の断片を含めない。
+    // `serde_json::Error` の表示は入力の抜粋を含み得るため、
+    // `short_json_error` で行・列だけに落としている。
+    // エラーへ本文抜粋を載せる変異を入れても既存テストは緑のままだったため、
+    // `Display` と `Debug` の両方で本文マーカーが出ないことを固定する。
+    // `app_config_tests.rs` の `parse_error_reports_line_number_without_leaking_values`
+    // と同種の守り (あのファイル自体は触らない)。
+    #[test]
+    fn invalid_json_error_does_not_leak_manifest_body() {
+        let marker = "leak-check-marker-version-xyz";
+        // 型違い:本文にマーカーを含むが、エラーは行・列だけになること。
+        let body = format!(r#"{{"version": "{marker}", "size": "not-a-number"}}"#);
+        let err = parse_manifest_json(body.as_bytes()).unwrap_err();
+        let display = format!("{err}");
+        let debug = format!("{err:?}");
+        assert!(!display.contains(marker), "display={display}");
+        assert!(!debug.contains(marker), "debug={debug}");
+
+        // JSONですらない本文でも同様。
+        let garbage = format!("{{not json {marker}");
+        let err = parse_manifest_json(garbage.as_bytes()).unwrap_err();
+        let display = format!("{err}");
+        let debug = format!("{err:?}");
+        assert!(!display.contains(marker), "display={display}");
+        assert!(!debug.contains(marker), "debug={debug}");
+    }
+
     #[test]
     fn streaming_hash_matches_oneshot_hash() {
         let mut streaming = StreamingSha256::new();
