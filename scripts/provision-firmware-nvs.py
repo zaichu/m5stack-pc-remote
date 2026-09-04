@@ -33,7 +33,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE_DIR = REPO_ROOT / "firmware"
 DEFAULT_CONFIG = FIRMWARE_DIR / "config.toml"
 DEFAULT_OUTDIR = FIRMWARE_DIR / ".nvs-provisioning"
-DEFAULT_NVS_SIZE = 0x6000
+# firmware/partitions.csv のnvs partitionと一致させる(Issue #41/#79、OTA対応の
+# カスタムパーティションテーブル)。offsetは変わらないが、sizeはESP-IDF標準の
+# OTA構成に合わせて0x6000から0x4000へ縮小した。
+DEFAULT_NVS_SIZE = 0x4000
 DEFAULT_NVS_OFFSET = 0x9000
 
 

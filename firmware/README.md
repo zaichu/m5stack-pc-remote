@@ -117,9 +117,9 @@ Git管理外にしている。
 python3 scripts/provision-firmware-nvs.py --write --yes --port /dev/ttyUSB0
 ```
 
-デフォルトは現行partition tableのNVS offset `0x9000`、size `0x6000`。partition tableを
-変更した場合は `--offset` と `--size` を指定する。書き込み後は再起動時に
-`NVS設定を読み込みました` と表示される。
+デフォルトは現行partition table(`partitions.csv`)のNVS offset `0x9000`、size `0x4000`。
+partition tableを変更した場合は `--offset` と `--size` を指定する。書き込み後は
+再起動時に `NVS設定を読み込みました` と表示される。
 
 ## 書き込み・モニタ
 
@@ -128,6 +128,72 @@ espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust
 ```
 
 WSL2から書き込む場合はusbipd-winでUSBデバイスをアタッチしてから実行する。
+
+### OTA対応パーティションテーブルへの移行(Issue #41/#79 Phase 1)
+
+このPRでpartition tableを `partitions_singleapp.csv`(factory 1M)から、
+`partitions.csv`(ota_0/ota_1/otadata、Phase 3以降の無線更新用)へ変更する。
+partition table自体の位置・構成が変わるため、**USBでの1回限りの移行作業が
+必要**で、OTA経由では行えない(#41の設計方針: partition table自体の更新は
+OTAの対象にしない)。
+
+**作業前に必ずflashのバックアップを取る。** 移行に失敗した場合の復旧手段は
+このバックアップだけになる。
+
+**`espflash flash` は `--partition-table` を明示しないと自前のテーブルを生成して
+書き込む。** ESP-IDFのビルドが生成した `partition-table.bin` は使われないため、
+指定を忘れると「ビルドは新構成、実機は旧構成」という食い違いが起きる(実際に
+移行作業中に踏んだ)。手順3の `--partition-table` は必須。
+
+```bash
+# 1) バックアップ。read-flashは大きいサイズだと "Corrupt data" で失敗することが
+#    あるため、256KB単位に分割して結合する。先頭2MBで bootloader / partition
+#    table / nvs / app をすべて含む(残りは未使用領域)。
+for i in $(seq 0 7); do
+  off=$(printf "0x%x" $((i * 0x40000)))
+  espflash read-flash --port /dev/ttyUSB0 $off 0x40000 /tmp/chunk-$i.bin
+done
+cat /tmp/chunk-{0,1,2,3,4,5,6,7}.bin > backup-2mb-$(date +%Y%m%d).bin
+
+# バックアップの中身を検証する(0x8000のpartition tableが読めることを確認)
+dd if=backup-2mb-$(date +%Y%m%d).bin of=/tmp/pt.bin bs=4096 skip=8 count=1
+python3 firmware/.embuild/espressif/esp-idf/*/components/partition_table/gen_esp32part.py /tmp/pt.bin
+
+# 2) 全消去(古いpartition tableと app、NVSの中身をすべて消す)
+espflash erase-flash --port /dev/ttyUSB0
+
+# 3) 新しいpartition tableとfirmwareを書き込む(--partition-table 必須)
+cd firmware
+cargo +esp build --release --target xtensa-esp32-espidf
+python3 ../scripts/verify-partition-table.py   # ビルド成果物の構成を確認
+espflash flash --port /dev/ttyUSB0 \
+  --partition-table partitions.csv \
+  target/xtensa-esp32-espidf/release/m5remote-rust
+
+# 4) 実機に書かれたテーブルを読み戻して確認する。手順3を誤ると旧構成のままになる
+espflash read-flash --port /dev/ttyUSB0 0x8000 0x1000 /tmp/actual-pt.bin
+python3 .embuild/espressif/esp-idf/*/components/partition_table/gen_esp32part.py /tmp/actual-pt.bin
+
+# 5) NVSを再投入する(2)の全消去でWi-Fi設定等が消えているため必須
+cd ..
+python3 scripts/provision-firmware-nvs.py --write --yes --port /dev/ttyUSB0
+
+# 6) 起動確認。シリアルログで partition table に ota_0 / ota_1 / otadata が並び、
+#    `Loaded app from partition at offset 0x10000` と
+#    AXP192 initialized / display initialized / Wi-Fi connected /
+#    telegram: polling task started が出ることを確認する
+espflash monitor --port /dev/ttyUSB0
+```
+
+失敗した場合は、バックアップから復旧する。
+
+```bash
+espflash write-bin --port /dev/ttyUSB0 0x0 backup-2mb-<日付>.bin
+```
+
+移行後は、実機での確認結果(日時・確認範囲)をIssue #79に記録してからmergeする
+(実機を伴わない自動テストだけでは、実際のチップへ書き込んだときの動作を保証
+できないため)。
 
 ### シリアルを自前スクリプトで読むときの注意
 
