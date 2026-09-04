@@ -56,7 +56,8 @@ impl AlertNotifier {
         };
 
         let notifier = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
+        // 電源操作の blocking pool と分離するため、専用スレッドで実行する。
+        std::thread::spawn(move || {
             if let Err(e) = notifier.send_alert(count) {
                 tracing::warn!(
                     "failed to send auth failure alert: {}",
