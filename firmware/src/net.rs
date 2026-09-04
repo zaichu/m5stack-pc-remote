@@ -157,6 +157,14 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
     // IPリテラルならDNSを引かずに済ませる。`to_socket_addrs()` はホスト名だと
     // 名前解決を伴い、UIループから10秒ごとに呼ばれるここでブロックする。
     // DNSが遅い・落ちている環境では、そのぶん画面もタッチ処理も止まる。
+    //
+    // Issue #130-3の方針: 新規の入力は `validate_status_addr` でIPv4リテラル
+    // 限定にしたため、通常はこのfast pathだけが使われる。`to_socket_addrs()` の
+    // fallbackは、制限前にNVSへ書かれたホスト名が残っている場合の互換のため
+    // 残す(その場合は従来どおり解決待ちで止まり得る。設定を入れ直せば解消する)。
+    // 別スレッド化は見送った。STATUS確認はUIループとTelegram応答生成の直列経路で
+    // 結果をその場で要し、非同期化は同期・生存管理・NVS書換との競合を増やす。
+    // 家庭LAN内のPC相手に入力をIP限定できるなら、複雑さを足す理由がない。
     if let Ok(addr) = addr_text.parse::<SocketAddr>() {
         return probe(addr, timeout);
     }
