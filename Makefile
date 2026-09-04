@@ -1,5 +1,5 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-windows-build agent-check \
-	firmware-build firmware-nvs-image \
+	firmware-build firmware-nvs-image firmware-package \
 	config-key-check pr-issue-link-check secret-path-check secret-scan shell-syntax-check diff-check check git-pre-commit git-pre-push
 
 install: install-hooks
@@ -44,6 +44,12 @@ firmware-build:
 
 firmware-nvs-image:
 	python3 ./scripts/provision-firmware-nvs.py
+
+# OTA配信用のアプリイメージを firmware/dist/ へ生成する。firmware-build が作るのは
+# ELFだけで、bridgeが配信する firmware.bin は別途この変換が要る。
+# `check` へは入れない(espflashが必須で、OTA配信を行う端末でだけ使うため)。
+firmware-package:
+	bash ./scripts/package-firmware.sh
 
 config-key-check:
 	python3 ./scripts/config_keys.py check
