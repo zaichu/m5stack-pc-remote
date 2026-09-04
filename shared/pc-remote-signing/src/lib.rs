@@ -140,6 +140,186 @@ pub fn verify_manifest_signature(
     mac.verify_slice(&expected).is_ok()
 }
 
+/// OTA配信のmanifest(`GET /firmware/manifest` の応答)。
+///
+/// JSONの形の正本はm5stack-pc-bridgeの `firmware::FirmwareManifest` とここで
+/// 共有する。片方だけfieldを増減すると署名の検証以前にparseで壊れるため、
+/// 構造体は1箇所に置く。未知fieldは許容する(bridge側が将来fieldを足しても、
+/// 古いfirmwareのOTAがparse失敗で止まらないようにするため)。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct OtaManifest {
+    pub version: String,
+    pub size: u64,
+    pub sha256: String,
+    pub created_at: String,
+    pub signature: String,
+}
+
+/// manifestのparse・検証・突き合わせの失敗。
+///
+/// エラー文言にはmanifest本文もsecretも含めない。本文は署名検証前の
+/// 未検証データであり、ログへ出すのはfield名と理由だけに留める。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OtaManifestError {
+    /// JSONとして読めない、fieldが欠けている、型が違う。
+    InvalidJson(String),
+    /// JSONとしては読めたが、fieldの値が配信物としてあり得ない。
+    /// 中身はfield名(`version` / `size` / `sha256` / `created_at` / `signature`)。
+    InvalidField(&'static str),
+    /// HMAC署名が一致しない。ダウンロードへ進まず中止すること。
+    SignatureMismatch,
+}
+
+impl std::fmt::Display for OtaManifestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OtaManifestError::InvalidJson(reason) => {
+                write!(f, "firmware manifest is not valid JSON: {reason}")
+            }
+            OtaManifestError::InvalidField(field) => {
+                write!(f, "firmware manifest has an invalid field: {field}")
+            }
+            OtaManifestError::SignatureMismatch => {
+                write!(f, "firmware manifest signature mismatch")
+            }
+        }
+    }
+}
+
+impl std::error::Error for OtaManifestError {}
+
+/// 書き込んだimageとmanifestの突き合わせの失敗。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OtaImageError {
+    SizeMismatch { expected: u64, actual: u64 },
+    ShaMismatch,
+}
+
+impl std::fmt::Display for OtaImageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OtaImageError::SizeMismatch { expected, actual } => {
+                write!(f, "firmware size mismatch: expected {expected}, got {actual}")
+            }
+            OtaImageError::ShaMismatch => write!(f, "firmware sha256 mismatch"),
+        }
+    }
+}
+
+impl std::error::Error for OtaImageError {}
+
+/// `GET /firmware/manifest` の応答JSONをパースし、fieldの sanity を確認する。
+///
+/// 署名の検証はしない。呼び出し側はこの後に [`verify_manifest`] を必ず呼び、
+/// 通ってからダウンロードへ進むこと。
+pub fn parse_manifest_json(bytes: &[u8]) -> Result<OtaManifest, OtaManifestError> {
+    let manifest: OtaManifest =
+        serde_json::from_slice(bytes).map_err(|e| OtaManifestError::InvalidJson(short_json_error(&e)))?;
+    check_manifest_fields(&manifest)?;
+    Ok(manifest)
+}
+
+/// parse済みmanifestのHMAC署名を検証する。失敗したらダウンロードへ進まないこと。
+pub fn verify_manifest(
+    manifest: &OtaManifest,
+    secret: &[u8],
+) -> Result<(), OtaManifestError> {
+    if verify_manifest_signature(
+        secret,
+        &manifest.version,
+        manifest.size,
+        &manifest.sha256,
+        &manifest.created_at,
+        &manifest.signature,
+    ) {
+        Ok(())
+    } else {
+        Err(OtaManifestError::SignatureMismatch)
+    }
+}
+
+/// 書き込んだimageの `size` と `sha256` の両方がmanifestと一致するか。
+///
+/// 署名検証済みのmanifestを渡すこと。不一致なら呼び出し側はslotの更新を
+/// 中止し(boot partitionを切り替えず)、書きかけのslotを無効化すること。
+pub fn verify_ota_image(
+    manifest: &OtaManifest,
+    actual_size: u64,
+    actual_sha256_hex: &str,
+) -> Result<(), OtaImageError> {
+    if actual_size != manifest.size {
+        return Err(OtaImageError::SizeMismatch {
+            expected: manifest.size,
+            actual: actual_size,
+        });
+    }
+    if actual_sha256_hex != manifest.sha256 {
+        return Err(OtaImageError::ShaMismatch);
+    }
+    Ok(())
+}
+
+/// ダウンロードしながらSHA-256を計算するストリーミングハーシャー。
+///
+/// 背景: firmware(2MB級)を `Vec` へ全部読んでから `body_sha256_hex` すると
+/// ESP32のヒープが足りない。OTAクライアントはチャンク単位で `update` し、
+/// 書き終わったら `finish_hex` して [`verify_ota_image`] へ渡す。
+/// `sha2` crateはこの共有crateが既に持つため、firmware側へ新しい依存を
+/// 足さずに使える。ハードウェアに依存しないのでhostでテストできる。
+pub struct StreamingSha256(Sha256);
+
+impl StreamingSha256 {
+    pub fn new() -> Self {
+        Self(Sha256::new())
+    }
+
+    pub fn update(&mut self, chunk: &[u8]) {
+        self.0.update(chunk);
+    }
+
+    /// 小文字hexのダイジェスト。manifestの `sha256` と同じ形式。
+    pub fn finish_hex(self) -> String {
+        hex::encode(self.0.finalize())
+    }
+}
+
+impl Default for StreamingSha256 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// manifestの各fieldが配信物としてあり得る値か。
+///
+/// bridge側は `version` が無いときに `"unknown"` を入れるため空にはならない。
+/// `size == 0` のimageはESP-IDFのapp imageとして成立しないため拒否する。
+/// `sha256` は署名対象の文字列そのままを使うので、ここでは「64文字のhex」
+/// だけを見て、大小文字の正規化はしない(署名検証が exact match で担保する)。
+fn check_manifest_fields(manifest: &OtaManifest) -> Result<(), OtaManifestError> {
+    if manifest.version.is_empty() {
+        return Err(OtaManifestError::InvalidField("version"));
+    }
+    if manifest.size == 0 {
+        return Err(OtaManifestError::InvalidField("size"));
+    }
+    if manifest.sha256.len() != 64 || hex::decode(&manifest.sha256).is_err() {
+        return Err(OtaManifestError::InvalidField("sha256"));
+    }
+    if manifest.created_at.is_empty() {
+        return Err(OtaManifestError::InvalidField("created_at"));
+    }
+    if manifest.signature.is_empty() {
+        return Err(OtaManifestError::InvalidField("signature"));
+    }
+    Ok(())
+}
+
+/// `serde_json::Error` の表示は入力の抜粋を含み得る。未検証のmanifest本文を
+/// ログへ出さないよう、行・列だけに落とす。
+fn short_json_error(e: &serde_json::Error) -> String {
+    format!("line {} column {}", e.line(), e.column())
+}
+
 /// firmware(署名側)とm5stack-pc-bridge(検証側)で共有する電源操作の識別子。
 ///
 /// HTTPパスとslugの対応をここ1箇所で決める。canonical文字列にはPATHが入るため、
@@ -235,9 +415,9 @@ impl Default for AlertThrottle {
         Self::new(Self::DEFAULT_THRESHOLD, Self::DEFAULT_INTERVAL)
     }
 }
-
 #[cfg(test)]
 mod manifest_tests {
+
     use super::{manifest_canonical_string, sign_manifest, verify_manifest_signature};
 
     const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
@@ -375,5 +555,214 @@ mod alert_throttle_tests {
         }
         // 間隔を過ぎれば、たまっていた件数をまとめて返す。
         assert_eq!(throttle.record(start + interval), Some(7));
+    }
+}
+
+#[cfg(test)]
+mod ota_tests {
+    use super::{
+        parse_manifest_json, sign_manifest, verify_manifest, verify_ota_image, OtaImageError,
+        OtaManifest, OtaManifestError, StreamingSha256,
+    };
+
+    const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
+    const VERSION: &str = "0.2.0";
+    const SIZE: u64 = 19;
+    const IMAGE: &[u8] = b"fake-firmware-image";
+    const CREATED_AT: &str = "2026-09-04T00:00:00Z";
+
+    fn sha_hex() -> String {
+        super::body_sha256_hex(IMAGE)
+    }
+
+    fn valid_json() -> Vec<u8> {
+        let signature = sign_manifest(SECRET, VERSION, SIZE, &sha_hex(), CREATED_AT);
+        serde_json::to_vec(&serde_json::json!({
+            "version": VERSION,
+            "size": SIZE,
+            "sha256": sha_hex(),
+            "created_at": CREATED_AT,
+            "signature": signature,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn valid_manifest_passes_parse_and_verify() {
+        let manifest = parse_manifest_json(&valid_json()).unwrap();
+        assert_eq!(
+            manifest,
+            OtaManifest {
+                version: VERSION.to_string(),
+                size: SIZE,
+                sha256: sha_hex(),
+                created_at: CREATED_AT.to_string(),
+                signature: sign_manifest(SECRET, VERSION, SIZE, &sha_hex(), CREATED_AT),
+            }
+        );
+        verify_manifest(&manifest, SECRET).unwrap();
+    }
+
+    #[test]
+    fn rejects_tampered_signature() {
+        let mut value: serde_json::Value = serde_json::from_slice(&valid_json()).unwrap();
+        let signature = value["signature"].as_str().unwrap().to_owned();
+        let tampered = format!("{}0", &signature[..signature.len() - 1]);
+        value["signature"] = serde_json::Value::String(tampered);
+        let manifest = parse_manifest_json(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            verify_manifest(&manifest, SECRET),
+            Err(OtaManifestError::SignatureMismatch)
+        );
+    }
+
+    #[test]
+    fn rejects_tampered_fields_before_download() {
+        // 公開値だけを書き換えたmanifestは署名が合わず、ダウンロードへ進めない。
+        let mut version = serde_json::from_slice::<serde_json::Value>(&valid_json()).unwrap();
+        version["version"] = serde_json::Value::String("0.2.1".to_string());
+        let manifest = parse_manifest_json(&serde_json::to_vec(&version).unwrap()).unwrap();
+        assert_eq!(
+            verify_manifest(&manifest, SECRET),
+            Err(OtaManifestError::SignatureMismatch)
+        );
+
+        let mut size = serde_json::from_slice::<serde_json::Value>(&valid_json()).unwrap();
+        size["size"] = serde_json::Value::Number((SIZE + 1).into());
+        let manifest = parse_manifest_json(&serde_json::to_vec(&size).unwrap()).unwrap();
+        assert_eq!(
+            verify_manifest(&manifest, SECRET),
+            Err(OtaManifestError::SignatureMismatch)
+        );
+
+        let mut created = serde_json::from_slice::<serde_json::Value>(&valid_json()).unwrap();
+        created["created_at"] = serde_json::Value::String("2026-09-04T00:00:01Z".to_string());
+        let manifest = parse_manifest_json(&serde_json::to_vec(&created).unwrap()).unwrap();
+        assert_eq!(
+            verify_manifest(&manifest, SECRET),
+            Err(OtaManifestError::SignatureMismatch)
+        );
+        // sha256の書き換えは署名前に形式検査で落ちる場合と署名不一致の場合がある。
+        // どちらにせよダウンロードへ進まないことが重要。
+        let mut value: serde_json::Value = serde_json::from_slice(&valid_json()).unwrap();
+        value["sha256"] = serde_json::Value::String("0".repeat(64));
+        let manifest = parse_manifest_json(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            verify_manifest(&manifest, SECRET),
+            Err(OtaManifestError::SignatureMismatch)
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_secret() {
+        let manifest = parse_manifest_json(&valid_json()).unwrap();
+        assert_eq!(
+            verify_manifest(&manifest, b"wrong-secret-wrong-secret-wrong12"),
+            Err(OtaManifestError::SignatureMismatch)
+        );
+    }
+
+    #[test]
+    fn rejects_size_mismatch() {
+        let manifest = parse_manifest_json(&valid_json()).unwrap();
+        verify_manifest(&manifest, SECRET).unwrap();
+        assert_eq!(
+            verify_ota_image(&manifest, SIZE + 1, &sha_hex()),
+            Err(OtaImageError::SizeMismatch {
+                expected: SIZE,
+                actual: SIZE + 1,
+            })
+        );
+        assert_eq!(
+            verify_ota_image(&manifest, SIZE - 1, &sha_hex()),
+            Err(OtaImageError::SizeMismatch {
+                expected: SIZE,
+                actual: SIZE - 1,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_sha_mismatch() {
+        let manifest = parse_manifest_json(&valid_json()).unwrap();
+        verify_manifest(&manifest, SECRET).unwrap();
+        let mut tampered = sha_hex();
+        tampered.replace_range(0..1, if &tampered[0..1] == "0" { "1" } else { "0" });
+        assert_eq!(
+            verify_ota_image(&manifest, SIZE, &tampered),
+            Err(OtaImageError::ShaMismatch)
+        );
+    }
+
+    #[test]
+    fn accepts_matching_size_and_sha() {
+        let manifest = parse_manifest_json(&valid_json()).unwrap();
+        verify_ota_image(&manifest, SIZE, &sha_hex()).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_json() {
+        // JSONですらない。
+        assert!(matches!(
+            parse_manifest_json(b"{not json"),
+            Err(OtaManifestError::InvalidJson(_))
+        ));
+        // 空。
+        assert!(matches!(
+            parse_manifest_json(b""),
+            Err(OtaManifestError::InvalidJson(_))
+        ));
+        // field不足。
+        assert!(matches!(
+            parse_manifest_json(b"{}"),
+            Err(OtaManifestError::InvalidJson(_))
+        ));
+        // 型違い。
+        let mut value: serde_json::Value = serde_json::from_slice(&valid_json()).unwrap();
+        value["size"] = serde_json::Value::String("19".to_string());
+        assert!(matches!(
+            parse_manifest_json(&serde_json::to_vec(&value).unwrap()),
+            Err(OtaManifestError::InvalidJson(_))
+        ));
+        // 値としてあり得ないもの。
+        for (field, bad) in [
+            ("version", ""),
+            ("sha256", "xyz"),
+            ("created_at", ""),
+            ("signature", ""),
+        ] {
+            let mut value: serde_json::Value = serde_json::from_slice(&valid_json()).unwrap();
+            value[field] = serde_json::Value::String(bad.to_string());
+            assert!(
+                matches!(
+                    parse_manifest_json(&serde_json::to_vec(&value).unwrap()),
+                    Err(OtaManifestError::InvalidField(_))
+                ),
+                "{field}"
+            );
+        }
+        // size 0 のimageは成立しない。
+        let mut value: serde_json::Value = serde_json::from_slice(&valid_json()).unwrap();
+        value["size"] = serde_json::Value::Number(0.into());
+        assert!(matches!(
+            parse_manifest_json(&serde_json::to_vec(&value).unwrap()),
+            Err(OtaManifestError::InvalidField("size"))
+        ));
+    }
+
+    #[test]
+    fn streaming_hash_matches_oneshot_hash() {
+        let mut streaming = StreamingSha256::new();
+        for chunk in IMAGE.chunks(5) {
+            streaming.update(chunk);
+        }
+        assert_eq!(streaming.finish_hex(), sha_hex());
+        assert_eq!(streaming_default_is_usable(), sha_hex());
+    }
+
+    fn streaming_default_is_usable() -> String {
+        let mut hashing = StreamingSha256::default();
+        hashing.update(IMAGE);
+        hashing.finish_hex()
     }
 }
