@@ -85,8 +85,10 @@ log_size() {
 }
 
 out_file="$(mktemp)"
-# trap から呼ぶため shellcheck からは未使用に見える。
-# shellcheck disable=SC2329
+# trap から呼ぶため shellcheck からは到達不能・未使用に見える。
+# 指摘されるコードはshellcheckのバージョンで異なる(0.11はSC2329、
+# それ以前はSC2317)ため両方を抑制する。
+# shellcheck disable=SC2329,SC2317
 cleanup() {
   rm -f "$out_file"
 }

@@ -52,8 +52,19 @@ jobs:
           sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
+      # gitleaks と同じくバージョンを固定する。apt版はUbuntuイメージ側の都合で
+      # 変わり、ローカルと指摘コードがずれる。実際に踏んだ: ローカル0.11.0が
+      # SC2329を出す箇所へapt版はSC2317を出し、ローカルで通るPRがCIだけ落ちた。
       - name: Install shellcheck
-        run: sudo apt-get install -y shellcheck
+        env:
+          SHELLCHECK_VERSION: "0.11.0"
+        run: |
+          curl -sSfL -o /tmp/shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp --strip-components=1 \
+            "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 /tmp/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
 
       # CI=1 を渡すと、toolchain欠如によるskipをerrorへ格上げする。
       # ローカルでskipされた検査がCIでは必ず走るようにして、両者の結果を一致させる。
