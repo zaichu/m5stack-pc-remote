@@ -36,8 +36,13 @@ if command -v gh >/dev/null 2>&1; then
   fi
 fi
 
-# ブランチ名から issue 番号を抽出
-issue="$(echo "$branch" | grep -oE '[0-9]+' | head -1 || true)"
+# ブランチ名から issue 番号を抽出する。
+#
+# 規約は `{type}/{issue-number}-{slug}` なので、その位置の数字だけを見る。
+# 「どこかにある数字」を拾うと、`feat/ota-phase1-partitions` の "phase1" を
+# issue #1 と誤読して、無関係な番号での紐付けを要求してしまう(実際に踏んだ)。
+# ここで拾えなければ「番号なし」として、PR本文/コミットのIssue参照で判定する。
+issue="$(echo "$branch" | sed -nE 's#^[^/]+/([0-9]+)-.*#\1#p')"
 if [[ -z "$issue" ]]; then
   # ブランチ名に番号が無くても、PR本文やコミットで実際にIssueへ紐づいていれば
   # 目的は満たされている。ブランチ命名は手段であって要件ではない。
