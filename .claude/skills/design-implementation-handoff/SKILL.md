@@ -1,68 +1,58 @@
 ---
 name: design-implementation-handoff
-description: Use when handing a task between the design/review agent and the implementation agent in m5stack-pc-remote, in either direction.
+description: Use when handing a task between agents in m5stack-pc-remote, in either direction, or when reviewing what another agent produced.
 ---
 
 # Design / Implementation Handoff
 
 ## Goal
 
-このプロジェクトの標準運用は「実装を担当しないエージェントが設計・レビュー・リリース判断を持つ」です。特定のモデル名(Codex/Claude等)に固定しない。使うツールが変わっても、このスキルの手順とチェックリストだけを差し替えれば運用を継続できるようにする。
+このプロジェクトの標準運用は「実装を担当しないエージェントが設計・レビュー・リリース
+判断を持つ」です。特定の製品名には固定しません。
 
-## 現在の割り当て
+**誰がどの役割かは `docs/agent-roles.md` が唯一の正本です。**
+起動コマンドと依頼チェックリストもそこにあります。担当が変わったときに
+書き換えるのはあのファイルだけで、このスキルは書き換えません。
 
-- **実装エージェント**: Claude Code
-- **設計・レビューエージェント**: Codex CLI
+このスキルには、担当が変わっても変わらない手順だけを置きます。
 
-割り当てが変わったら、このセクションだけ書き換える。役割の呼び方(実装エージェント/設計エージェント)は変えない。CLAUDE.md・AGENTS.mdの役割分担ルールも、割り当て先の固有名詞ではなくこの役割名で書いてある。
+## 依頼するとき
 
-## 実装エージェントが設計エージェントへ依頼するとき
+`docs/agent-roles.md` の「起動コマンド」と「依頼するときのチェックリスト」に従います。
 
-余計な往復なしに設計エージェントが判断できるだけの文脈を渡す。
+特に外しやすいのは次の2つです。
 
-現在の割り当てでの起動コマンド(Claude -> Codex):
+- **触ってよいファイルの明示。** 複数エージェントへ同時に依頼するとき、共有ファイル
+  (`Makefile`、CI設定、共通crate)を両者の範囲に残すと同じものが二重に作られます。
+- **実機由来の制約を渡すこと、かつその制約が正しいこと。** 渡さなければ動かない
+  コードが書かれ、間違ったものを渡せば間違った前提がコメントとして固定されます。
+
+## 受け取ったものをレビューするとき
+
+`docs/agent-roles.md` の「受け取った成果物の扱い」に従います。要点は
+**報告ではなく実 diff を読む**ことです。
+
+順序:
+
+1. `git show <commit> --stat` で変更範囲を把握する。報告と一致するか確認する。
+2. セキュリティに関わる差分(認証、署名、secret handling、外部通信、電源操作)から読む。
+3. テストが追加されていれば、**修正を外してそのテストが落ちることを確認する**。
+   落ちなければ、そのテストは何も守っていません。
+4. `make check` を自分で回す。報告の「全部通りました」を根拠にしない。
+5. 見つけた問題は、実装した本人へ差し戻すか、自分で直して理由をPR本文に書く。
+
+## 逆レビュー
+
+設計エージェントや統合エージェントが実質的な差分(コード、テスト、スクリプト、
+ドキュメント)を直接書いた場合も、merge前に**実装した本人以外**のレビューを通します。
+それができない場合は、試行結果と残リスクをPR本文に書きます。
+
+## worktree を使う
+
+エージェントごとに専用の worktree を用意します。共有 working directory で
+並行作業すると、`git switch` / `git stash` が絡み合って未commitの作業が消えます
+(実害の記録は `parallel-agent-coordination` skill 参照)。
 
 ```bash
-codex exec -s read-only --skip-git-repo-check -o <file> "<request>" < /dev/null
+git worktree add -b {type}/{issue-number}-{slug} /tmp/<repo>-<topic> origin/main
 ```
-
-設計判断そのもの(実装ではない)を依頼する場合は `-s read-only` のままでよい。
-
-### Request Checklist
-
-1. `AGENTS.md` と `CLAUDE.md` を読むように依頼する。
-2. ユーザー要求、フェーズ、非ゴールを明示する。
-3. 変更対象ファイルと境界を指定する。
-4. 実Wi-Fi情報、実MAC、HMAC secret、Windows認証情報を使わないよう明記する。
-5. 受入条件と検証コマンドを書く。
-6. 日本語で、変更ファイル、検証、残リスクを報告するよう依頼する。
-
-プロンプトに Markdown fence、backtick、`$()` が含まれる場合は `/tmp` に本文を書き、ファイル経由で渡してshell展開を避ける。
-
-## 設計エージェントが実装エージェントへ依頼するとき
-
-現在の割り当てでの起動コマンド(Codex -> Claude)。
-
-初回:
-
-```bash
-claude -p "<request>" --permission-mode acceptEdits --allowedTools Bash Edit Write Read Glob Grep
-```
-
-同じ作業の継続:
-
-```bash
-claude -c -p "<request>" --permission-mode acceptEdits --allowedTools Bash Edit Write Read Glob Grep
-```
-
-依頼内容は上と同じチェックリスト(AGENTS.md/CLAUDE.mdを読ませる、要求・フェーズ・非ゴール・対象ファイル・secret方針・受入条件・報告形式)を満たす。
-
-## 設計エージェントが直接コードを書いた場合の逆レビュー
-
-設計エージェントが実質的な差分(コード、テスト、スクリプト、ドキュメント)を直接書いた場合、merge前に実装エージェントへ逆レビューを依頼する。
-
-1. 実diffをレビュー対象にする。
-2. 設計意図、既知の懸念、実行済み品質コマンドを渡す。
-3. 認証、secret handling、実ネットワーク混入、Windows実電源操作の誤実行、docs更新漏れを重点確認させる。
-4. findings first、日本語、可能ならファイル参照付きで返答させる。
-5. 実装エージェントが使えない場合は、試行結果と残リスクをPR本文に書く。
