@@ -43,6 +43,22 @@ if [[ -z "$version" ]]; then
   exit 1
 fi
 
+# 未コミットの変更があると、配信した version がどのコミットにも対応しなくなる。
+# 実際に踏んだ: Cargo.toml の version を worktree 内で上げただけで 0.2.0 を配信し、
+# main は 0.1.0 のまま残った。後から「実機の 0.2.0 は何のコードか」を追えなくなる。
+# OTAは戻すのに手間がかかるので、配る前に止める。
+if git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
+  if ! git -C "$repo_root" diff --quiet HEAD -- firmware shared 2>/dev/null; then
+    echo "ERROR: firmware/ または shared/ に未コミットの変更があります。" >&2
+    echo "  配信するイメージがどのコミットのものか追えなくなるため、先にcommitしてください。" >&2
+    echo "  意図的に試す場合は OTA_ALLOW_DIRTY=1 を付けてください。" >&2
+    if [[ -z "${OTA_ALLOW_DIRTY:-}" ]]; then
+      exit 1
+    fi
+    echo "WARNING: OTA_ALLOW_DIRTY によりdirtyなツリーから生成します。" >&2
+  fi
+fi
+
 mkdir -p "$out_dir"
 bin="$out_dir/firmware.bin"
 
