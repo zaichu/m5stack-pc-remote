@@ -74,7 +74,7 @@ def load_config(path: Path, keys: tuple[ConfigKey, ...]) -> dict[str, object]:
     missing = [key.toml_key for key in keys if not key.optional and key.toml_key not in data]
     if missing:
         raise ValueError("configに不足があります: " + ", ".join(missing))
-    validate_config(data)
+    validate_config(data, keys)
     return data
 
 
@@ -85,17 +85,18 @@ def apply_toml_aliases(data: dict[str, object], keys: tuple[ConfigKey, ...]) -> 
             data[key.toml_key] = data[key.toml_alias]
 
 
-def validate_config(data: dict[str, object]) -> None:
-    # 必須かつ空を許さないキー。derive_mappings() の required 12件のうち、
-    # telegram_* は placeholder で無効化できるため除外し、残り 6件を対象にする。
-    # 新キーを追加する際は、ここへ追加するか、derive 対象にするかを検討すること。
+def validate_config(
+    data: dict[str, object], keys: tuple[ConfigKey, ...] | None = None
+) -> None:
+    # derive_mappings() から required なキーを導出する。新キーを追加しても
+    # firmware/build.rs の KEYS へ追加するだけで検証対象に含まれる。
+    # telegram_* は placeholder 値で無効化できる運用のため空チェックの対象から外す。
+    if keys is None:
+        keys = derive_mappings()
     non_empty = [
-        "wifi_ssid",
-        "wifi_password",
-        "pc_mac_address",
-        "pc_status_addr",
-        "bridge_shared_secret",
-        "pc_ip_address",
+        key.toml_key
+        for key in keys
+        if not key.optional and not key.toml_key.startswith("telegram_")
     ]
     empty = [key for key in non_empty if not str(data[key]).strip()]
     if empty:

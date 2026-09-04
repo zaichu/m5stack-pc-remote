@@ -1,6 +1,6 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-windows-build agent-check \
 	firmware-build firmware-nvs-image \
-	config-key-check pr-issue-link-check secret-path-check secret-scan diff-check check git-pre-commit git-pre-push
+	config-key-check pr-issue-link-check secret-path-check secret-scan diff-check bash-n-check check git-pre-commit git-pre-push
 
 install: install-hooks
 
@@ -55,7 +55,10 @@ secret-scan:
 diff-check:
 	git diff --check
 
-check: diff-check secret-path-check secret-scan config-key-check agent-check firmware-build
+bash-n-check:
+	bash -n scripts/*.sh
+
+check: diff-check secret-path-check secret-scan config-key-check agent-check firmware-build bash-n-check
 
 git-pre-commit: fmt-check secret-path-check diff-check
 

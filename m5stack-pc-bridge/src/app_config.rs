@@ -51,13 +51,14 @@ fn default_dry_run() -> bool {
 
 impl AgentConfig {
     pub fn from_toml_str(input: &str) -> anyhow::Result<Self> {
-        let config: Self = toml::from_str(input)?;
+        let config: Self =
+            toml::from_str(input).map_err(|_| anyhow::anyhow!("config.tomlを解析できません"))?;
         config.validate()?;
         Ok(config)
     }
 
     pub fn from_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let input = fs::read_to_string(path)?;
+        let input = fs::read_to_string(path.as_ref())?;
         Self::from_toml_str(&input)
     }
 
