@@ -87,6 +87,8 @@ Stop-Service M5StackPcBridge
 - `GET /status`
 - `POST /reboot`
 - `POST /shutdown`
+- `GET /firmware/manifest` (OTA Phase 2: 要HMAC認証)
+- `GET /firmware` (OTA Phase 2: 要HMAC認証)
 
 `GET /status` はm5stack-pc-bridgeプロセス自体のヘルスチェックです。PCの電源状態を判定するエンドポイントではありません。
 
@@ -110,3 +112,28 @@ Stop-Service M5StackPcBridge
 認証失敗時のHTTP response bodyは固定の `unauthorized` です。
 
 署名対象等の wire protocol は `shared/pc-remote-signing/src/lib.rs` を正本とします。
+
+## firmware配信(OTA Phase 2)
+
+実行ファイルと同じディレクトリに `firmware.bin` を置くと、`GET /firmware` で
+バイナリ本体、`GET /firmware/manifest` でメタ情報(`version`、`size`、`sha256`、
+`created_at`、HMAC-SHA256署名 `signature`)を配信します。`firmware.bin` が無い
+ときは `404` を返します。
+
+- `version` は同じディレクトリの `firmware.version`(1行のテキスト)から読みます。
+  無い・空の場合は `"unknown"` になります。内容の同一性は `sha256`(実バイナリ
+  から計算)で担保されるため、版ファイルが無くても配信は壊れません。
+- `created_at` は `firmware.bin` の更新時刻(RFC3339、UTC)です。
+- `signature` は `shared_secret` によるHMAC-SHA256で、署名対象の組み立ては
+  `shared/pc-remote-signing` の `sign_manifest` が正本です。bridgeは配布場所で
+  あって信頼の根ではないため、M5Stack側は公開値だけを信じず署名を検証します
+  (検証側はPhase 3で実装)。
+- 読み取り専用ですが電源操作と同じHMACリクエスト認証(`X-Timestamp`、
+  `X-Nonce`、`X-Signature`、本文は空)を要求します。LAN内だからという理由で
+  無認証APIを増やさない方針(AGENTS.md)のためです。電源操作の権限は渡しません。
+- 配置例(`%ProgramData%\m5stack-pc-bridge\` へ `m5stack-pc-bridge.exe` と一緒に置く):
+
+```powershell
+Copy-Item .\firmware.bin "$env:ProgramData\m5stack-pc-bridge\firmware.bin"
+"0.2.0" | Out-File -Encoding ascii "$env:ProgramData\m5stack-pc-bridge\firmware.version"
+```
