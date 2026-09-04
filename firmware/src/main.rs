@@ -282,7 +282,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        let now_telegram = match *telegram_state.lock().unwrap() {
+        let now_telegram = match *telegram::lock_state(&telegram_state) {
             telegram::State::Disabled => TelegramState::Disabled,
             telegram::State::Polling => TelegramState::Polling,
             telegram::State::Error => TelegramState::Error,
