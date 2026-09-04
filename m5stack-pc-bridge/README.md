@@ -166,3 +166,18 @@ ELFやマージ済みイメージを誤って配信すると、実機は書き�
 Copy-Item .\firmware.bin "$env:ProgramData\m5stack-pc-bridge\firmware.bin"
 Copy-Item .\firmware.version "$env:ProgramData\m5stack-pc-bridge\firmware.version"
 ```
+
+### OTA前の readiness check
+
+実機へOTAする前に、配置ミスを事前に検出できます。
+
+```bash
+make ota-readiness-check
+```
+
+secret一致・`firmware.bin`配置・イメージ妥当性(magic `0xE9`・`ota_0`サイズ)・
+署名付きmanifest取得と突き合わせ・配信版と手元版の違いを検査します。
+secretの値は表示しません。bridgeと異なる端末で実行するときは
+`OTA_BRIDGE_DIR`(bridge実行ファイルのあるディレクトリ)と
+`OTA_BRIDGE_URL`(既定 `http://127.0.0.1:18080`)を指定します。
+`make check` には含みません(CI等のconfigが無い環境では警告してskipします)。
