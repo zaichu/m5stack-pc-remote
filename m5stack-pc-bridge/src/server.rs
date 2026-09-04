@@ -9,7 +9,6 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use tokio::net::TcpListener;
 
 use crate::{
@@ -28,6 +27,9 @@ pub struct AppState {
     dry_run: bool,
     /// 認証失敗アラートの送信先。config未設定なら None(通知しないだけ)。
     alert: Option<Arc<AlertNotifier>>,
+    /// テストで時刻を固定するためのクロック。デフォルトは now_utc()。
+    #[allow(dead_code)]
+    clock: Arc<dyn Fn() -> time::OffsetDateTime + Send + Sync>,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,6 +55,7 @@ pub fn router(config: AgentConfig) -> Router {
         nonces: Arc::new(NonceStore::default()),
         dry_run: config.dry_run,
         alert,
+        clock: Arc::new(time::OffsetDateTime::now_utc),
     };
 
     let mut router = Router::new().route("/status", get(status));
@@ -214,7 +217,7 @@ fn verify_headers(
         nonce,
         body,
         signature,
-        OffsetDateTime::now_utc(),
+        (state.clock)(),
     )
 }
 
@@ -222,6 +225,7 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, AuthErr
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
+        .map(|v| v.trim())
         .filter(|value| !value.is_empty())
         .ok_or(AuthError::MissingHeader)
 }

@@ -37,6 +37,9 @@ pub struct NonceStore {
 }
 
 impl NonceStore {
+    const MAX_NONCE_LEN: usize = 64;
+    const MAX_ENTRIES: usize = 10_000;
+
     pub fn insert_once(
         &self,
         nonce: &str,
@@ -44,7 +47,18 @@ impl NonceStore {
         now: OffsetDateTime,
         ttl_seconds: i64,
     ) -> bool {
-        self.evict_expired(now.unix_timestamp(), ttl_seconds);
+        // 毎リクエストの全走査 O(N) を避けるため、100件ごとに間引き
+        if self.seen.len().is_multiple_of(100) {
+            self.evict_expired(now.unix_timestamp(), ttl_seconds);
+        }
+        if nonce.len() > Self::MAX_NONCE_LEN
+            || !nonce
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+            || self.seen.len() >= Self::MAX_ENTRIES
+        {
+            return false;
+        }
         self.seen.insert(nonce.to_owned(), timestamp).is_none()
     }
 
