@@ -213,6 +213,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut screen = Screen::Main;
     let mut status_at = Instant::now();
+    // バッテリー読みはPC状態確認とは別周期で回す(Wi-Fi断でも止めないため)。
+    let mut battery_at = Instant::now();
     let mut wifi_check_at = Instant::now();
     let mut toast_at = Instant::now();
     let mut touch_was_down = false;
@@ -292,12 +294,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
+        // バッテリーはI2Cで読むだけなのでWi-Fiに依存しない。PC状態の確認と
+        // 同じ条件に入れていると、Wi-Fi断の間ずっと電池表示が固まる。
+        if battery_at.elapsed() >= STATUS_INTERVAL {
+            battery_at = Instant::now();
+            // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
+            let now_battery = board::read_battery(&mut axp);
+            if now_battery != status.battery {
+                status.battery = now_battery;
+                if matches!(screen, Screen::Main) {
+                    ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                }
+            }
+        }
+
         if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
             let previous_online = status.pc_online;
             let previous_battery = status.battery;
-            // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
-            status.battery = board::read_battery(&mut axp);
             let now_online =
                 net::check_pc_online(&settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
             if now_online != status.pc_online {
@@ -355,10 +369,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // ロック中はどのボタンも実行しない。REBOOT/SHUTDOWNは確認画面を
                 // 開くだけだが、OKまで進んでから弾くより先に理由を返す。
                 // `status.locked`はループ先頭で読んだ値なので共有状態を直接見る。
-                let power_button_tapped = ui::WAKE_BUTTON.contains(x, y)
-                    || ui::REBOOT_BUTTON.contains(x, y)
-                    || ui::SHUTDOWN_BUTTON.contains(x, y)
-                    || ui::OK_BUTTON.contains(x, y);
+                //
+                // 判定対象は今表示している画面のボタンだけにする。全画面分を
+                // まとめて見ると、Main画面でOK_BUTTON(170,150,130,60)の領域まで
+                // 拾ってしまい、そこはMainでは何も無い場所なので、空白をタップ
+                // しただけでロックのトーストが出る。CANCELは電源操作ではないため
+                // ロック中でも通す(でないと確認画面から戻れない)。
+                let power_button_tapped = match screen {
+                    Screen::Main => {
+                        ui::WAKE_BUTTON.contains(x, y)
+                            || ui::REBOOT_BUTTON.contains(x, y)
+                            || ui::SHUTDOWN_BUTTON.contains(x, y)
+                    }
+                    Screen::Confirm(_) => ui::OK_BUTTON.contains(x, y),
+                };
                 if power_button_tapped && operation_lock.is_locked() {
                     reject_locked(
                         &mut display,
