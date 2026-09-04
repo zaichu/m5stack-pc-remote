@@ -75,6 +75,71 @@ pub fn verify_signature(
     mac.verify_slice(&expected).is_ok()
 }
 
+/// m5stack-pc-bridgeが配信するfirmware manifestの署名。
+///
+/// bridgeは「配布場所」であって「信頼の根」ではないため、manifestへ
+/// HMAC-SHA256署名を付ける。M5Stack側(Phase 3のOTAクライアント)は
+/// 公開値(version/size/sha256)だけを信じず、この署名を検証してから
+/// ダウンロードへ進む。
+///
+/// canonical文字列は次の形式で固定する。リクエスト署名(`canonical_string`)
+/// の流用ではなくmanifest専用の文字列にする。理由はドメイン分離のため:
+/// 先頭の `FIRMWARE-MANIFEST-v1` が無いと、manifest署名が何らかのリクエスト
+/// 署名と一致し得て、署名の使い回し(クロスプロトコル confusion)の余地が
+/// 残る。鍵とアルゴリズム(HMAC-SHA256 + shared_secret + hex)は
+/// リクエスト署名と同じで、新しい署名方式は発明しない。
+///
+/// ```text
+/// "FIRMWARE-MANIFEST-v1" + "\n" + VERSION + "\n" + SIZE + "\n" + SHA256_HEX + "\n" + CREATED_AT
+/// Manifest-Signature = hmac_sha256_hex(shared_secret, canonical)
+/// ```
+///
+/// `SIZE` は10進のバイト数、`SHA256_HEX` は小文字hex、`CREATED_AT` はRFC3339。
+/// フィールド順序はこの関数が一意に決める。呼び出し側で順序を組み立てないこと。
+pub fn manifest_canonical_string(
+    version: &str,
+    size: u64,
+    sha256_hex: &str,
+    created_at: &str,
+) -> String {
+    format!("FIRMWARE-MANIFEST-v1\n{version}\n{size}\n{sha256_hex}\n{created_at}")
+}
+
+/// m5stack-pc-bridge側(署名する側)が使う。
+pub fn sign_manifest(
+    secret: &[u8],
+    version: &str,
+    size: u64,
+    sha256_hex: &str,
+    created_at: &str,
+) -> String {
+    let canonical = manifest_canonical_string(version, size, sha256_hex, created_at);
+    let mut mac =
+        HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any size for SHA-256");
+    mac.update(canonical.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// M5Stack firmware側(検証する側)が使う。Phase 3のOTAクライアントが呼ぶ。
+pub fn verify_manifest_signature(
+    secret: &[u8],
+    version: &str,
+    size: u64,
+    sha256_hex: &str,
+    created_at: &str,
+    signature_hex: &str,
+) -> bool {
+    let Ok(expected) = hex::decode(signature_hex) else {
+        return false;
+    };
+    let canonical = manifest_canonical_string(version, size, sha256_hex, created_at);
+    let Ok(mut mac) = HmacSha256::new_from_slice(secret) else {
+        return false;
+    };
+    mac.update(canonical.as_bytes());
+    mac.verify_slice(&expected).is_ok()
+}
+
 /// firmware(署名側)とm5stack-pc-bridge(検証側)で共有する電源操作の識別子。
 ///
 /// HTTPパスとslugの対応をここ1箇所で決める。canonical文字列にはPATHが入るため、
@@ -168,6 +233,88 @@ impl AlertThrottle {
 impl Default for AlertThrottle {
     fn default() -> Self {
         Self::new(Self::DEFAULT_THRESHOLD, Self::DEFAULT_INTERVAL)
+    }
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::{manifest_canonical_string, sign_manifest, verify_manifest_signature};
+
+    const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn canonical_string_pins_field_order() {
+        assert_eq!(
+            manifest_canonical_string("0.2.0", 1234, "abcd", "2026-09-04T00:00:00Z",),
+            "FIRMWARE-MANIFEST-v1\n0.2.0\n1234\nabcd\n2026-09-04T00:00:00Z",
+        );
+    }
+
+    #[test]
+    fn sign_and_verify_round_trip() {
+        let signature = sign_manifest(SECRET, "0.2.0", 42, "abcd", "2026-09-04T00:00:00Z");
+        assert!(verify_manifest_signature(
+            SECRET,
+            "0.2.0",
+            42,
+            "abcd",
+            "2026-09-04T00:00:00Z",
+            &signature,
+        ));
+    }
+
+    #[test]
+    fn rejects_tampered_field_or_wrong_secret() {
+        let signature = sign_manifest(SECRET, "0.2.0", 42, "abcd", "2026-09-04T00:00:00Z");
+        // 各フィールドのどれを変えても検証が通らないこと。
+        assert!(!verify_manifest_signature(
+            SECRET,
+            "0.2.1",
+            42,
+            "abcd",
+            "2026-09-04T00:00:00Z",
+            &signature,
+        ));
+        assert!(!verify_manifest_signature(
+            SECRET,
+            "0.2.0",
+            43,
+            "abcd",
+            "2026-09-04T00:00:00Z",
+            &signature,
+        ));
+        assert!(!verify_manifest_signature(
+            SECRET,
+            "0.2.0",
+            42,
+            "abce",
+            "2026-09-04T00:00:00Z",
+            &signature,
+        ));
+        assert!(!verify_manifest_signature(
+            SECRET,
+            "0.2.0",
+            42,
+            "abcd",
+            "2026-09-04T00:00:01Z",
+            &signature,
+        ));
+        assert!(!verify_manifest_signature(
+            b"wrong-secret-wrong-secret-wrong12",
+            "0.2.0",
+            42,
+            "abcd",
+            "2026-09-04T00:00:00Z",
+            &signature,
+        ));
+        assert!(!verify_manifest_signature(
+            SECRET,
+            "0.2.0",
+            42,
+            "abcd",
+            "2026-09-04T00:00:00Z",
+            "not-hex",
+        ));
     }
 }
 

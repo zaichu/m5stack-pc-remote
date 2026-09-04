@@ -2,6 +2,7 @@ pub mod alert;
 pub mod app_config;
 pub mod audit_log;
 pub mod auth;
+pub mod firmware;
 pub mod power;
 pub mod server;
 

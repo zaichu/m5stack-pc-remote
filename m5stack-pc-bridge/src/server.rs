@@ -16,6 +16,7 @@ use crate::{
     app_config::AgentConfig,
     audit_log,
     auth::{verify_request, AuthConfig, AuthError, NonceStore},
+    firmware::{self, FirmwarePaths},
     power::{run_power_action, PowerAction, PowerResult},
 };
 use pc_remote_signing::PowerAction as SharedPowerAction;
@@ -30,6 +31,8 @@ pub struct AppState {
     /// テストで時刻を固定するためのクロック。デフォルトは now_utc()。
     #[allow(dead_code)]
     clock: Arc<dyn Fn() -> time::OffsetDateTime + Send + Sync>,
+    /// firmware配信ファイルの配置。既定は実行ファイルと同じディレクトリ。
+    firmware: FirmwarePaths,
 }
 
 #[derive(Debug, Serialize)]
@@ -46,6 +49,14 @@ struct CommandRequest {
 }
 
 pub fn router(config: AgentConfig) -> Router {
+    router_with_firmware_paths(config, FirmwarePaths::from_exe_dir())
+}
+
+/// テスト用に配信ファイルの配置を差し替えられるrouter。
+/// `router` は実行ファイル横の `firmware.bin` を使うが、テストバイナリの
+/// 配置に依存したテストは並行実行で競合するため、統合テストでは
+/// 一時ディレクトリを指すこの関数を使う。
+pub fn router_with_firmware_paths(config: AgentConfig, firmware: FirmwarePaths) -> Router {
     let alert = AlertNotifier::from_config(&config).map(Arc::new);
     let state = AppState {
         auth: Arc::new(AuthConfig {
@@ -56,9 +67,23 @@ pub fn router(config: AgentConfig) -> Router {
         dry_run: config.dry_run,
         alert,
         clock: Arc::new(time::OffsetDateTime::now_utc),
+        firmware,
     };
 
-    let mut router = Router::new().route("/status", get(status));
+    let mut router = Router::new()
+        .route("/status", get(status))
+        // firmware配信は読み取り専用(GETのみ・副作用なし)だが、既存の
+        // HMACリクエスト認証を要求する。選んだ理由:
+        // (1) AGENTS.mdが「LAN内だからという理由で無認証APIを追加しない」と
+        //     定めており、読み取り専用でも例外にしない。
+        // (2) versionの列挙やbinaryの取得をLAN内の任意端末に許すと、
+        //     firmwareの脆弱性探査の材料になる。
+        // (3) shared_secretの保持者(対になるM5Stack)だけが取得者になる方が、
+        //     配布範囲の見通しが良い。
+        // 電源操作の権限は渡さない(confirm不要・電源操作を実行しない)。
+        // LAN内限定の前提は変えない(管理ポートの直接公開はしない)。
+        .route("/firmware/manifest", get(firmware_manifest))
+        .route("/firmware", get(firmware_binary));
     for action in SharedPowerAction::ALL {
         router = match action {
             SharedPowerAction::Reboot => router.route(action.path(), post(reboot)),
@@ -92,6 +117,106 @@ async fn status() -> Json<StatusResponse> {
         agent: "m5stack-pc-bridge",
         status: "ok",
     })
+}
+
+/// `GET /firmware/manifest`。配信中firmwareのメタ情報とHMAC署名を返す。
+/// ファイルが無いときは404(500にしない)。署名の組み立ては
+/// `firmware::build_manifest` が `pc-remote-signing` へ委譲する。
+async fn firmware_manifest(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(err) = verify_headers(&state, &method, &uri, &headers, b"") {
+        tracing::warn!("firmware manifest authentication failed: {err}");
+        if let Some(alert) = state.alert.as_ref() {
+            alert.record_auth_failure();
+        }
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+
+    // 読み込みはblocking I/O(数MB級)のためblockingスレッドへ逃がす。
+    let outcome = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            firmware::load(&state.firmware).map(|image| {
+                firmware::build_manifest(&image, &state.auth.secret)
+                    .map(|manifest| (image, manifest))
+            })
+        }
+    })
+    .await;
+
+    match outcome {
+        Ok(Ok(Ok((_, manifest)))) => (StatusCode::OK, Json(manifest)).into_response(),
+        Ok(Ok(Err(err))) => {
+            tracing::error!("failed to format firmware manifest timestamp: {err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to build firmware manifest",
+            )
+                .into_response()
+        }
+        Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, "firmware not found").into_response()
+        }
+        Ok(Err(err)) => {
+            tracing::error!("failed to read firmware: {err}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to read firmware").into_response()
+        }
+        Err(join_err) => {
+            tracing::error!("firmware manifest task failed: {join_err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "firmware manifest task failed",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /firmware`。firmwareバイナリ本体を返す。
+/// ファイルが無いときは404(500にしない)。
+async fn firmware_binary(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(err) = verify_headers(&state, &method, &uri, &headers, b"") {
+        tracing::warn!("firmware download authentication failed: {err}");
+        if let Some(alert) = state.alert.as_ref() {
+            alert.record_auth_failure();
+        }
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+
+    let outcome = tokio::task::spawn_blocking(move || firmware::load(&state.firmware)).await;
+
+    match outcome {
+        Ok(Ok(image)) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+            image.bytes,
+        )
+            .into_response(),
+        Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, "firmware not found").into_response()
+        }
+        Ok(Err(err)) => {
+            tracing::error!("failed to read firmware: {err}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to read firmware").into_response()
+        }
+        Err(join_err) => {
+            tracing::error!("firmware download task failed: {join_err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "firmware download task failed",
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn reboot(
