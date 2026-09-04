@@ -42,11 +42,34 @@ Codex CLI は現在いずれの役割にも就いていません。セカンド�
 OpenCode:
 
 ```bash
-opencode run --dir <worktree> --auto -m opencode/muse-spark-1.3-contributor-free "<request>"
+bash scripts/run-agent.sh \
+  --model opencode/muse-spark-1.3-contributor-free \
+  --dir <worktree> \
+  --prompt-file <file>
 ```
 
-モデルは必ず `-m` で明示します。省略すると既定モデルで動き、結果が期待と違ったとき
+モデルは必ず `--model` で明示します。省略すると既定モデルで動き、結果が期待と違ったとき
 **どのモデルの出力なのか後から特定できません**。
+
+`opencode run` を直接叩かず、必ずこのラッパーを通してください。素の `opencode run` は
+タイムアウトを持たず、上流のレート制限で再試行が固まると**無限に待ちます**。
+`run-agent.sh` はログが伸びなくなったことを検知して数分で打ち切り、原因のエラー行を
+表示します。終了コード 2 が「停止検知による打ち切り」です。
+
+### 並列で走らせすぎない
+
+**同時に走らせるのは1本まで**にしてください。2026-09-05 に3本を並列で回したところ、
+プロバイダのレート制限(`rate_limit_exceeded`、ログに185回)を誘発し、
+2本が5時間ハングして成果0で終わりました。速く終わらせるつもりが逆効果になります。
+
+### 進捗の確認
+
+「プロセスが生きている」と「進んでいる」は別です。上の事故では `ps` 上は正常に見え、
+CPUも少し使っていました。確認するのは次の3つです。
+
+- `~/.local/share/opencode/log/opencode.log` の更新時刻
+- worktree のファイル変更 (`git status --short`)
+- CPU時間 (`ps -o etime,time`) — 経過時間に対して極端に小さければ待機している
 
 Codex CLI:
 
