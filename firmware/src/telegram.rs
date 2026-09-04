@@ -59,6 +59,15 @@ pub fn lock_power(power_lock: &PowerLock) -> std::sync::MutexGuard<'_, ()> {
     power_lock.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// UIスレッドへ共有するTelegram状態の排他を取る。poisonしていても排他は維持する。
+///
+/// このMutexが守るのは `State` 一つだけで、書きかけの壊れた状態を引き継ぐ心配が
+/// ない。ここで `unwrap()` すると、無関係なスレッドのpanicに巻き込まれてUIループや
+/// pollingスレッドごと落ち、端末が止まる。`lock_power` と同じ扱いにそろえる。
+pub fn lock_state(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
+    state.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// 操作ロック。有効な間はWAKE / REBOOT / SHUTDOWNを一切実行しない。
 /// Telegramの `/lock` `/unlock` で切り替え、本体パネル操作にも効く。
 ///
@@ -1203,7 +1212,7 @@ impl Client {
     pub fn run(mut self, state: Arc<Mutex<State>>) {
         if let Err(e) = ensure_root_ca() {
             println!("telegram: root CA install failed: {e}");
-            *state.lock().unwrap() = State::Error;
+            *lock_state(&state) = State::Error;
             return;
         }
 
@@ -1211,18 +1220,18 @@ impl Client {
         net::wait_for_time_sync(Duration::from_secs(10));
 
         let mut backoff = BACKOFF_MIN;
-        *state.lock().unwrap() = State::Polling;
+        *lock_state(&state) = State::Polling;
 
         loop {
             match self.poll_once() {
                 Ok(()) => {
                     backoff = BACKOFF_MIN;
-                    *state.lock().unwrap() = State::Polling;
+                    *lock_state(&state) = State::Polling;
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(e) => {
                     println!("telegram poll error: {e}");
-                    *state.lock().unwrap() = State::Error;
+                    *lock_state(&state) = State::Error;
                     std::thread::sleep(backoff);
                     backoff = (backoff * 2).min(BACKOFF_MAX);
                 }
