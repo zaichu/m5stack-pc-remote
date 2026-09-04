@@ -40,7 +40,7 @@ fn unix_now() -> Result<u64, Box<dyn Error>> {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     // NTP同期前の時計で署名しても、bridge側のtimestamp検証で弾かれる。
     // 送信前に止めた方が原因が分かりやすい。
-    if secs < crate::net::MIN_VALID_UNIX_TIME {
+    if !crate::net::is_ntp_synced(secs) {
         return Err("system clock is not NTP-synced yet".into());
     }
     Ok(secs)

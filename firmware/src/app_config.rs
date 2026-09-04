@@ -45,6 +45,14 @@ impl AppConfig {
             }
         }
 
+        if !(-12..=14).contains(&app_config.timezone_offset_hours) {
+            println!(
+                "timezone_offset_hours {} out of range -12..=14, fallback to 0",
+                app_config.timezone_offset_hours
+            );
+            app_config.timezone_offset_hours = 0;
+        }
+
         app_config
     }
 
@@ -101,19 +109,23 @@ impl AppConfig {
 fn replace<T>(nvs: &EspNvs<NvsDefault>, keys: &[&str], target: &mut T)
 where
     T: std::str::FromStr,
+    <T as std::str::FromStr>::Err: std::fmt::Debug,
 {
-    let found = keys
-        .iter()
-        .find_map(|key| read_string(nvs, key))
-        .and_then(|raw| raw.parse().ok());
-    if let Some(value) = found {
-        *target = value;
+    let raw_opt = keys.iter().find_map(|key| read_string(nvs, key));
+    if let Some(raw) = raw_opt {
+        match raw.parse() {
+            Ok(value) => *target = value,
+            Err(e) => println!("NVS {} parse failed: {e:?} (raw len {})", keys[0], raw.len()),
+        }
     }
 }
 
 fn read_string(nvs: &EspNvs<NvsDefault>, key: &str) -> Option<String> {
     let len = nvs.str_len(key).ok().flatten()?;
     if len == 0 || len > MAX_STRING_LEN {
+        if len > MAX_STRING_LEN {
+            println!("NVS {key} len {len} exceeds MAX_STRING_LEN {MAX_STRING_LEN}");
+        }
         return None;
     }
 

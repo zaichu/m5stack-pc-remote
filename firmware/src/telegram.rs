@@ -78,10 +78,12 @@ impl OperationLock {
 }
 
 pub fn is_configured(config: &AppConfig) -> bool {
-    !config.telegram_bot_token.is_empty()
-        && config.telegram_bot_token != PLACEHOLDER_TOKEN
-        && !config.telegram_allowed_user_id.is_empty()
-        && config.telegram_allowed_user_id != PLACEHOLDER_USER_ID
+    let token = config.telegram_bot_token.trim();
+    let user_id = config.telegram_allowed_user_id.trim();
+    !token.is_empty()
+        && token != PLACEHOLDER_TOKEN
+        && !user_id.is_empty()
+        && user_id != PLACEHOLDER_USER_ID
 }
 
 /// ピン留めしたルートCAをesp-tlsのglobal CA storeへ登録する。
@@ -344,7 +346,7 @@ impl DailyReport {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
             .as_secs() as i64;
-        if unix < net::MIN_VALID_UNIX_TIME as i64 {
+        if !net::is_ntp_synced(unix as u64) {
             return None;
         }
         let local = unix + config.timezone_offset_hours * 3600;

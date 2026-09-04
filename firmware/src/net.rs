@@ -14,6 +14,10 @@ use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configura
 /// 署名のtimestampと定期レポートの時刻判定で共通に使う。
 pub const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
 
+pub fn is_ntp_synced(now: u64) -> bool {
+    now >= MIN_VALID_UNIX_TIME
+}
+
 /// PCの死活確認に使うTCP接続タイムアウト。UI更新ループとTelegramの応答生成で
 /// 同じ値を使う。長くすると画面の更新周期とTelegramの応答が遅くなる。
 pub const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
@@ -171,7 +175,7 @@ pub fn wait_for_time_sync(timeout: Duration) -> bool {
     loop {
         let synced = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() >= MIN_VALID_UNIX_TIME)
+            .map(|d| is_ntp_synced(d.as_secs()))
             .unwrap_or(false);
         if synced {
             return true;
