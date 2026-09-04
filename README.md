@@ -110,7 +110,7 @@ Windows Serviceとして常駐させるには、管理者PowerShellで以下を�
 
 ## セットアップ: Telegram Bot (スマホ外部操作)
 
-賃貸無料回線などでルーターVPNを前提にできない場合、M5StackがTelegram Bot APIを外向きHTTPSでlong pollingし、スマホから `/status`、`/wake`、`/reboot`、`/shutdown` を操作できます。設計の詳細は [External Access Design](docs/external-access.md) を参照してください。
+賃貸無料回線などでルーターVPNを前提にできない場合、M5StackがTelegram Bot APIを外向きHTTPSでlong pollingし、スマホから `/status`、`/wake`、`/reboot`、`/shutdown`、`/update` を操作できます。設計の詳細は [External Access Design](docs/external-access.md) を参照してください。
 
 ### 1. BotFatherでbotを作る
 
@@ -156,6 +156,7 @@ bash scripts/telegram-set-commands.sh
 - `/wake`: PCへWake-on-LANを送信
 - `/reboot`: 確認後にPCを再起動
 - `/shutdown`: 確認後にPCをシャットダウン
+- `/update`: 確認後にfirmwareを更新
 - `/lock`: 電源操作を一時的に禁止
 - `/unlock`: `/lock` を解除
 
@@ -168,7 +169,8 @@ Telegramアプリから許可したuser idのアカウントで、bot宛てに�
 - `/status`: PCのONLINE/OFFLINE、Wi-Fi RSSI、M5Stack IPを返信します。
 - `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
  - `/reboot` / `/shutdown`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」または「シャットダウン」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を手入力しても構いません(後方互換)。nonceは `TELEGRAM_CONFIRM_TTL_SECS`（秒）の間だけ有効（既定 60秒）で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
-- `/lock` / `/unlock`: 旅行中などに誤操作・不正操作を防ぐため、電源操作を一時的に禁止します。ロック中は `/wake` `/reboot` `/shutdown` と確認ボタンをすべて拒否し、**M5Stack本体のタッチ操作も同様に拒否**します(画面に `LOCKED` と表示されます)。`/lock` `/unlock` `/status` はロック中でも受け付けます。ロック状態はメモリ上だけで保持するため、M5Stackを再起動すると解除されます。
+ - `/update`: manifestのversionとsizeを提示してから確認を求め、確定後にfirmwareを更新して自動で再起動します。新しいfirmwareは起動自己診断を通るまでvalidにならず、通らないまま再起動すると旧版へ戻ります。
+- `/lock` / `/unlock`: 旅行中などに誤操作・不正操作を防ぐため、電源操作を一時的に禁止します。ロック中は `/wake` `/reboot` `/shutdown` `/update` と確認ボタンをすべて拒否し、**M5Stack本体のタッチ操作も同様に拒否**します(画面に `LOCKED` と表示されます)。`/lock` `/unlock` `/status` はロック中でも受け付けます。ロック状態はメモリ上だけで保持するため、M5Stackを再起動すると解除されます。
 
 なお、次の出来事はこちらから操作しなくてもTelegramへ通知されます。
 

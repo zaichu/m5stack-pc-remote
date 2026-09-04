@@ -289,6 +289,41 @@ impl Default for StreamingSha256 {
     }
 }
 
+/// 起動自己診断で観測する信号。ハードウェアの読み取り自体はfirmware側で行い、
+/// 合否の判定式だけをここに置くことでhostの `cargo test` で検証できる。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BootChecks {
+    /// 画面の初期化と最初の描画が成功した。
+    pub display_ok: bool,
+    /// Wi-Fiに接続できた。
+    pub wifi_connected: bool,
+}
+
+/// 起動自己診断の合否。通ったときだけfirmwareは自分をvalidとマークする
+/// (`esp_ota_mark_app_valid_cancel_rollback` 相当)。
+///
+/// 判定はあえて甘め(この2条件だけ)に倒している。理由:
+/// - 主目的は「起動できない・すぐ落ちるfirmwareを旧slotへ戻す」ことであり、
+///   その検出には「main loopへ到達し、画面とWi-Fiが動いた」で十分。
+/// - bridge到達性やNTP同期はfirmwareの健全性信号ではない。PC OFFはこの端末に
+///   とって正常状態であり、bridge到達を要求すると正常なfirmwareが戻ってしまう。
+///   署名付きで叩けるbridgeの `/status` 相当API自体、いまは存在しない。
+/// - 起動するが一部不調のfirmwareが残るリスクはあるが、次回OTAで修復できるため
+///   brickではなく、厳しすぎて正常firmwareを戻す実害の方が大きい。
+pub fn boot_self_test_passed(checks: &BootChecks) -> bool {
+    checks.display_ok && checks.wifi_connected
+}
+
+/// `/update` 実行前にmanifestのversionとsizeを提示する確認文。
+/// version/sizeは公開情報でありsecretではない。sha256や署名は載せない
+/// (Telegramへの送信文に不要な情報を増やさない)。
+pub fn ota_confirm_text(version: &str, size: u64) -> String {
+    format!(
+        "firmware更新があります。\nversion: {version}\nsize: {size} bytes\n\
+         更新しますか？\nボタンを押すと開始します。完了すると自動で再起動します。"
+    )
+}
+
 /// manifestの各fieldが配信物としてあり得る値か。
 ///
 /// bridge側は `version` が無いときに `"unknown"` を入れるため空にはならない。
@@ -561,8 +596,9 @@ mod alert_throttle_tests {
 #[cfg(test)]
 mod ota_tests {
     use super::{
-        parse_manifest_json, sign_manifest, verify_manifest, verify_ota_image, OtaImageError,
-        OtaManifest, OtaManifestError, StreamingSha256,
+        boot_self_test_passed, ota_confirm_text, parse_manifest_json, sign_manifest,
+        verify_manifest, verify_ota_image, BootChecks, OtaImageError, OtaManifest, OtaManifestError,
+        StreamingSha256,
     };
 
     const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
@@ -764,5 +800,38 @@ mod ota_tests {
         let mut hashing = StreamingSha256::default();
         hashing.update(IMAGE);
         hashing.finish_hex()
+    }
+
+    #[test]
+    fn boot_self_test_needs_display_and_wifi() {
+        // 両方そろったときだけ通る。
+        assert!(boot_self_test_passed(&BootChecks {
+            display_ok: true,
+            wifi_connected: true,
+        }));
+        // 片方でも欠けたら通さない。壊れたfirmwareを居座らせない。
+        for checks in [
+            BootChecks {
+                display_ok: false,
+                wifi_connected: true,
+            },
+            BootChecks {
+                display_ok: true,
+                wifi_connected: false,
+            },
+            BootChecks {
+                display_ok: false,
+                wifi_connected: false,
+            },
+        ] {
+            assert!(!boot_self_test_passed(&checks), "{checks:?}");
+        }
+    }
+
+    #[test]
+    fn ota_confirm_text_shows_version_and_size() {
+        let text = ota_confirm_text(VERSION, SIZE);
+        assert!(text.contains(VERSION), "{text}");
+        assert!(text.contains(&SIZE.to_string()), "{text}");
     }
 }

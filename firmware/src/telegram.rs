@@ -3,7 +3,7 @@
 //
 // 守るべき挙動:
 //   - `from.id` が許可ユーザーIDと一致するupdateだけ処理する
-//   - /reboot と /shutdown は即実行せず、単回使用の確認nonceを発行する
+//   - /reboot と /shutdown と /update は即実行せず、単回使用の確認nonceを発行する
 //   - 確認は成功・失敗・期限切れのいずれでも消費し、再利用させない
 //   - 起動直後の最初のgetUpdates結果はoffset更新だけにし、オフライン中の古い命令を実行しない
 //   - bot tokenとメッセージ内容をログへ出さない
@@ -147,11 +147,15 @@ struct Api {
     config: Arc<AppConfig>,
 }
 
-/// 確認待ちの操作。電源操作(REBOOT/SHUTDOWN)と設定変更(/set_*)の両方が、
-/// 同じ「単回使用nonce付き確認」フローを共有する。同時に保留できるのは1件のみ。
+/// 確認待ちの操作。電源操作(REBOOT/SHUTDOWN)と設定変更(/set_*)とfirmware更新
+/// (/update)が、同じ「単回使用nonce付き確認」フローを共有する。同時に保留できるのは1件のみ。
 enum PendingKind {
     Power(PowerAction),
     Config(ConfigChange),
+    /// `/update` の確認。manifestの中身は保持しない。実行時は `run_ota_update` が
+    /// manifestを取得し直して署名検証するため、確認から確定までの差し替わりは
+    /// 検証をすり抜けない。pendingが証明するのは「TTL内の確定」だけ。
+    FirmwareUpdate,
 }
 
 impl PendingKind {
@@ -159,6 +163,7 @@ impl PendingKind {
         match self {
             PendingKind::Power(action) => action.label_ja().to_string(),
             PendingKind::Config(change) => change.label_ja().to_string(),
+            PendingKind::FirmwareUpdate => "firmware更新".to_string(),
         }
     }
 }
@@ -196,6 +201,7 @@ impl Callback {
 enum CallbackTarget {
     Power(PowerAction),
     Config,
+    FirmwareUpdate,
 }
 
 impl CallbackTarget {
@@ -205,6 +211,7 @@ impl CallbackTarget {
         match (self, kind) {
             (CallbackTarget::Power(a), PendingKind::Power(b)) => a == b,
             (CallbackTarget::Config, PendingKind::Config(_)) => true,
+            (CallbackTarget::FirmwareUpdate, PendingKind::FirmwareUpdate) => true,
             _ => false,
         }
     }
@@ -896,6 +903,101 @@ impl Client {
         self.api.send_message(chat_id, &reply);
     }
 
+    /// `/update`: manifestを取得・検証し、version/sizeを提示して確認を求める。
+    /// 無確認で更新はしない。`ALLOWED_WHILE_LOCKED` には入れないため、
+    /// ロック中は `dispatch_command` のdefault-denyで拒否される。
+    ///
+    /// この関数は `process_updates` から呼ばれる。`poll_once` がlong pollingの
+    /// HTTPS接続を閉じ切った後なので、ここで開くmanifest取得のplain HTTP接続は
+    /// 同時1本に収まる。取得した接続は関数内で閉じ、確認メッセージの送信は
+    /// その後に新しい接続で行う。
+    fn handle_update_command(&mut self, chat_id: i64) {
+        let pc_ip_address = self.settings.pc_ip_address();
+        let manifest =
+            match crate::ota::fetch_verified_manifest(self.config.as_ref(), &pc_ip_address) {
+                Ok(manifest) => manifest,
+                Err(e) => {
+                    println!("ota: manifest fetch failed: {e}");
+                    self.api
+                        .send_message(chat_id, "更新情報の取得に失敗しました。");
+                    return;
+                }
+            };
+        let nonce = Self::generate_nonce();
+        self.pending = Some(Pending {
+            kind: PendingKind::FirmwareUpdate,
+            nonce: nonce.clone(),
+            expires_at: Instant::now() + Duration::from_secs(self.config.telegram_confirm_ttl_secs),
+        });
+
+        let text = format!(
+            "{}\n手入力する場合: /confirm_update {nonce}",
+            pc_remote_signing::ota_confirm_text(&manifest.version, manifest.size)
+        );
+        let confirm_data = format!("confirm:update:{nonce}");
+        let cancel_data = format!("cancel:update:{nonce}");
+        self.api.send_message_with_confirm_buttons(
+            chat_id,
+            &text,
+            "更新",
+            &confirm_data,
+            &cancel_data,
+        );
+    }
+
+    /// `/confirm_update <nonce>` の手入力フォールバック。ボタンが押せない場合に使う。
+    fn handle_update_confirmation(&mut self, chat_id: i64, supplied: &str) {
+        let confirmed = self
+            .consume_pending(supplied)
+            .is_some_and(|kind| matches!(kind, PendingKind::FirmwareUpdate));
+        if !confirmed {
+            self.api.send_message(
+                chat_id,
+                "有効な更新確認がありません。期限切れ、使用済み、またはnonce不一致です。\
+                 \nもう一度 /update から実行してください。",
+            );
+            return;
+        }
+        self.execute_ota_update(chat_id);
+    }
+
+    /// 確認済みのfirmware更新を開始する。
+    ///
+    /// 呼び出し時点でTelegram long pollingのHTTPS接続は閉じていること
+    /// (`poll_once` が接続ブロックを抜け、`process_updates` 経由で呼ばれている)。
+    /// 開始通知の `send_message` も接続を開いて閉じ切るため、この関数が
+    /// `run_ota_update` を呼ぶ瞬間には開いている接続が無い。ヒープ制約の詳細は
+    /// `ota.rs` の冒頭コメントを参照。
+    /// 成功時はrebootして戻らない。失敗時だけ結果文を送る。
+    fn execute_ota_update(&self, chat_id: i64) {
+        if chat_id != 0 {
+            self.api.send_message(
+                chat_id,
+                "firmware更新を開始します。完了すると自動で再起動します。",
+            );
+        }
+        let result = self.run_ota_update();
+        if chat_id != 0 {
+            self.api.send_message(chat_id, &result);
+        }
+    }
+
+    /// 電源操作ロックを取り、OTAを実行する。成功時は `restart()` で戻らない。
+    fn run_ota_update(&self) -> String {
+        let _guard = lock_power(&self.power_lock);
+        let pc_ip_address = self.settings.pc_ip_address();
+        match crate::ota::run_ota_update(self.config.as_ref(), &pc_ip_address) {
+            // 成功時は `restart()` で戻らないため、ここへは来ない。防御的に残す。
+            Ok(()) => "更新が完了しました。再起動します。".to_string(),
+            Err(e) => {
+                // 詳細(espのエラー文言を含む)はシリアルログにだけ残し、Telegramへは
+                // 接続先が混ざらない固定ラベルを返す。`user_message` のコメント参照。
+                println!("ota: update failed: {e}");
+                format!("firmware更新に失敗しました。\n{}", e.user_message())
+            }
+        }
+    }
+
     fn dispatch_command(&mut self, chat_id: i64, command: &str, args: &str) {
         // ロック中に通すコマンドだけを列挙する(default-deny)。
         //
@@ -946,6 +1048,8 @@ impl Client {
             "/shutdown" => self.request_confirmation(chat_id, PowerAction::Shutdown),
             "/confirm_reboot" => self.handle_confirmation(chat_id, PowerAction::Reboot, args),
             "/confirm_shutdown" => self.handle_confirmation(chat_id, PowerAction::Shutdown, args),
+            "/update" => self.handle_update_command(chat_id),
+            "/confirm_update" => self.handle_update_confirmation(chat_id, args),
             "/set_ip" => self.handle_set_command(chat_id, SettingKind::PcIp, args),
             "/set_status_addr" => self.handle_set_command(chat_id, SettingKind::StatusAddr, args),
             "/set_wol_port" => self.handle_set_command(chat_id, SettingKind::WolPort, args),
@@ -960,6 +1064,8 @@ impl Client {
         fn decision(confirm: bool, target: &str, nonce: &str) -> Option<Callback> {
             let target = if target == "config" {
                 CallbackTarget::Config
+            } else if target == "update" {
+                CallbackTarget::FirmwareUpdate
             } else {
                 CallbackTarget::Power(PowerAction::from_slug(target)?)
             };
@@ -1081,6 +1187,15 @@ impl Client {
         let result = match kind {
             PendingKind::Power(action) => self.run_power_action(action),
             PendingKind::Config(change) => self.apply_config_change(&change),
+            PendingKind::FirmwareUpdate => {
+                // OTAはrebootを伴うため、通常の「結果をanswer+送信」とは別経路にする。
+                // 先に開始をanswerして接続を閉じてから `execute_ota_update` へ渡す。
+                // ヒープ制約(long polling接続を開いたままOTAを呼ばない)の詳細は
+                // `ota.rs` の冒頭コメントと `poll_once` 内のコメントを参照。
+                self.api.answer_callback_query(&id, "更新を開始します");
+                self.execute_ota_update(chat_id);
+                return;
+            }
         };
         self.api.answer_callback_query(&id, &result);
         if chat_id != 0 {

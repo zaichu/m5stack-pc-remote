@@ -224,8 +224,8 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
 - **REBOOT / SHUTDOWN**(`src/bridge_client.rs`): m5stack-pc-bridgeへのHMAC-SHA256署名付きPOST（wire protocol は `shared/pc-remote-signing/src/lib.rs` を正本とする）。本文 `{"confirm":true}` 必須をC++版と揃えてある。NTP未同期のクロックでは送信前に弾く。
   画面上はPCがONLINEのときだけボタンが出て、確認画面(CANCEL/OK)を必ず経由する。
 - **Telegram連携**(`src/telegram.rs`): Bot APIへのアウトバウンドHTTPS long polling。
-  `/status` `/wake` `/reboot` `/shutdown` `/confirm_reboot <nonce>`
-  `/confirm_shutdown <nonce>` とインラインキーボードによる確認。`from.id` が
+  `/status` `/wake` `/reboot` `/shutdown` `/update` `/confirm_reboot <nonce>`
+  `/confirm_shutdown <nonce>` `/confirm_update <nonce>` とインラインキーボードによる確認。`from.id` が
   `TELEGRAM_ALLOWED_USER_ID` と一致しない更新は実行しない。確認nonceは単回使用・TTL付きで、
   一致・不一致・期限切れのいずれでも消費する。起動後の最初のバッチはoffsetを進めるだけで
   実行しない。TLSはルートCAをピン留めして検証する(`src/telegram_root_ca.rs`、

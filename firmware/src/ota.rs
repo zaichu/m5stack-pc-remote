@@ -1,7 +1,10 @@
 // OTA Phase 3 クライアント: manifest取得 → 署名検証 → 非activeスロットへ書込 → reboot。
+// 起動自己診断とvalidマーク (Phase 4) もこのmoduleが受け持つ。
 //
-// 公開関数 `run_ota_update` を Phase 4 (トリガー: UI / Telegram) から呼ぶ。
-// UIやTelegramコマンドからの起動は本Phaseの範囲外のため実装しない。
+// 公開関数:
+//   - `run_ota_update`: Telegram `/update` の確認後に呼ぶ (Phase 4で配線済み)。
+//   - `fetch_verified_manifest`: `/update` が確認前にversion/sizeを提示するための取得。
+//   - `mark_app_valid_after_self_test`: 起動自己診断の通過時にだけvalidマークする。
 //
 // ## 接続とヒープの制約 (必読)
 //
@@ -41,7 +44,7 @@
 // `sdkconfig.defaults` の `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` により、
 // `complete()` でboot partitionを切り替えても新slotはpending扱いのままで、
 // 起動後に自分をvalidとマークしない限り再起動時に旧slotへ戻る。
-// そのvalidマーク (起動自己診断) は Phase 4 の担当で、本Phaseでは行わない。
+// validマークは `mark_app_valid_after_self_test` が起動自己診断の通過時にだけ行う。
 //
 // ## 純粋関数とテスト
 //
@@ -49,12 +52,7 @@
 // ハードウェアに依存しないため `pc-remote-signing` に置き、hostでテストしている
 // (`cargo test --manifest-path shared/pc-remote-signing/Cargo.toml` の `ota_tests`)。
 // このmoduleはESP-IDF上でのHTTP取得とOTA slot操作だけを受け持つ。
-
-// Phase 3では「呼べる状態」までを作り、トリガーの配線はPhase 4で行う。それまで
-// `run_ota_update` を呼ぶ箇所が無く、firmwareビルドでdead_code警告が12件出て
-// 新しい警告を埋もれさせるため、このmoduleに限って抑制する。
-// **Phase 4でトリガーを配線したらこの allow を外すこと。**
-#![allow(dead_code)]
+// Phase 4でTelegram `/update` へ配線したため、dead_code抑制は外してある。
 
 use std::error::Error;
 use std::fmt;
@@ -66,7 +64,7 @@ use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConne
 use esp_idf_svc::ota::EspOta;
 
 use pc_remote_signing::{
-    parse_manifest_json, verify_manifest, verify_ota_image, OtaImageError, OtaManifest,
+    parse_manifest_json, verify_manifest, verify_ota_image, BootChecks, OtaImageError, OtaManifest,
     OtaManifestError, StreamingSha256,
 };
 
@@ -111,6 +109,37 @@ pub enum OtaError {
     Image(OtaImageError),
     /// OTA slot操作 (`EspOta`) の失敗。値はespのエラー文言のみ。
     Ota(String),
+}
+
+impl OtaError {
+    /// Telegramへ返す文言。`Display` と分けているのは、`Transport` / `Ota` が
+    /// 抱えるespのエラー文言に接続先(bridgeのLAN IP)が混ざる可能性があり、
+    /// 生の文字列を外へ出したくないため。詳細はシリアルログ側にだけ残す。
+    ///
+    /// ここで埋め込んでよいのは、`endpoint` のような固定ラベルと `status` の
+    /// 数値だけにすること。
+    pub fn user_message(&self) -> String {
+        match self {
+            OtaError::ClockNotSynced => {
+                "時刻同期がまだ完了していません。少し待ってからやり直してください。".to_string()
+            }
+            OtaError::Transport(_) => {
+                "PCへの接続に失敗しました。PCが起動しbridgeが動いているか確認してください。"
+                    .to_string()
+            }
+            OtaError::UnexpectedStatus { endpoint, status } => {
+                format!("PCが {endpoint} に {status} を返しました。")
+            }
+            OtaError::ResponseTooLarge => "manifestが大きすぎます。".to_string(),
+            OtaError::Manifest(_) => {
+                "manifestの検証に失敗しました。配信中のfirmwareを確認してください。".to_string()
+            }
+            OtaError::Image(_) => {
+                "ダウンロードしたfirmwareが壊れています。更新は中止しました。".to_string()
+            }
+            OtaError::Ota(_) => "firmwareの書き込みに失敗しました。更新は中止しました。".to_string(),
+        }
+    }
 }
 
 impl fmt::Display for OtaError {
@@ -163,17 +192,54 @@ impl From<OtaImageError> for OtaError {
 /// `pc_ip_address` はTelegram経由で実行時に変更できるため、`AppConfig` ではなく
 /// 呼び出し側から都度渡してもらう (`bridge_client::send_command` と同じ扱い)。
 pub fn run_ota_update(config: &AppConfig, pc_ip_address: &str) -> Result<(), OtaError> {
-    let manifest = fetch_manifest(config, pc_ip_address)?;
+    let manifest = fetch_verified_manifest(config, pc_ip_address)?;
     download_and_flash(&manifest, config, pc_ip_address)?;
     println!("ota: update complete, rebooting");
     esp_idf_svc::hal::reset::restart()
 }
 
+/// 起動自己診断を通ったときだけ実行中アプリをvalidとマークする。
+/// main loopからWi-Fi接続中に定期的に呼ぶ。クラッシュループするfirmwareは
+/// ここへ届かないため、そのままではvalidにならず次回起動で旧slotへ戻る。
+///
+/// `checks` の合否は `pc_remote_signing::boot_self_test_passed` が決める
+/// (判定式はhostでテストしている)。通らなかったら何もせず `Ok(false)` を返す。
+/// 自己診断が失敗しうる経路で無条件にマークすると、壊れたfirmwareが居座るため、
+/// この関数の外側で条件を緩めて呼ばないこと。
+///
+/// pendingでない通常起動で呼んでも無害である。ESP-IDF v5.3.2 の
+/// `esp_ota_mark_app_valid_cancel_rollback` は内部で
+/// `esp_ota_current_ota_is_workable(true)` を呼び、実行中slotのstateがすでに
+/// `VALID` のときはotadataへ書き込まず `ESP_OK` を返す(未pending時のno-op)。
+/// 初回USB書き込み直後などotadata自体が無効な場合は `ESP_FAIL` が返るが、
+/// その場合は次回起動時に再試行すればよく、呼び出し側はpanicせずログに留めること。
+/// いずれの失敗も「次回起動で旧slotへ戻る」方向であり、実機をbrickしない。
+///
+/// 戻り値の `bool` は「今回validマークを試みたか」(自己診断の通過=true)。
+/// マーク自体の成否は `Result` で返す。
+pub fn mark_app_valid_after_self_test(checks: &BootChecks) -> Result<bool, String> {
+    if !pc_remote_signing::boot_self_test_passed(checks) {
+        return Ok(false);
+    }
+    let mut ota = EspOta::new().map_err(|e| e.to_string())?;
+    ota.mark_running_slot_valid().map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// 署名付き `GET /firmware/manifest` でmanifestを取得・検証する。
+///
+/// `run_ota_update` の前段と、Telegram `/update` が確認前にversion/sizeを
+/// 提示するための取得で共有する。確認時の表示と実行時の検証が同じ関数を
+/// 通るため、表示と検証の食い違いが起きない。
+/// (実行時は `run_ota_update` が改めて取得し直す。確認から確定までの間に
+/// manifestが差し替わっても、検証を通ったものだけを書き込む。)
 ///
 /// HTTP接続はこの関数内の `{}` スコープで閉じ切る。パースと署名検証は
 /// 接続を持たない状態で行い、検証失敗時はバイナリ取得へ進まない。
-fn fetch_manifest(config: &AppConfig, pc_ip_address: &str) -> Result<OtaManifest, OtaError> {
+pub fn fetch_verified_manifest(
+    config: &AppConfig,
+    pc_ip_address: &str,
+) -> Result<OtaManifest, OtaError> {
     // HTTP接続は `with_signed_get` の中で閉じ切る。パースと署名検証は
     // 接続を持たない状態で行い、検証失敗時はバイナリ取得へ進まない。
     let body = with_signed_get(
@@ -216,7 +282,7 @@ fn fetch_manifest(config: &AppConfig, pc_ip_address: &str) -> Result<OtaManifest
 
 /// 署名検証済みのmanifestだけを受け取り、バイナリを非activeスロットへ書く。
 ///
-/// `manifest` は必ず `fetch_manifest` で検証済みのものを渡すこと。
+/// `manifest` は必ず `fetch_verified_manifest` で検証済みのものを渡すこと。
 /// 未検証のmanifestで呼ぶと、攻撃者の用意したimageを書き込みかねない。
 /// HTTP接続は `{}` スコープで閉じ切り、突き合わせは接続を持たない状態で行う。
 /// size/sha256のどちらかが不一致なら `complete` せずに抜ける:
