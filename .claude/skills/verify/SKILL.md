@@ -21,6 +21,7 @@ make check
 - `bash scripts/check-staged-secret-paths.sh`
 - `bash scripts/scan-secrets.sh` — gitleaks があれば git履歴を含めて走査し、無ければ既知パターンの fallback（CI では gitleaks 必須）
 - `python3 scripts/config_keys.py check` — firmware設定キー対応を `firmware/build.rs` と `firmware/src/app_config.rs` から導出し、`firmware/README.md` のNVS対応表と突合する
+- `bash scripts/check-agent-roles.sh` — エージェントの役割割り当てが `docs/agent-roles.md` の外へ複製されていないか検査する
 - `cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml --check`
 - `cargo clippy --manifest-path m5stack-pc-bridge/Cargo.toml --all-targets -- -D warnings`
 - `cargo test --manifest-path m5stack-pc-bridge/Cargo.toml`（`shared/pc-remote-signing` は `make test` で明示的に実行）
