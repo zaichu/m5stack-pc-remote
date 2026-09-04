@@ -2,3 +2,25 @@ title = "m5stack-pc-remote gitleaks config"
 
 [extend]
 useDefault = true
+
+# allowlist は「値そのもの」でだけ絞る。
+#
+# `paths` を併記すると condition = "AND" を指定してもパス配下が丸ごと除外され、
+# テストへ実値を貼った事故を検出できなくなる(gitleaks 8.30 で実測)。
+# ダミー値のリテラルだけを許可すれば、テストディレクトリの中でも
+# 本物らしいsecretは従来どおり検出される。
+
+[[allowlists]]
+description = """
+テストfixtureのダミーshared_secret。実値ではない。
+shared_secret の長さ要件(32文字以上)を満たすためだけの値だが、
+既定ルールの generic-api-key がエントロピーではなく形状で拾ってしまう。
+"""
+regexes = ['''0123456789abcdef0123456789abcdef''']
+
+[[allowlists]]
+description = """
+テンプレートのplaceholder。AGENTS.md が replace-with-* を明示的な
+ダミー表記として定めているため、ここに実値が入ることはない。
+"""
+regexes = ['''replace-with-[a-z0-9-]+''']
