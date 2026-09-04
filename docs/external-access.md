@@ -67,9 +67,7 @@ M5Stackが `getUpdates` を定期実行またはlong pollingし、許可ユー�
 
 Telegramの `from.id` をallow-listします。
 
-```cpp
-#define TELEGRAM_ALLOWED_USER_ID "123456789"
-```
+`firmware/config.toml` の `telegram_allowed_user_id` に自分の数値user id（例: `123456789`）を書きます（`firmware/config.example.toml` 参照）。
 
 許可ユーザー以外のupdateは無視し、返信もしません。Bot tokenが漏れた場合はBotFatherで即時revokeします。
 
@@ -86,6 +84,8 @@ M5Stackのローカル設定に以下を追加します。
 - `BRIDGE_SHARED_SECRET`: M5Stackとm5stack-pc-bridgeの間だけで使う。
 
 Telegramや外部中継先には `BRIDGE_SHARED_SECRET` を渡しません。
+m5stack-pc-bridge側に同じbot tokenを置く条件付き許容については
+[Security](security.md)の「認証失敗アラートとbridge側のbot token」を参照してください。
 
 ## STATUS
 

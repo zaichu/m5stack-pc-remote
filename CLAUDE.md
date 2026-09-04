@@ -4,16 +4,19 @@ Claude Code がこのリポジトリで作業する際のルールです。詳�
 
 ## 役割分担
 
-このプロジェクトの標準運用は「実装を担当しないエージェントが設計・レビュー・リリース判断を持つ」です。特定のモデル名には固定しません。現在の割り当ては `.claude/skills/design-implementation-handoff/SKILL.md` の「現在の割り当て」節が正本で、今は Claude Code が実装エージェント、Codex CLI が設計・レビューエージェントです。割り当てが変わったらそのスキルの節だけ書き換えます。
+**誰がどの役割かは [docs/agent-roles.md](docs/agent-roles.md) が唯一の正本です。**
+割り当ては頻繁に変わるため、ここには書きません。作業開始前に必ず読んでください。
+
+役割によらず守るルール:
 
 - 大きな技術選定、認証方式、外部操作経路、Windowsサービス化方針は設計エージェントのレビューを前提にする。
-- 実装エージェント(現在: Claude)は実装、テスト、ドキュメント更新、明示パスでの staging、作業branchへのpush、PR作成を担当する。
-- 実装エージェントは main へ直接pushしない。PRをmergeしない。Windows PCの実 shutdown/reboot や外部公開設定変更を勝手に実行しない。
-- 設計エージェントが直接書いた実質的な差分は、`.claude/skills/design-implementation-handoff/SKILL.md` の逆レビュー対象にする。
+- 実装エージェントは main へ直接pushしない。自分の実装を自分でmergeしない。Windows PCの実 shutdown/reboot や外部公開設定変更を勝手に実行しない。
+- 統合エージェントはPRのmerge判断とmerge実行を担当する。ただし Issue に実機確認などのmerge前提条件が書かれている場合はそれに従う。
+- 設計エージェントが直接書いた実質的な差分は、実装した本人以外による逆レビュー対象にする。
 
 ## 複数エージェントの同時作業
 
-Claude Code、Codex CLI、OpenCode等、複数のAIエージェントが同時にこのリポジトリで作業することがあります。Issueの重複着手や、git状態の衝突(あるエージェントのbranch切り替え/stashが別エージェントの未commit変更を壊す)を防ぐ手順は `.claude/skills/parallel-agent-coordination/SKILL.md` を正本にします。作業開始前に必ず参照してください。
+複数のAIエージェントが同時にこのリポジトリで作業することがあります。Issueの重複着手や、git状態の衝突(あるエージェントのbranch切り替え/stashが別エージェントの未commit変更を壊す)を防ぐ手順は `.claude/skills/parallel-agent-coordination/SKILL.md` を正本にします。作業開始前に必ず参照してください。
 
 ## 品質ゲート
 

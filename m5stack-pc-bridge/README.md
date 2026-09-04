@@ -131,9 +131,38 @@ Stop-Service M5StackPcBridge
 - 読み取り専用ですが電源操作と同じHMACリクエスト認証(`X-Timestamp`、
   `X-Nonce`、`X-Signature`、本文は空)を要求します。LAN内だからという理由で
   無認証APIを増やさない方針(AGENTS.md)のためです。電源操作の権限は渡しません。
-- 配置例(`%ProgramData%\m5stack-pc-bridge\` へ `m5stack-pc-bridge.exe` と一緒に置く):
+### `firmware.bin` の作り方
+
+`make firmware-build` が作るのはELFと `bootloader.bin` / `partition-table.bin` だけで、
+ここで配信するアプリイメージは含まれません。次で生成します。
+
+```bash
+make firmware-build
+make firmware-package
+```
+
+`firmware/dist/firmware.bin` と `firmware/dist/firmware.version` ができ、`sha256` が
+表示されます。この値は bridge が返す manifest の `sha256` と一致します。
+
+`scripts/package-firmware.sh` は `espflash save-image`(`--merge` なし = アプリイメージ
+単体)を使い、次を正本から取ります。値を固定で書かないのは、片方だけ変えたときに
+静かに食い違うためです。
+
+- flash size: `firmware/sdkconfig.defaults` の `CONFIG_ESPTOOLPY_FLASHSIZE_*MB`。
+  省くと espflash は4MB想定でヘッダを書き、実機(16MB)と食い違うイメージになります。
+- パーティション: `firmware/partitions.csv`。渡さないと `ota_0`(2M)に収まるかを
+  実サイズで検査できません。
+- version: `firmware/Cargo.toml` の `version`。
+
+生成後に先頭バイトが `0xE9`(ESP32アプリイメージのmagic)であることも検査します。
+ELFやマージ済みイメージを誤って配信すると、実機は書き込んだ後の起動で初めて失敗
+するためです。
+
+### 配置
+
+`%ProgramData%\m5stack-pc-bridge\` へ `m5stack-pc-bridge.exe` と一緒に置きます。
 
 ```powershell
 Copy-Item .\firmware.bin "$env:ProgramData\m5stack-pc-bridge\firmware.bin"
-"0.2.0" | Out-File -Encoding ascii "$env:ProgramData\m5stack-pc-bridge\firmware.version"
+Copy-Item .\firmware.version "$env:ProgramData\m5stack-pc-bridge\firmware.version"
 ```

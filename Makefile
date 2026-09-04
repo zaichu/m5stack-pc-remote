@@ -1,6 +1,6 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-windows-build agent-check \
-	firmware-build firmware-nvs-image \
-	config-key-check pr-issue-link-check secret-path-check secret-scan shell-syntax-check diff-check check git-pre-commit git-pre-push
+	firmware-build firmware-nvs-image firmware-package \
+	config-key-check agent-roles-check docs-consistency-check pr-issue-link-check secret-path-check secret-scan shell-syntax-check diff-check check git-pre-commit git-pre-push
 
 install: install-hooks
 
@@ -45,8 +45,25 @@ firmware-build:
 firmware-nvs-image:
 	python3 ./scripts/provision-firmware-nvs.py
 
+# OTA配信用のアプリイメージを firmware/dist/ へ生成する。firmware-build が作るのは
+# ELFだけで、bridgeが配信する firmware.bin は別途この変換が要る。
+# `check` へは入れない(espflashが必須で、OTA配信を行う端末でだけ使うため)。
+firmware-package:
+	bash ./scripts/package-firmware.sh
+
 config-key-check:
 	python3 ./scripts/config_keys.py check
+
+# 役割の割り当てが docs/agent-roles.md の外へ複製されていないか検査する。
+# 担当が頻繁に変わるため、複製があると片方だけ古くなって実態とずれる。
+agent-roles-check:
+	bash ./scripts/check-agent-roles.sh
+
+# ドキュメントの記述が実装と食い違っていないか検査する。
+# NVS sizeのように、誤ったまま手順を実行すると実機を壊す記述があるため、
+# 人手のレビューではなくCIで止める。
+docs-consistency-check:
+	bash ./scripts/check-docs-consistency.sh
 
 pr-issue-link-check:
 	bash ./scripts/check-pr-issue-link.sh
@@ -74,7 +91,7 @@ shell-syntax-check:
 		echo "WARNING: shellcheck not found; skipping lint (bash -n only)."; \
 	fi
 
-check: diff-check secret-path-check secret-scan config-key-check shell-syntax-check agent-check firmware-build
+check: diff-check secret-path-check secret-scan config-key-check agent-roles-check docs-consistency-check shell-syntax-check agent-check firmware-build
 
 git-pre-commit: fmt-check secret-path-check diff-check
 

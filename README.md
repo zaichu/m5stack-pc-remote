@@ -78,7 +78,7 @@ make firmware-nvs-image
 python3 scripts/provision-firmware-nvs.py --write --yes --port /dev/ttyUSB0
 ```
 
-現行partition tableではNVSは offset `0x9000`、size `0x6000` です（`firmware/sdkconfig.defaults` の partition 定義を参照）。`--size` は `4096` の倍数で指定してください。partition tableを変えた場合は `--offset` と `--size` を指定してください。
+現行partition tableではNVSは offset `0x9000`、size `0x4000` です（`firmware/partitions.csv` の partition 定義を参照）。`--size` は `4096` の倍数で指定してください。partition tableを変えた場合は `--offset` と `--size` を指定してください。
 
 ## セットアップ: m5stack-pc-bridge (Windows側)
 
@@ -126,25 +126,25 @@ Windows Serviceとして常駐させるには、管理者PowerShellで以下を�
    curl https://api.telegram.org/bot<token>/getUpdates | jq .result[0].message.from.id
    ```
 
-   `TELEGRAM_BOT_TOKEN` を環境変数に設定している場合は `scripts/telegram-set-commands.sh` が `setMyCommands` を登録します。
+   `<token>` には手順1で控えたbot tokenを入れます。tokenの置き場所は手順3の `firmware/config.toml` が正本です（環境変数は使いません。`scripts/telegram-set-commands.sh` は `firmware/config.toml` の `telegram_bot_token` だけを読みます）。
 2. 数値のuser id (`123456789` のような形式) を控える。
 
 ### 3. Rust firmwareの `config.toml` に設定する
 
-`firmware/config.toml` の以下を placeholder から変更します。
+`firmware/config.toml` の以下を placeholder（`firmware/config.example.toml` と同じ値）から変更します。
 
 ```toml
-telegram_bot_token = "123456789:your-real-bot-token"
-telegram_allowed_user_id = "123456789"
+telegram_bot_token = "replace-with-your-telegram-bot-token"
+telegram_allowed_user_id = "replace-with-your-telegram-user-id"
 telegram_long_poll_timeout_seconds = 20
 telegram_confirm_ttl_secs = 60
 ```
 
-`TELEGRAM_ALLOWED_USER_ID` と一致しない `from.id` からのメッセージはすべて無視され、返信もされません。`TELEGRAM_BOT_TOKEN` はm5stack-pc-bridge用の `BRIDGE_SHARED_SECRET` とは別の秘密情報で、m5stack-pc-bridgeへは一切渡りません。
+`telegram_allowed_user_id` と一致しない `from.id` からのメッセージはすべて無視され、返信もされません。`telegram_bot_token` はm5stack-pc-bridge用の `bridge_shared_secret` とは別の秘密情報で、Telegramや外部中継先へ `bridge_shared_secret` を渡しません。m5stack-pc-bridge側へ同じbot tokenを置くのは、HTTP認証失敗アラート（3件で通知、最短送信間隔1時間）のためだけに条件付きで許容しています（詳細とリスク評価は [Security](docs/security.md) の「認証失敗アラートとbridge側のbot token」を参照）。
 
 ### 4. Telegramのコマンド候補を登録する
 
-Telegramアプリで `/` を入力したときに候補一覧を出すには、Bot APIの `setMyCommands` でbot側へコマンドを登録します。`TELEGRAM_BOT_TOKEN` 設定後に以下を実行してください。
+Telegramアプリで `/` を入力したときに候補一覧を出すには、Bot APIの `setMyCommands` でbot側へコマンドを登録します。`firmware/config.toml` の `telegram_bot_token` 設定後に以下を実行してください。
 
 ```bash
 bash scripts/telegram-set-commands.sh
@@ -157,8 +157,9 @@ bash scripts/telegram-set-commands.sh
 - `/reboot`: 確認後にPCを再起動
 - `/shutdown`: 確認後にPCをシャットダウン
 - `/update`: 確認後にfirmwareを更新
-- `/lock`: 電源操作を一時的に禁止
-- `/unlock`: `/lock` を解除
+- `/settings`: 設定の現在値と変更・ロック操作
+
+`/lock`・`/unlock`・`/set_ip`・`/confirm_reboot`・`/confirm_update` などもbotへのメッセージとしては有効ですが、一覧には登録されません（日常操作の入口を `/settings` に集約するため。意図的な除外の一覧は `scripts/telegram-set-commands.sh` 先頭のコメントを参照）。
 
 ### 5. 実行方法
 
@@ -168,7 +169,7 @@ Telegramアプリから許可したuser idのアカウントで、bot宛てに�
 
 - `/status`: PCのONLINE/OFFLINE、Wi-Fi RSSI、M5Stack IPを返信します。
 - `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
- - `/reboot` / `/shutdown`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」または「シャットダウン」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を手入力しても構いません(後方互換)。nonceは `TELEGRAM_CONFIRM_TTL_SECS`（秒）の間だけ有効（既定 60秒）で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
+ - `/reboot` / `/shutdown`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」または「シャットダウン」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を手入力しても構いません(後方互換)。nonceは `telegram_confirm_ttl_secs`（秒）の間だけ有効（既定 60秒）で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
  - `/update`: manifestのversionとsizeを提示してから確認を求め、確定後にfirmwareを更新して自動で再起動します。新しいfirmwareは起動自己診断を通るまでvalidにならず、通らないまま再起動すると旧版へ戻ります。
 - `/lock` / `/unlock`: 旅行中などに誤操作・不正操作を防ぐため、電源操作を一時的に禁止します。ロック中は `/wake` `/reboot` `/shutdown` `/update` と確認ボタンをすべて拒否し、**M5Stack本体のタッチ操作も同様に拒否**します(画面に `LOCKED` と表示されます)。`/lock` `/unlock` `/status` はロック中でも受け付けます。ロック状態はメモリ上だけで保持するため、M5Stackを再起動すると解除されます。
 

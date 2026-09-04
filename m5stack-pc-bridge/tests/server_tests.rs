@@ -135,3 +135,60 @@ async fn shutdown_rejects_replayed_nonce() {
         .unwrap();
     assert_eq!(second.status(), StatusCode::UNAUTHORIZED);
 }
+
+/// `/reboot` 用の署名を `/shutdown` へ転用すると401になること。
+/// canonical string に PATH が含まれることをエンドポイント越しに守る。
+#[tokio::test]
+async fn shutdown_rejects_signature_made_for_reboot() {
+    let app = router(config());
+    let body = r#"{"confirm":true}"#;
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+    let nonce = "server-nonce-reuse-path";
+    let secret = b"local-development-secret";
+    let signature = sign_request(secret, "POST", "/reboot", timestamp, nonce, body.as_bytes());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/shutdown")
+                .header("content-type", "application/json")
+                .header("x-timestamp", timestamp.to_string())
+                .header("x-nonce", nonce)
+                .header("x-signature", signature)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// POST 用の署名を `GET /firmware` へ転用すると401になること。
+/// 同一パス(`/firmware`)でメソッドだけを変えるため、canonical string に
+/// METHOD が含まれることを分離して守る。
+#[tokio::test]
+async fn firmware_rejects_post_signature_for_get() {
+    let app = router(config());
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+    let nonce = "server-nonce-reuse-method";
+    let secret = b"local-development-secret";
+    let signature = sign_request(secret, "POST", "/firmware", timestamp, nonce, b"");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/firmware")
+                .header("x-timestamp", timestamp.to_string())
+                .header("x-nonce", nonce)
+                .header("x-signature", signature)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}

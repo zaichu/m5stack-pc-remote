@@ -1,6 +1,6 @@
 ---
 name: parallel-agent-coordination
-description: Use when multiple AI coding agents (Claude Code, Codex CLI, OpenCode, etc.) may work on m5stack-pc-remote at the same time, to claim work without duplicating it and to isolate git state so agents don't corrupt each other's uncommitted changes.
+description: Use when multiple AI coding agents may work on m5stack-pc-remote at the same time, to claim work without duplicating it and to isolate git state so agents don't corrupt each other's uncommitted changes.
 ---
 
 # Parallel Agent Coordination
@@ -12,19 +12,17 @@ description: Use when multiple AI coding agents (Claude Code, Codex CLI, OpenCod
 1. 同じIssue/作業を複数エージェントが重複して進めない。
 2. あるエージェントのgit操作(branch切り替え、stash等)が、別エージェントの未commit作業を壊さない。
 
-## 現在アクティブなエージェント
+## 誰が動いているか
 
-このリポジトリで動き得るエージェントの一覧。増減したらここだけ書き換える(個々のルールにエージェント名を書かない)。
+このリポジトリで動き得るエージェントと、それぞれの役割は `docs/agent-roles.md` が
+唯一の正本。増減や担当変更はあのファイルだけを書き換える。
 
-- Claude Code
-- Codex CLI
-- OpenCode
-
-設計/実装の役割分担(誰が設計しレビューし、誰が実装するか)は `.claude/skills/design-implementation-handoff/SKILL.md` の「現在の割り当て」節を正本にする。このスキルは「役割」ではなく「同時実行時に踏まないための手続き」を扱う。
+このスキルは「役割」ではなく「同時実行時に踏まないための手続き」を扱うため、
+以下のルールには一切エージェント名を書かない。
 
 ## 実害の記録
 
-2026-09-04、Claude CodeとOpenCodeが同じ working directory(同じ `.git`)を共有した状態で並行作業し、双方の `git switch`/`git stash` が絡み合って一方の未commit作業(OTA関連の2ファイル)が消えた。`git fsck --unreachable --dangling` から dangling commit を見つけて復旧できたが、これは運が良かっただけで保証された手段ではない。この事故を踏まえてこのスキルを作った。
+2026-09-04、2つのエージェントが同じ working directory(同じ `.git`)を共有した状態で並行作業し、双方の `git switch`/`git stash` が絡み合って一方の未commit作業(OTA関連の2ファイル)が消えた。`git fsck --unreachable --dangling` から dangling commit を見つけて復旧できたが、これは運が良かっただけで保証された手段ではない。この事故を踏まえてこのスキルを作った。
 
 ## 作業開始前: Issueを確認して宣言する
 

@@ -451,6 +451,62 @@ impl Default for AlertThrottle {
     }
 }
 #[cfg(test)]
+mod request_binding_tests {
+    use super::{canonical_string, sign_request, verify_signature};
+
+    const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
+    const TIMESTAMP: i64 = 1_700_000_000;
+    const NONCE: &str = "binding-nonce";
+    const BODY: &[u8] = br#"{"confirm":true}"#;
+
+    #[test]
+    fn canonical_string_binds_path() {
+        // PATH を変えると canonical 文字列が変わる。署名の使い回し防止の要。
+        assert_ne!(
+            canonical_string("POST", "/reboot", TIMESTAMP, NONCE, BODY),
+            canonical_string("POST", "/shutdown", TIMESTAMP, NONCE, BODY),
+        );
+    }
+
+    #[test]
+    fn canonical_string_binds_method() {
+        // METHOD を変えると canonical 文字列が変わる。署名の使い回し防止の要。
+        assert_ne!(
+            canonical_string("POST", "/firmware", TIMESTAMP, NONCE, b""),
+            canonical_string("GET", "/firmware", TIMESTAMP, NONCE, b""),
+        );
+    }
+
+    #[test]
+    fn rejects_signature_reused_for_another_path() {
+        let signature = sign_request(SECRET, "POST", "/reboot", TIMESTAMP, NONCE, BODY);
+        assert!(!verify_signature(
+            SECRET,
+            "POST",
+            "/shutdown",
+            TIMESTAMP,
+            NONCE,
+            BODY,
+            &signature,
+        ));
+    }
+
+    #[test]
+    fn rejects_signature_reused_for_another_method() {
+        let signature = sign_request(SECRET, "POST", "/firmware", TIMESTAMP, NONCE, b"");
+        assert!(!verify_signature(
+            SECRET,
+            "GET",
+            "/firmware",
+            TIMESTAMP,
+            NONCE,
+            b"",
+            &signature,
+        ));
+    }
+}
+
+#[cfg(test)]
 mod manifest_tests {
 
     use super::{manifest_canonical_string, sign_manifest, verify_manifest_signature};
