@@ -109,6 +109,13 @@ fn start_online_services(
             Ok(_) => {
                 *telegram_started = true;
                 println!("telegram: polling task started");
+                // 起動通知は polling 開始の初回だけ送る。この `if !*telegram_started`
+                // ブロックは起動後に一度だけ通るため、再接続で誤発火しない。
+                // `Notifier::notify` は mpsc 送信だけで即戻り、送信失敗も
+                // 通知スレッド側でログに留めるため、起動処理を止めない。
+                if let Some(notifier) = notifier.as_ref() {
+                    notifier.notify(telegram::boot_notification_text());
+                }
             }
             Err(e) => println!("telegram: failed to start polling thread: {e}"),
         }
