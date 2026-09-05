@@ -31,6 +31,20 @@ jobs:
         with:
           targets: x86_64-pc-windows-gnu
 
+      # Cargo依存のビルドキャッシュ。無しだと1行変更でも全依存を再コンパイルし
+      # `make check` が毎回~96秒かかる。workspacesを明示するのは、このリポジトリ
+      # にCargo workspace定義が無く、make checkが3つの独立crate
+      # (m5stack-pc-bridge + shared/*)を別々にcargo実行するため、自動検出に
+      # 任せず確実に3つとも対象にするため。firmware/ はCIにXtensa toolchainが
+      # 無くビルドされない(esp-idf-sys等の巨大依存をキャッシュに含めない)ため対象外。
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            m5stack-pc-bridge
+            shared/pc-remote-signing
+            shared/config-validation
+
       - name: Install mingw-w64 (m5stack-pc-bridge Windows Service cross-build)
         run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
 
