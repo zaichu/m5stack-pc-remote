@@ -137,6 +137,13 @@ impl OperationLock {
     }
 }
 
+/// 起動通知の文面。`firmware/Cargo.toml` の `version` が正本で、
+/// `/status` のバージョン表示(`FIRMWARE_VERSION`)と同じ値を使う。
+/// OTA後に新版が動いているかの確認と、予期しない再起動の検知が目的。
+pub fn boot_notification_text() -> String {
+    format!("M5Stack起動しました ({FIRMWARE_VERSION})")
+}
+
 pub fn is_configured(config: &AppConfig) -> bool {
     // 前後の空白を除いてから判定する。config.tomlやNVSに ` token ` のような
     // 値が入っていると、完全一致だけではplaceholder判定をすり抜け、無効な
