@@ -88,8 +88,9 @@ const MANIFEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// バイナリ取得の受信タイムアウト。2MB級の転送中にflash書込で間が空くため、
 /// manifestより長めに取る。
 const FIRMWARE_TIMEOUT: Duration = Duration::from_secs(30);
-/// 進捗ログを出す間隔。2MBを1KBずつ読むと2000回を超えるため、毎回出さない。
-const PROGRESS_INTERVAL_BYTES: u64 = 256 * 1024;
+/// シリアルへ進捗ログを出す間隔。2MBを1KBずつ読むと2000回を超えるため、毎回出さない。
+/// Telegramへの通知はこれとは別に、割合ベースで刻む
+/// (`pc_remote_signing::OTA_PROGRESS_STEP_PERCENT`)。
 
 /// OTAの失敗。ログ・エラーメッセージにsecretや本文は含めない。
 /// URL全体も持たず、endpointは識別用の固定ラベルだけにする。
@@ -177,10 +178,21 @@ impl From<OtaImageError> for OtaError {
 /// 1. `GET /firmware/manifest` を署名付きリクエストで取得し、署名を検証する。
 ///    検証に失敗したらダウンロードへ進まず即座に中止する。
 /// 2. `GET /firmware` でバイナリをストリーミング取得し、非activeスロットへ書く。
+///    途中は `on_progress` で進捗バーを出し、ループを抜けた直後に刻みと無関係に
+///    必ず1回呼んで100%にする (端数が閾値に届かず94%で止まった事故の再発防止)。
 /// 3. 書きながら計算したSHA-256と受信サイズをmanifestと突き合わせ、
 ///    不一致ならboot切替をせず中止する。
-/// 4. すべて成功したときだけbootパーティションを切り替えてrebootする。
-///    成功時はこの関数は戻らない。
+/// 4. すべて成功したら `on_applying` で適用通知を出してからbootパーティションを
+///    切り替えてrebootする。成功時はこの関数は戻らない。
+///    通知は同期POSTのため、戻った時点で送信済みであり再起動で欠けない。
+/// 5. 失敗時だけ `Err` で戻り、呼び出し側が結果文を送る。
+///
+/// `on_progress` と `on_applying` はどちらも戻り値を持たない。通知の失敗で
+/// OTAを止めない方針であり、呼び出し側でエラーを握り潰す契約にしてある。
+/// 完了通知も `editMessageText` で同一メッセージを書き換える前提
+/// (新しいメッセージを増やさない)。100%バーと適用通知の文言は変えてあり、
+/// Telegramの同一内容編集(400)にならない
+/// (`pc_remote_signing::ota_applying_text` のコメント参照)。
 ///
 /// # 前提
 ///
@@ -195,9 +207,16 @@ pub fn run_ota_update(
     config: &AppConfig,
     pc_ip_address: &str,
     on_progress: &mut dyn FnMut(&OtaManifest, u64),
+    on_applying: &mut dyn FnMut(&OtaManifest),
 ) -> Result<(), OtaError> {
     let manifest = fetch_verified_manifest(config, pc_ip_address)?;
-    download_and_flash(&manifest, config, pc_ip_address, on_progress)?;
+    download_and_flash(
+        &manifest,
+        config,
+        pc_ip_address,
+        on_progress,
+        on_applying,
+    )?;
     println!("ota: update complete, rebooting");
     esp_idf_svc::hal::reset::restart()
 }
@@ -292,11 +311,15 @@ pub fn fetch_verified_manifest(
 /// size/sha256のどちらかが不一致なら `complete` せずに抜ける:
 /// `EspOtaUpdate` のDropが `esp_ota_abort` し、boot partitionは切り替わらない
 /// (`esp_ota_end` を呼んでいないためbootloaderはそのslotを新規imageとして扱わない)。
+///
+/// 進捗は `on_progress`、適用開始は `on_applying` で知らせる。どちらも戻り値を
+/// 持たず、通知の失敗でOTAを止めない (呼び出し側で握り潰す契約)。
 fn download_and_flash(
     manifest: &OtaManifest,
     config: &AppConfig,
     pc_ip_address: &str,
     on_progress: &mut dyn FnMut(&OtaManifest, u64),
+    on_applying: &mut dyn FnMut(&OtaManifest),
 ) -> Result<(), OtaError> {
     let mut ota = EspOta::new().map_err(|e| OtaError::Ota(e.to_string()))?;
     let mut update = ota
@@ -305,7 +328,9 @@ fn download_and_flash(
 
     let mut hashing = StreamingSha256::new();
     let mut received: u64 = 0;
-    let mut reported: u64 = 0;
+    // 直近で通知したパーセント。バイト数ではなく割合で刻むことで、
+    // イメージのサイズによらず同じ回数だけバーが動く。
+    let mut reported_percent: u8 = 0;
     with_signed_get(
         config,
         pc_ip_address,
@@ -346,9 +371,12 @@ fn download_and_flash(
                     .write(&chunk[..read])
                     .map_err(|e| OtaError::Ota(e.to_string()))?;
                 received += read as u64;
-                if received - reported >= PROGRESS_INTERVAL_BYTES {
-                    reported = received;
-                    println!("ota: received {received}/{} bytes", manifest.size);
+                let percent = pc_remote_signing::ota_progress_percent(received, manifest.size);
+                if percent >= reported_percent.saturating_add(
+                    pc_remote_signing::OTA_PROGRESS_STEP_PERCENT,
+                ) {
+                    reported_percent = percent;
+                    println!("ota: received {received}/{} bytes ({percent}%)", manifest.size);
                     // 進捗の通知は補助であり、失敗してもOTAを中止しない。
                     // コールバック側でエラーを握り潰す契約にしてある(戻り値を
                     // 持たせない)。ここで `?` を使うと、Telegramが一時的に
@@ -361,6 +389,16 @@ fn download_and_flash(
     )?;
     // 2本目の接続はここで閉じた。以降はflash済みデータの突き合わせだけを行う。
 
+    // 刻みに届かない最後の端数を残さないよう、ループ後に必ず1回通知して
+    // 100%にする。Issue #143 の実機では 1,388,544B を256KB刻みで送ると
+    // 最終通知が 1,310,720B = 94%で止まり、残り 77,824B が閾値に届かず
+    // 通知されないまま再起動した。割合ベースでも端数は必ず出るため、
+    // 刻みを細かくしても解決しない。ループ内で既に100%を通知済みなら
+    // 呼び出し側の同一内容ガードで送らない (Telegramの400回避)。
+    // 通知は補助であり、失敗してもOTAを止めない (戻り値を持たない契約)。
+    on_progress(manifest, received);
+    println!("ota: download complete ({received}/{} bytes)", manifest.size);
+
     // size と sha256 の両方を見る。どちらか不一致なら `?` で抜け、
     // `update` のDrop (= abort) によりboot切替は行われない。
     verify_ota_image(manifest, received, &hashing.finish_hex())?;
@@ -368,6 +406,12 @@ fn download_and_flash(
     update
         .complete()
         .map_err(|e| OtaError::Ota(e.to_string()))?;
+    // 検証・書き込み完了の通知。`edit_message_text` は応答を待つ同期POSTのため、
+    // この呼び出しが戻った時点で送信は終わっており、この後の `restart()` で
+    // 通知が欠けることはない。文言は100%バーと変えてある
+    // (`pc_remote_signing::ota_applying_text` のコメント参照)。
+    // 失敗しても再起動は止めない (戻り値を持たない契約)。
+    on_applying(manifest);
     Ok(())
 }
 

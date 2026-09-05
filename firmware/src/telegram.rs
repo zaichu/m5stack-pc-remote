@@ -1122,14 +1122,45 @@ impl Client {
         }
     }
 
+    /// 進捗メッセージを `editMessageText` で書き換える。進捗バーと適用通知の
+    /// 両方から使う共通 choke point (新しいメッセージは増やさない)。
+    fn edit_progress_message(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        last_text: &mut String,
+        text: String,
+    ) {
+        // Telegramは同一内容への editMessageText を400にするため、
+        // 変化したときだけ送る。
+        if text == *last_text {
+            return;
+        }
+        // 失敗しても握り潰す。進捗表示のためにOTAを止めない。
+        // `edit_message_text` の中でログは出る。
+        //
+        // 1回の通知にかかった時間を出す。通知の間はTLSハンドシェイクで
+        // ダウンロードが止まるため、刻みを細かくしてよいかの判断材料になる
+        // (`OTA_PROGRESS_STEP_PERCENT` を変えるときはこの値を見ること)。
+        let started = std::time::Instant::now();
+        self.api.edit_message_text(chat_id, message_id, &text);
+        println!(
+            "ota: progress notify took {}ms",
+            started.elapsed().as_millis()
+        );
+        *last_text = text;
+    }
+
     /// 電源操作ロックを取り、OTAを実行する。成功時は `restart()` で戻らない。
     fn run_ota_update(&self, chat_id: i64, progress_message_id: Option<i64>) -> String {
         let _guard = lock_power(&self.power_lock);
         let pc_ip_address = self.settings.pc_ip_address();
 
-        // 直前に送った本文。Telegramは同一内容への editMessageText を400にするため、
-        // 変化したときだけ送る。
-        let mut last_text = String::new();
+        // 直前に送った本文。進捗バーと適用通知で別々に持つが、両者の文言自体を
+        // 変えてある (`pc_remote_signing::ota_applying_text` 参照) ため、
+        // 段階が進んでも同一内容の400にならない。
+        let mut last_progress_text = String::new();
+        let mut last_applying_text = String::new();
         let mut on_progress = |manifest: &pc_remote_signing::OtaManifest, received: u64| {
             let Some(message_id) = progress_message_id else {
                 return;
@@ -1139,19 +1170,25 @@ impl Client {
                 received,
                 manifest.size,
             );
-            if text == last_text {
+            self.edit_progress_message(chat_id, message_id, &mut last_progress_text, text);
+        };
+        // 検証・書き込み完了の通知。同じメッセージを書き換える。
+        // `edit_message_text` は応答を待つ同期POSTのため、戻った時点で送信済みで
+        // あり、この後の `restart()` で欠けない。失敗しても再起動は止めない
+        // (コールバックは戻り値を持たない契約)。
+        let mut on_applying = |manifest: &pc_remote_signing::OtaManifest| {
+            let Some(message_id) = progress_message_id else {
                 return;
-            }
-            // 失敗しても握り潰す。進捗表示のためにOTAを止めない。
-            // `edit_message_text` の中でログは出る。
-            self.api.edit_message_text(chat_id, message_id, &text);
-            last_text = text;
+            };
+            let text = pc_remote_signing::ota_applying_text(&manifest.version);
+            self.edit_progress_message(chat_id, message_id, &mut last_applying_text, text);
         };
 
         match crate::ota::run_ota_update(
             self.config.as_ref(),
             &pc_ip_address,
             &mut on_progress,
+            &mut on_applying,
         ) {
             // 成功時は `restart()` で戻らないため、ここへは来ない。防御的に残す。
             Ok(()) => "更新が完了しました。再起動します。".to_string(),

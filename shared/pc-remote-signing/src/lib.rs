@@ -275,12 +275,26 @@ pub fn ota_progress_percent(received: u64, total: u64) -> u8 {
     ((received as u128 * 100) / total as u128) as u8
 }
 
+/// 進捗を通知する刻み(パーセント)。
+///
+/// バイト数ではなく割合で刻む。バイト数固定だとファイルサイズによって
+/// 更新回数が変わり、小さいイメージでは数回しか動かない(実測: 256KB刻みだと
+/// 1.4MBのイメージで5回しか更新されず、1回で18%飛んだ)。
+///
+/// 細かくしすぎないこと。1回の通知ごとにTLSハンドシェイクが入り、その間
+/// ダウンロードが止まる。5%ならバーが20回動き、追加コストは20回分で済む。
+pub const OTA_PROGRESS_STEP_PERCENT: u8 = 5;
+
 /// Telegramへ出す進捗テキスト。1行のバーとパーセント、受信量を返す。
 ///
 /// `editMessageText` で同じメッセージを書き換え続ける前提。Telegramは同一内容への
 /// 編集をエラー(400)にするため、呼び出し側は内容が変わるときだけ送ること。
 pub fn ota_progress_text(version: &str, received: u64, total: u64) -> String {
-    const CELLS: usize = 10;
+    // セル数は刻みと合わせる。刻みより粗いとバーが動かない回が出て、
+    // 細かいとバーだけ動いて数字が変わらない回が出る。
+    // `OTA_PROGRESS_STEP_PERCENT` から計算することで、定数だけ変えて
+    // バーを古いままにする事故を防ぐ (テストでもセル数を固定している)。
+    const CELLS: usize = (100 / OTA_PROGRESS_STEP_PERCENT) as usize;
     let percent = ota_progress_percent(received, total);
     let filled = (percent as usize * CELLS).div_ceil(100).min(CELLS);
     let bar: String = "█".repeat(filled) + &"░".repeat(CELLS - filled);
@@ -289,6 +303,16 @@ pub fn ota_progress_text(version: &str, received: u64, total: u64) -> String {
         received / 1024,
         total / 1024
     )
+}
+
+/// 検証・書き込み完了後に `editMessageText` で同じメッセージへ出す文言。
+///
+/// ダウンロード完了の100%バーとは別の文字列にすること。Telegramは同一内容への
+/// 編集を400にするため、同じ文言だと再起動前の最後の通知が届かない。
+/// 呼び出し側はこの通知が戻った後に `restart()` するため、送信の完了を
+/// 待たずに再起動して通知が欠けることはない。
+pub fn ota_applying_text(version: &str) -> String {
+    format!("firmware更新を適用します。再起動します ({version})")
 }
 
 /// ダウンロードしながらSHA-256を計算するストリーミングハーシャー。
@@ -953,7 +977,9 @@ mod ota_tests {
 
 #[cfg(test)]
 mod ota_progress_tests {
-    use super::{ota_progress_percent, ota_progress_text};
+    use super::{
+        ota_applying_text, ota_progress_percent, ota_progress_text, OTA_PROGRESS_STEP_PERCENT,
+    };
 
     #[test]
     fn percent_handles_boundaries_without_panicking() {
@@ -980,10 +1006,11 @@ mod ota_progress_tests {
 
     #[test]
     fn bar_is_empty_at_zero_and_full_at_hundred() {
+        // 20セル = 100 / OTA_PROGRESS_STEP_PERCENT(5)。
         let zero = ota_progress_text("v", 0, 1000);
-        assert!(zero.contains("[░░░░░░░░░░]"), "{zero}");
+        assert!(zero.contains("[░░░░░░░░░░░░░░░░░░░░]"), "{zero}");
         let full = ota_progress_text("v", 1000, 1000);
-        assert!(full.contains("[██████████]"), "{full}");
+        assert!(full.contains("[████████████████████]"), "{full}");
     }
 
     #[test]
@@ -993,5 +1020,63 @@ mod ota_progress_tests {
         let a = ota_progress_text("v", 100 * 1024, 1000 * 1024);
         let b = ota_progress_text("v", 200 * 1024, 1000 * 1024);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn bar_cell_count_matches_step_percent() {
+        // 描画セル数を `100 / OTA_PROGRESS_STEP_PERCENT` に固定する。
+        // 定数だけ変えてバーを古いままにすると、通知回数と見た目がずれる。
+        let expected = (100 / OTA_PROGRESS_STEP_PERCENT) as usize;
+        for (received, total) in [(0, 1000), (500, 1000), (1000, 1000)] {
+            let text = ota_progress_text("v", received, total);
+            let bar = text.split('[').nth(1).unwrap().split(']').next().unwrap();
+            assert_eq!(bar.chars().count(), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn text_changes_at_every_step() {
+        // STEP刻みで進めたとき、毎回テキストが変わること。同一内容だと
+        // Telegramが400を返すため、1回でも変わらない刻みがあってはならない。
+        let total = 1000u64;
+        let mut previous = ota_progress_text("v", 0, total);
+        let mut percent = 0u8;
+        let mut steps = 0u32;
+        while percent < 100 {
+            percent = percent.saturating_add(OTA_PROGRESS_STEP_PERCENT);
+            let received = percent as u64 * total / 100;
+            // 刻み通りに進んでいることの sanity (受信量の計算ミス検出用)。
+            assert_eq!(ota_progress_percent(received, total), percent.min(100));
+            let text = ota_progress_text("v", received, total);
+            assert_ne!(text, previous, "percent={percent}");
+            previous = text;
+            steps += 1;
+        }
+        assert_eq!(steps, (100 / OTA_PROGRESS_STEP_PERCENT) as u32);
+    }
+
+    #[test]
+    fn final_notification_reaches_hundred_despite_remainder() {
+        // Issue #143追加分: 1,388,544B の実機サイズでは刻みの端数が残り、
+        // 最終通知なしでは94%で止まった。割合ベースでも端数は必ず出るため、
+        // 受信量=サイズでの最終通知が100%になることを固定する
+        // (`ota.rs` はループ後に刻みと無関係に必ず1回呼ぶ)。
+        let total = 1_388_544u64;
+        assert_eq!(ota_progress_percent(total, total), 100);
+        let text = ota_progress_text("v", total, total);
+        assert!(text.contains("100%"), "{text}");
+        let expected = (100 / OTA_PROGRESS_STEP_PERCENT) as usize;
+        let bar = text.split('[').nth(1).unwrap().split(']').next().unwrap();
+        assert_eq!(bar.chars().count(), expected, "{text}");
+        assert!(bar.chars().all(|c| c == '█'), "{text}");
+    }
+
+    #[test]
+    fn applying_text_differs_from_full_bar() {
+        // 再起動前の最後の通知が直前の100%バーと同じ内容だとTelegramが400に
+        // するため、文言が変わることを固定する。
+        let full = ota_progress_text("v", 1000, 1000);
+        let applying = ota_applying_text("v");
+        assert_ne!(full, applying, "{full} vs {applying}");
     }
 }
