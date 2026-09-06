@@ -40,12 +40,12 @@ fi
 # - /confirm_reboot /confirm_shutdown /confirm_update /confirm_set: nonce引数が必須の手入力
 #   フォールバック。通常はインラインボタンで確定する。
 commands='[
-  {"command":"status","description":"PC状態を表示"},
-  {"command":"wake","description":"PCへWake-on-LANを送信"},
-  {"command":"reboot","description":"確認後にPCを再起動"},
-  {"command":"shutdown","description":"確認後にPCをシャットダウン"},
-  {"command":"update","description":"確認後にfirmwareを更新"},
-  {"command":"settings","description":"設定の現在値と変更・ロック操作"}
+  {"command":"status","description":"PCの状態表示"},
+  {"command":"wake","description":"PCの起動"},
+  {"command":"reboot","description":"PCの再起動"},
+  {"command":"shutdown","description":"PCのシャットダウン"},
+  {"command":"update","description":"ファームウェア更新"},
+  {"command":"settings","description":"設定"}
 ]'
 
 # curlの失敗時は set -e で黙って終わらせず、tokenをredactした上で理由を出す。

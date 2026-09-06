@@ -152,12 +152,12 @@ bash scripts/telegram-set-commands.sh
 
 登録される候補:
 
-- `/status`: PC状態を表示
-- `/wake`: PCへWake-on-LANを送信
-- `/reboot`: 確認後にPCを再起動
-- `/shutdown`: 確認後にPCをシャットダウン
-- `/update`: 確認後にfirmwareを更新
-- `/settings`: 設定の現在値と変更・ロック操作
+- `/status`: PCの状態表示
+- `/wake`: PCの起動
+- `/reboot`: PCの再起動
+- `/shutdown`: PCのシャットダウン
+- `/update`: ファームウェア更新
+- `/settings`: 設定
 
 `/lock`・`/unlock`・`/set_ip`・`/confirm_reboot`・`/confirm_update` などもbotへのメッセージとしては有効ですが、一覧には登録されません（日常操作の入口を `/settings` に集約するため。意図的な除外の一覧は `scripts/telegram-set-commands.sh` 先頭のコメントを参照）。
 
