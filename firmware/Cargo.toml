@@ -23,6 +23,8 @@ mipidsi = "0.10"
 pc-remote-signing = { path = "../shared/pc-remote-signing" }
 # Telegramから変更する設定値のvalidation。host側でテストできるよう分離してある。
 config-validation = { path = "../shared/config-validation" }
+# バッテリー残量推定・給電状態表示の純粋ロジック。host側でテストできるよう分離してある。
+battery = { path = "../shared/battery" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

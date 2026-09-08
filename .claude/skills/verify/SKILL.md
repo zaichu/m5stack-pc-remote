@@ -24,7 +24,7 @@ make check
 - `bash scripts/check-agent-roles.sh` — エージェントの役割割り当てが `docs/agent-roles.md` の外へ複製されていないか検査する
 - `cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml --check`
 - `cargo clippy --manifest-path m5stack-pc-bridge/Cargo.toml --all-targets -- -D warnings`
-- `cargo test --manifest-path m5stack-pc-bridge/Cargo.toml`（`shared/pc-remote-signing` は `make test` で明示的に実行）
+- `cargo test --manifest-path m5stack-pc-bridge/Cargo.toml`（`shared/pc-remote-signing`、`shared/config-validation`、`shared/battery` は `make test` で明示的に実行）
 - `cargo build --manifest-path m5stack-pc-bridge/Cargo.toml --release --target x86_64-pc-windows-gnu`（`cfg(windows)` のため通常の test/clippy には含まれず、mingw 有無で skip）
 - `cargo +esp build --release --target xtensa-esp32-espidf`（esp toolchain / `firmware/config.toml` が無い環境では警告して skip）
 - `bash -n scripts/*.sh` と `shellcheck scripts/*.sh`（shellcheck が無い環境では警告して skip）

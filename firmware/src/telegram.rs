@@ -830,13 +830,15 @@ impl Client {
             net::check_pc_online(&self.settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
         // pollingスレッドはI2Cを持たないため、UIループが読んだ最新の値を
         // 共有してもらう。未取得(None: 起動直後やI2C失敗時)の間は「不明」と出す。
-        // 非充電時は「(充電中)」を付けず残量だけにする。満充電でUSBが挿さった
-        // ままの状態もここに含まれ、「放電中」と書くと誤解を招くため。
+        // 充電中・給電中(満充電で充電停止)・電池駆動の3状態を区別する。
+        // 以前は非充電時を一律「残量だけ」にしていたため、USBを挿したまま
+        // 満充電で止まった状態が電池駆動と区別できなかった(Issue #153)。
+        // 文言の組み立ては `battery` crateに寄せ、hostテストで担保する。
         let battery_line = match *lock_battery(&self.battery) {
-            Some(battery) if battery.charging => {
-                format!("バッテリー: {}% (充電中)", battery.percent)
+            Some(battery) => {
+                let state = battery::classify(battery.charging, battery.powered);
+                battery::status_ja(battery.percent, state)
             }
-            Some(battery) => format!("バッテリー: {}%", battery.percent),
             None => "バッテリー: 不明".to_string(),
         };
         // firmwareのバージョンを必ず含める。これが無いと、`/update` で更新したあとに
