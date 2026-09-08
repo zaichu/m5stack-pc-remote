@@ -82,13 +82,17 @@ where
     Ok(())
 }
 
-/// バッテリー状態。AXP192から読んだ電圧を残量へ概算したもの。
+/// バッテリー状態。AXP192から読んだ値を `battery` crateの純粋ロジックで
+/// 残量へ概算したもの。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Battery {
     pub percent: u8,
     /// 実際に充電中(充電電流の向き)。USB給電中でも満充電で充電が止まれば
     /// falseになるため、画面の「CHG」表示は完了時に消える。
     pub charging: bool,
+    /// 外部給電の有無(ACINまたはVBUS)。充電停止後の満充電状態でもtrueのまま
+    /// なので、「給電されているが充電していない」を表せる。
+    pub powered: bool,
 }
 
 /// バッテリー電圧と充電状態を読む。I2Cが応答しない場合はNone。
@@ -97,44 +101,19 @@ where
     I2C: embedded_hal::i2c::I2c<Error = E>,
 {
     let volts = axp.get_battery_voltage().ok()?;
+    // VBUS検出(get_vbus_present)ではなく充電電流の向き(get_charging)を見る。
+    // USBを挿したまま満充電になると充電は止まるのにVBUSは残るため、
+    // VBUS判定では満充電後も「CHG」が表示され続けた(Issue #153)。
+    let charging = axp.get_charging().unwrap_or(false);
+    // Core2のUSB給電はACINに来る(VBUSはM-Bus由来でUSB抜き挿しと無関係)。
+    // 両方見るのはM-Bus給電にも対応するため。
+    let powered =
+        axp.get_acin_present().unwrap_or(false) || axp.get_vbus_present().unwrap_or(false);
     Some(Battery {
-        percent: percent_from_volts(volts),
-        // VBUS検出(get_vbus_present)ではなく充電電流の向き(get_charging)を見る。
-        // USBを挿したまま満充電になると充電は止まるのにVBUSは残るため、
-        // VBUS判定では満充電後も「CHG」が表示され続けた(Issue #153)。
-        charging: axp.get_charging().unwrap_or(false),
+        percent: battery::battery_percent(volts, powered, charging),
+        charging,
+        powered,
     })
-}
-
-/// Li-Poの放電カーブは中央が平坦なので、電圧を単純に線形換算すると
-/// 中盤で大きくずれる。代表点を結ぶ折れ線で概算する。
-/// 精度は数%程度で、残量の目安を出す用途に限る。
-fn percent_from_volts(volts: f32) -> u8 {
-    const CURVE: [(f32, f32); 6] = [
-        (3.30, 0.0),
-        (3.60, 10.0),
-        (3.70, 25.0),
-        (3.85, 50.0),
-        (4.00, 75.0),
-        (4.20, 100.0),
-    ];
-
-    // 5%刻みへ丸める。電圧のわずかな揺れで表示が1%ずつ動くと、変化検知で
-    // 画面を描き直してしまいちらつく。精度的にも1%単位に意味はない。
-    let round5 = |p: f32| ((p / 5.0).round() * 5.0) as u8;
-
-    if volts <= CURVE[0].0 {
-        return 0;
-    }
-    for pair in CURVE.windows(2) {
-        let (v_low, p_low) = pair[0];
-        let (v_high, p_high) = pair[1];
-        if volts < v_high {
-            let ratio = (volts - v_low) / (v_high - v_low);
-            return round5(p_low + ratio * (p_high - p_low));
-        }
-    }
-    100
 }
 
 pub struct DisplayPins {

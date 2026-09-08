@@ -22,6 +22,7 @@ test:
 	# cargo testでは走らないため、明示的に実行する必要がある。
 	cargo test --manifest-path shared/pc-remote-signing/Cargo.toml
 	cargo test --manifest-path shared/config-validation/Cargo.toml
+	cargo test --manifest-path shared/battery/Cargo.toml
 
 # toolchainが無い開発端末では警告してskipするが、CI(CI=1)では必ず実行する。
 # skipを成功扱いのままにすると、ローカルで通ったものがCIで初めて落ちる。

@@ -235,21 +235,25 @@ fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<()
     )?;
 
     if let Some(battery) = status.battery {
-        // 充電中は残量より「充電中」であることを優先して示す。`charging` は
-        // 実際の充電状態なので、満充電で止まれば残量表示に戻る(Issue #153)。
-        let label = if battery.charging {
-            "CHG".to_string()
-        } else {
-            format!("{}%", battery.percent)
-        };
-        let color = if battery.charging {
-            palette::ACCENT
-        } else if battery.percent >= 40 {
-            palette::OK
-        } else if battery.percent >= 15 {
-            palette::WARN
-        } else {
-            palette::NG
+        // 充電中・給電中(満充電で充電停止)・電池駆動の3状態を区別し、
+        // どの状態でも残量%を出す。以前は充電中に%を隠して「CHG」だけ
+        // 出していたため充電中の残量を確認できず、満充電で充電停止すると
+        // %表示に戻って「挿したのにCHGが出ない」と見えた(Issue #153)。
+        // ランプ文言の組み立ては `battery` crateに寄せ、hostテストで担保する。
+        let state = battery::classify(battery.charging, battery.powered);
+        let label = battery::lamp_label(battery.percent, state);
+        let color = match state {
+            battery::PowerState::Charging => palette::ACCENT,
+            battery::PowerState::Powered => palette::OK,
+            battery::PowerState::OnBattery => {
+                if battery.percent >= 40 {
+                    palette::OK
+                } else if battery.percent >= 15 {
+                    palette::WARN
+                } else {
+                    palette::NG
+                }
+            }
         };
         draw_lamp(display, next, &label, color)?;
     }
