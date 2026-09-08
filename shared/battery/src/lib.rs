@@ -6,8 +6,10 @@
 //! することで、実機なしでhost側のテストを回せるようにする
 //! (`config-validation` と同じ方針。Issue #153)。
 //!
-//! 扱うのは電圧→残量%の換算、満充電判定、給電状態の分類と表示文言のみで、
-//! AXP192のI2C読み出しは `firmware/src/board.rs` の `read_battery` が担当する。
+//! 扱うのは電圧→残量%の換算、満充電判定、給電状態の分類と表示文言、
+//! 画面の再描画要否の判定、AXP192の電源系割り込み(IRQ)のマスク定義と
+//! 状態ラッチの判定のみで、AXP192のI2C読み出しは
+//! `firmware/src/board.rs` の `read_battery` が担当する。
 
 /// 給電あり・充電なしのときに満充電とみなす電池電圧の閾値(V)。
 ///
@@ -120,6 +122,71 @@ pub fn status_ja(percent: u8, state: PowerState) -> String {
         PowerState::Charging => format!("バッテリー: {percent}% (充電中)"),
         PowerState::Powered => format!("バッテリー: {percent}% (満充電・給電中)"),
         PowerState::OnBattery => format!("バッテリー: {percent}%"),
+    }
+}
+
+/// 画面表示に使う値だけを抜き出したもの。
+///
+/// `firmware` 側の `board::Battery` と1対1に対応する。残量%は5%刻みへ
+/// 丸め済みのため、電圧のわずかな揺れでは変わらず、ちらつき防止になる。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayState {
+    pub percent: u8,
+    pub powered: bool,
+    pub charging: bool,
+}
+
+/// 前回表示と今回の読み取り値を比べて、描き直しが必要かを返す。
+///
+/// `draw_main` は全画面消去から始まるため、無条件で呼ぶとその周期で
+/// 画面がちらつく。表示に使う値(percentと給電/充電状態)が変わったときだけ
+/// trueにする。読み取り失敗(None)の復帰・発生も「変化」として扱い、
+/// 固まった表示へはしない。
+pub fn needs_redraw(prev: Option<DisplayState>, next: Option<DisplayState>) -> bool {
+    prev != next
+}
+
+/// AXP192の電源系割り込み(IRQ)に関する純粋定義。
+///
+/// レジスタ番号とビット位置は X-Powers AXP192 Datasheet v1.13(一次情報)による。
+/// IRQ enable: REG 0x40-0x43,0x4A / IRQ status: REG 0x44-0x47,0x4D。
+/// statusは該当ビットへ1を書くとクリアされる(write-1-to-clear)。
+/// IRQ出力自体はアクティブLow(外部51kプルアップ)。
+/// `axp192` crate 0.2.0に割り込み設定APIは無いため、`firmware` 側は
+/// これらの定義を使った生レジスタ書き込みになる。
+pub mod power_irq {
+    /// 有効化する割り込みの `(enableレジスタ, ORするビット)`。
+    ///
+    /// ACIN挿入/抜去・VBUS挿入/抜去・充電開始/充電完了だけに絞る。
+    /// - REG 0x40 bit6=ACIN挿入(IRQ2)、bit5=ACIN抜去(IRQ3)、
+    ///   bit3=VBUS挿入(IRQ5)、bit2=VBUS抜去(IRQ6) → 0x6C
+    /// - REG 0x41 bit3=充電開始(IRQ12)、bit2=充電完了(IRQ13) → 0x0C
+    ///
+    /// 電池温度・ボタン(PEK)・過負荷などのビットは触らない。既存設定へ
+    /// ORするため、他の用途の有効ビットを殺さない。
+    pub const ENABLE_UPDATES: [(u8, u8); 2] = [(0x40, 0x6C), (0x41, 0x0C)];
+
+    /// クリアする割り込み状態の `(statusレジスタ, 1を書くビット)`。
+    ///
+    /// 有効化したものと対になる。REG 0x44が0x40に、0x45が0x41に対応する。
+    /// 関係ないビットへ1を書くと他用途のラッチを消してしまうため、
+    /// 有効化したビットだけを書く。
+    pub const STATUS_CLEAR: [(u8, u8); 2] = [(0x44, 0x6C), (0x45, 0x0C)];
+
+    /// 判定に使う `(statusレジスタ, マスクビット)`。
+    ///
+    /// `STATUS_CLEAR` と同じ値だが意味が逆(読むときのマスク)なので別名にする。
+    /// 別名にせず使い回すと、有効化・クリア・判定のどれかが変わったときに
+    /// 残りへ波及して事故になる。
+    pub const STATUS_MASK: [(u8, u8); 2] = [(0x44, 0x6C), (0x45, 0x0C)];
+
+    /// IRQ状態ラッチ(REG 0x44,0x45の読み値)に電源系イベントが残っているか。
+    ///
+    /// ラッチはレベルではなくエッジの記憶なので、短い抜き挿しでも
+    /// 次の確認まで残る。`firmware` 側はこれがtrueのときだけ
+    /// `read_battery` まで進み、falseならI2Cを触らずに終える。
+    pub fn is_pending(status44: u8, status45: u8) -> bool {
+        (status44 & STATUS_MASK[0].1) != 0 || (status45 & STATUS_MASK[1].1) != 0
     }
 }
 
@@ -255,5 +322,78 @@ mod tests {
         assert_eq!(percent, 60);
         assert_eq!(lamp_label(percent, state), "CHG 60%");
         assert_eq!(status_ja(percent, state), "バッテリー: 60% (充電中)");
+    }
+
+    // --- needs_redraw ---
+
+    fn display(percent: u8, powered: bool, charging: bool) -> Option<DisplayState> {
+        Some(DisplayState {
+            percent,
+            powered,
+            charging,
+        })
+    }
+
+    #[test]
+    fn redraws_only_when_display_values_change() {
+        // 全く同じ値なら描き直さない(ちらつき防止)。
+        assert!(!needs_redraw(display(95, false, false), display(95, false, false)));
+        // percent・給電・充電のいずれかが変われば描き直す。
+        assert!(needs_redraw(display(95, false, false), display(90, false, false)));
+        assert!(needs_redraw(
+            display(95, false, false),
+            display(95, true, false)
+        ));
+        assert!(needs_redraw(display(95, true, false), display(95, true, true)));
+    }
+
+    #[test]
+    fn redraws_on_read_failure_transitions() {
+        // 読み取り失敗(None)の発生・復帰も変化として描き直す。
+        // 固まったままの表示と区別がつかなくなるのを防ぐ。
+        assert!(needs_redraw(display(95, false, false), None));
+        assert!(needs_redraw(None, display(95, false, false)));
+        // 失敗が続く間は描き直さない。
+        assert!(!needs_redraw(None, None));
+    }
+
+    // --- power_irq ---
+
+    #[test]
+    fn irq_masks_cover_only_power_events() {
+        use power_irq::{ENABLE_UPDATES, STATUS_CLEAR, STATUS_MASK};
+        // ACIN挿入bit6/抜去bit5・VBUS挿入bit3/抜去bit2だけ。
+        assert_eq!(ENABLE_UPDATES, [(0x40, 0x6C), (0x41, 0x0C)]);
+        // クリアと判定は有効化と対になる。
+        assert_eq!(STATUS_CLEAR, [(0x44, 0x6C), (0x45, 0x0C)]);
+        assert_eq!(STATUS_MASK, [(0x44, 0x6C), (0x45, 0x0C)]);
+        // 過電圧bit7やVBUS弱bit1(0x40側)を有効化していないこと。
+        assert_eq!(ENABLE_UPDATES[0].1 & 0x80, 0);
+        assert_eq!(ENABLE_UPDATES[0].1 & 0x02, 0);
+        // 電池温度bit1/bit0(0x41側)を有効化していないこと。
+        assert_eq!(ENABLE_UPDATES[1].1 & 0x03, 0);
+    }
+
+    #[test]
+    fn irq_pending_detects_each_power_event_bit() {
+        use power_irq::is_pending;
+        // 対象の6ビットは1つでも立てばtrue。
+        for bit in [6, 5, 3, 2] {
+            assert!(is_pending(1 << bit, 0), "status44 bit{bit}");
+        }
+        for bit in [3, 2] {
+            assert!(is_pending(0, 1 << bit), "status45 bit{bit}");
+        }
+        // 何も立っていなければfalse。
+        assert!(!is_pending(0x00, 0x00));
+    }
+
+    #[test]
+    fn irq_pending_ignores_unrelated_bits() {
+        use power_irq::is_pending;
+        // 対象外(例: ACIN過電圧bit7、VBUS弱bit1、電池温度bit1/0)が
+        // 立っているだけでは給電変化として扱わない。
+        assert!(!is_pending(0x80 | 0x02, 0x00));
+        assert!(!is_pending(0x00, 0x03));
     }
 }
