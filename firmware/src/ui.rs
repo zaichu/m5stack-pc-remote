@@ -235,7 +235,8 @@ fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<()
     )?;
 
     if let Some(battery) = status.battery {
-        // 充電中は残量より「給電されている」ことを優先して示す。
+        // 充電中は残量より「充電中」であることを優先して示す。`charging` は
+        // 実際の充電状態なので、満充電で止まれば残量表示に戻る(Issue #153)。
         let label = if battery.charging {
             "CHG".to_string()
         } else {

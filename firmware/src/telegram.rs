@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use pc_remote_signing::AlertThrottle;
 
 use crate::app_config::AppConfig;
+use crate::board::Battery;
 use crate::bridge_client::{self, PowerAction, PowerActionLabel};
 use crate::net;
 use crate::settings::RuntimeSettings;
@@ -117,6 +118,21 @@ pub fn lock_power(power_lock: &PowerLock) -> std::sync::MutexGuard<'_, ()> {
 /// pollingスレッドごと落ち、端末が止まる。`lock_power` と同じ扱いにそろえる。
 pub fn lock_state(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
     state.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// UIループが読んだ最新のバッテリー状態。pollingスレッドはI2Cドライバを持たない
+/// (AXP192はUIループ側の `axp` 経由でしか読めない)ため、読み取り結果の値だけを
+/// `telegram::State` と同じ `Arc<Mutex<...>>` 方式で共有する。I2Cドライバ(`axp`)
+/// 自体は共有しない。`main.rs` で作り、UIループとpollingスレッドへ渡す形にし、
+/// global staticにはしない(`PowerLock` と同じ扱い)。
+pub type SharedBattery = Arc<Mutex<Option<Battery>>>;
+
+/// 共有バッテリー状態の排他を取る。poisonしていても排他は維持する。
+/// 守るのは値型(`Option<Battery>`)だけなので `lock_state` と同じ扱いで回復する。
+pub fn lock_battery(
+    battery: &Mutex<Option<Battery>>,
+) -> std::sync::MutexGuard<'_, Option<Battery>> {
+    battery.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// 操作ロック。有効な間はWAKE / REBOOT / SHUTDOWNを一切実行しない。
@@ -410,6 +426,8 @@ pub struct Client {
     config: Arc<AppConfig>,
     settings: Arc<RuntimeSettings>,
     api: Api,
+    /// UIループが更新する最新のバッテリー状態(`/status` で読むだけ)。
+    battery: SharedBattery,
     /// 未許可アクセスの検知数と、直近でアラートを送った時刻。
     unauthorized_alerts: AlertThrottle,
 }
@@ -756,6 +774,7 @@ impl Client {
         config: Arc<AppConfig>,
         settings: Arc<RuntimeSettings>,
         https: HttpsLock,
+        battery: SharedBattery,
     ) -> Self {
         Self {
             last_update_id: 0,
@@ -770,6 +789,7 @@ impl Client {
             },
             config,
             settings,
+            battery,
             // 抑制ポリシー(閾値・間隔)はbridgeと共有する。
             unauthorized_alerts: AlertThrottle::default(),
         }
@@ -808,11 +828,22 @@ impl Client {
     fn status_text(&self) -> String {
         let online =
             net::check_pc_online(&self.settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
+        // pollingスレッドはI2Cを持たないため、UIループが読んだ最新の値を
+        // 共有してもらう。未取得(None: 起動直後やI2C失敗時)の間は「不明」と出す。
+        // 非充電時は「(充電中)」を付けず残量だけにする。満充電でUSBが挿さった
+        // ままの状態もここに含まれ、「放電中」と書くと誤解を招くため。
+        let battery_line = match *lock_battery(&self.battery) {
+            Some(battery) if battery.charging => {
+                format!("バッテリー: {}% (充電中)", battery.percent)
+            }
+            Some(battery) => format!("バッテリー: {}%", battery.percent),
+            None => "バッテリー: 不明".to_string(),
+        };
         // firmwareのバージョンを必ず含める。これが無いと、`/update` で更新したあとに
         // 新版が動いているのかを利用者が確認できない。実際、初回のOTA(Issue #79)では
         // シリアルで otadata を読むまで成否を判定できなかった。
         format!(
-            "PC: {}\n操作: {}\nM5Stack: Rust firmware {}",
+            "PC: {}\n{battery_line}\n操作: {}\nM5Stack: Rust firmware {}",
             net::pc_online_label_ja(online),
             if self.operation_lock.is_locked() {
                 "ロック中"
