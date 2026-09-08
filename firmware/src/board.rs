@@ -86,11 +86,12 @@ where
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Battery {
     pub percent: u8,
-    /// USB給電中(VBUS検出)。給電中は残量表示より充電中であることを優先して出す。
+    /// 実際に充電中(充電電流の向き)。USB給電中でも満充電で充電が止まれば
+    /// falseになるため、画面の「CHG」表示は完了時に消える。
     pub charging: bool,
 }
 
-/// バッテリー電圧とVBUS検出を読む。I2Cが応答しない場合はNone。
+/// バッテリー電圧と充電状態を読む。I2Cが応答しない場合はNone。
 pub fn read_battery<I2C, E>(axp: &mut Axp192<I2C>) -> Option<Battery>
 where
     I2C: embedded_hal::i2c::I2c<Error = E>,
@@ -98,7 +99,10 @@ where
     let volts = axp.get_battery_voltage().ok()?;
     Some(Battery {
         percent: percent_from_volts(volts),
-        charging: axp.get_vbus_present().unwrap_or(false),
+        // VBUS検出(get_vbus_present)ではなく充電電流の向き(get_charging)を見る。
+        // USBを挿したまま満充電になると充電は止まるのにVBUSは残るため、
+        // VBUS判定では満充電後も「CHG」が表示され続けた(Issue #153)。
+        charging: axp.get_charging().unwrap_or(false),
     })
 }
 

@@ -70,6 +70,9 @@ fn start_online_services(
     // Telegramのpollingスレッドと通知スレッドで共有するTLS直列化ロック
     // (Issue #127。mbedTLSは実質同時1本のため、両スレッドで同じものを渡す)。
     https_lock: &telegram::HttpsLock,
+    // UIループが読んだ最新のバッテリー状態。pollingスレッドはI2Cを持たないため、
+    // 読み取り結果の値だけを共有する(Issue #153。`telegram_state` と同じ方式)。
+    battery: &telegram::SharedBattery,
 ) {
     if sntp.is_none() {
         // m5stack-pc-bridgeはtimestampを検証するため、電源操作前に時計同期が必要になる。
@@ -99,6 +102,7 @@ fn start_online_services(
             Arc::clone(app_config),
             Arc::clone(settings),
             https_lock.clone(),
+            battery.clone(),
         );
         let state_handle = Arc::clone(telegram_state);
         // long pollingでUIやSTATUS更新を止めないよう、Telegramは専用スレッドで動かす。
@@ -193,6 +197,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Telegramのpollingスレッドと通知スレッドで共有するTLS直列化ロック。
     // mbedTLSは実質同時1本のため、両スレッドへ同じものを渡す(Issue #127)。
     let https_lock: telegram::HttpsLock = Arc::new(Mutex::new(()));
+    // UIループが読んだ最新のバッテリー状態をpollingスレッドと共有する。
+    // I2Cドライバ自体は共有せず、読み取り結果の値だけを渡す(Issue #153)。
+    // 初期値はNoneで、最初の読み取りが終わるまでの `/status` は「不明」と出す。
+    let battery_shared: telegram::SharedBattery = Arc::new(Mutex::new(None));
     if !telegram::is_configured(app_config.as_ref()) {
         println!("telegram: disabled (token or user id is a placeholder)");
     }
@@ -226,6 +234,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &app_config,
             &settings,
             &https_lock,
+            &battery_shared,
         );
     }
 
@@ -311,6 +320,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &app_config,
                     &settings,
                     &https_lock,
+                    &battery_shared,
                 );
             }
         }
@@ -333,6 +343,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             battery_at = Instant::now();
             // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
             let now_battery = board::read_battery(&mut axp);
+            // pollingスレッドはI2Cを持たないため、読み取り結果の値を共有する。
+            // 変化の有無に関わらず毎回書く。10秒に1回のMutex獲得は無視できる。
+            *telegram::lock_battery(&battery_shared) = now_battery;
             if now_battery != status.battery {
                 status.battery = now_battery;
                 if matches!(screen, Screen::Main) {
