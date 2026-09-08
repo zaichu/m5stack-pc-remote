@@ -37,6 +37,8 @@ pub const TOUCH_WIDTH: u16 = 320;
 pub const TOUCH_HEIGHT: u16 = 280;
 
 // axp192とft6x36は各ドライバ側でI2Cアドレスを持つ。同じ内部I2Cバスを共有する。
+// 下のIRQ生アクセスで使うAXP192のスレーブアドレスも同じ0x34。
+const AXP192_ADDRESS: u8 = 0x34;
 
 pub type SharedI2c<'d> = RefCell<I2cDriver<'d>>;
 
@@ -114,6 +116,82 @@ where
         charging,
         powered,
     })
+}
+
+impl Battery {
+    /// 画面の再描画判定に使う値だけを抜き出す。
+    pub fn display_state(&self) -> battery::DisplayState {
+        battery::DisplayState {
+            percent: self.percent,
+            powered: self.powered,
+            charging: self.charging,
+        }
+    }
+}
+
+/// 給電・充電系の割り込みだけを有効化する。
+///
+/// `axp192` crate 0.2.0には割り込み設定APIが無い(lib.rs全522行を確認。
+/// enable/statusレジスタへの言及自体が無い)ため、生レジスタ書き込みになる。
+/// マスク定義は `battery::power_irq` に寄せてあり、ビットの根拠はそちらに書いた。
+/// 有効化は既存値へのOR(read-modify-write)で行い、ボタン(PEK)など
+/// 他用途の有効ビットを殺さない(M5UnifiedはCore2初期化で電源系を全無効にするが、
+/// ここでは既存設定を温存する)。
+///
+/// GPIO割り込み(ISR)は設定しない。量産Core2のAXP192 IRQピンはESP32の
+/// どのGPIOにも未接続で(M5Stack公式フォーラムtopic/2600でM5技術者が回答、
+/// 公式回路図CORE2_V1.0_SCHでも別ネット、M-BusのG35はADC用途)、stock実機では
+/// 立ち下がりが来ない。改造で配線した個体向けの土台としてenableだけ行い、
+/// 検出はメインループのラッチ確認(`power_event_pending`)で行う。
+/// ISRから共有I2Cバス(ft6x36と共用)を触ると壊れるため、I2C読み出しと
+/// 描画は従来どおりメインループが担当する。
+pub fn enable_power_irqs<I2C, E>(i2c: &mut I2C) -> Result<(), E>
+where
+    I2C: embedded_hal::i2c::I2c<Error = E>,
+{
+    for (reg, bits) in battery::power_irq::ENABLE_UPDATES {
+        let mut current = [0u8];
+        i2c.write_read(AXP192_ADDRESS, &[reg], &mut current)?;
+        i2c.write(AXP192_ADDRESS, &[reg, current[0] | bits])?;
+    }
+    Ok(())
+}
+
+/// 給電・充電系のIRQ状態ラッチをクリアする。
+///
+/// AXP192は該当ビットへ1を書くとクリアされる(write-1-to-clear)。
+/// 有効化したビットだけを書き、他用途のラッチは残す。
+/// クリアしないとラッチが出っぱなしになり、次の抜き挿しを見分けられない。
+/// `read_battery` の直後に呼ぶこと。
+pub fn clear_power_irq_status<I2C, E>(i2c: &mut I2C) -> Result<(), E>
+where
+    I2C: embedded_hal::i2c::I2c<Error = E>,
+{
+    for (reg, bits) in battery::power_irq::STATUS_CLEAR {
+        i2c.write(AXP192_ADDRESS, &[reg, bits])?;
+    }
+    Ok(())
+}
+
+/// 給電・充電系のIRQ状態ラッチに未処理のイベントがあるかを読む。
+///
+/// ラッチはエッジの記憶なので、短い抜き挿しでも次の確認まで残る。
+/// I2Cが応答しない場合はErrにし、呼び出し側は安全側(読む側)に倒すこと。
+pub fn power_event_pending<I2C, E>(i2c: &mut I2C) -> Result<bool, E>
+where
+    I2C: embedded_hal::i2c::I2c<Error = E>,
+{
+    let mut status44 = [0u8];
+    let mut status45 = [0u8];
+    i2c.write_read(AXP192_ADDRESS, &[0x44], &mut status44)?;
+    i2c.write_read(AXP192_ADDRESS, &[0x45], &mut status45)?;
+    // マスクと判定式はhostテスト済みの純粋ロジックを使う。
+    debug_assert_eq!(
+        battery::power_irq::STATUS_MASK,
+        battery::power_irq::STATUS_CLEAR,
+        "status regs must match clear regs"
+    );
+    Ok(battery::power_irq::is_pending(status44[0], status45[0]))
 }
 
 pub struct DisplayPins {

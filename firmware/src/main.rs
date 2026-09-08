@@ -33,6 +33,11 @@ use settings::RuntimeSettings;
 use ui::{Status, TelegramState};
 
 const STATUS_INTERVAL: Duration = Duration::from_secs(10);
+/// バッテリーIRQラッチの確認周期。USB抜き挿し・充電開始/完了はAXP192が
+/// ラッチするので、ここで気づけば最大約1秒で画面へ反映できる。
+/// フル読み出し(`read_battery`)はラッチ有りか10秒保険のときだけ行い、
+/// 普段は2レジスタ読みだけなのでI2C負荷は無視できる。
+const BATTERY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 const TOAST_TTL: Duration = Duration::from_secs(3);
 /// PC状態のTelegram通知を出すまでに必要な、同じ結果の連続観測回数。
@@ -140,11 +145,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let settings = Arc::new(RuntimeSettings::new(&app_config, nvs_partition.clone())?);
 
     // AXP192とタッチコントローラーは同じI2Cバスを共有する。
-    let i2c = board::new_i2c(
+    let mut i2c = board::new_i2c(
         peripherals.i2c0,
         peripherals.pins.gpio21.into(),
         peripherals.pins.gpio22.into(),
     )?;
+    // 給電・充電系のIRQだけ有効化する。他用途のビットは温存する。
+    // 量産Core2のAXP192 IRQピンはESP32に未接続のためGPIO割り込みは使わず、
+    // ラッチをメインループで確認する方式にする(詳細は `board.rs` のコメント)。
+    board::enable_power_irqs(&mut i2c).map_err(|e| format!("AXP192 IRQ init failed: {e:?}"))?;
+    println!("AXP192 power IRQs enabled");
     let i2c_bus = RefCell::new(i2c);
 
     let mut axp = board::new_axp(&i2c_bus);
@@ -256,6 +266,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut status_at = Instant::now();
     // バッテリー読みはPC状態確認とは別周期で回す(Wi-Fi断でも止めないため)。
     let mut battery_at = Instant::now();
+    // IRQラッチ確認の高速周期。フル読み出しの要否判定だけに使う。
+    let mut battery_fast_at = Instant::now();
     let mut wifi_check_at = Instant::now();
     let mut toast_at = Instant::now();
     let mut touch_was_down = false;
@@ -339,17 +351,40 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // バッテリーはI2Cで読むだけなのでWi-Fiに依存しない。PC状態の確認と
         // 同じ条件に入れていると、Wi-Fi断の間ずっと電池表示が固まる。
-        if battery_at.elapsed() >= STATUS_INTERVAL {
-            battery_at = Instant::now();
-            // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
-            let now_battery = board::read_battery(&mut axp);
-            // pollingスレッドはI2Cを持たないため、読み取り結果の値を共有する。
-            // 変化の有無に関わらず毎回書く。10秒に1回のMutex獲得は無視できる。
-            *telegram::lock_battery(&battery_shared) = now_battery;
-            if now_battery != status.battery {
-                status.battery = now_battery;
-                if matches!(screen, Screen::Main) {
-                    ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+        //
+        // 高速経路: 1秒ごとにAXP192のIRQラッチだけ確認し、給電・充電系の
+        // イベントが残っていれば即座に `read_battery` して表示へ反映する。
+        // 10秒ごとの無条件読みは保険として残し、ラッチの取りこぼしや
+        // I2Cの一時失敗があっても最大10秒で復帰できる。
+        // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
+        // 割り込み文脈(ISR)からはI2Cを触らない。量産Core2ではIRQピン自体が
+        // 未接続なので、ISRではなくこのラッチ確認が即時反映の実体になる。
+        if battery_fast_at.elapsed() >= BATTERY_POLL_INTERVAL {
+            battery_fast_at = Instant::now();
+            // ラッチ読みに失敗したら安全側に倒して読む側にする。
+            let pending = board::power_event_pending(&mut *i2c_bus.borrow_mut()).unwrap_or(true);
+            if pending || battery_at.elapsed() >= STATUS_INTERVAL {
+                battery_at = Instant::now();
+                let now_battery = board::read_battery(&mut axp);
+                // ラッチが出っぱなしになると次の抜き挿しを見分けられないため、
+                // 読み出し後は必ずクリアする。失敗しても次の周期で再試行する。
+                if let Err(e) =
+                    board::clear_power_irq_status(&mut *i2c_bus.borrow_mut())
+                {
+                    println!("battery: failed to clear AXP192 IRQ status (will retry): {e:?}");
+                }
+                // pollingスレッドはI2Cを持たないため、読み取り結果の値を共有する。
+                // 変化の有無に関わらず毎回書く。1秒に1回のMutex獲得は無視できる。
+                *telegram::lock_battery(&battery_shared) = now_battery;
+                // 表示に使う値が変わったときだけ描き直す。毎回描くとちらつく。
+                // 判定式はhostテスト済みの `battery::needs_redraw` を使う。
+                let prev_state = status.battery.map(|b| b.display_state());
+                let next_state = now_battery.map(|b| b.display_state());
+                if battery::needs_redraw(prev_state, next_state) {
+                    status.battery = now_battery;
+                    if matches!(screen, Screen::Main) {
+                        ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                    }
                 }
             }
         }
