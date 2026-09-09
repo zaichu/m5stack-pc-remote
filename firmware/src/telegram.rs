@@ -70,7 +70,8 @@ pub type PowerLock = Arc<Mutex<()>>;
 /// スレッド間には効かなかった。
 ///
 /// 方式: pollingスレッドと通知スレッドで1つの `HttpsLock` を共有し、`post_json`
-/// (全POSTの単一choke point)と `poll_once` のGET取得部で握る。`main.rs` で作り
+/// (単発POST)と `answer_callback_query_and_send` (ボタン確定時の連続POST、
+/// Issue #163 a0)と `poll_once` のGET取得部で握る。`main.rs` で作り
 /// 両スレッドへ渡す形にし、global staticにはしない(`PowerLock` と同じ扱い。
 /// 共有関係が呼び出し側から見え、hostテスト可能な純粋部品と切り分けやすいため)。
 /// 検討した代替案:
@@ -456,16 +457,36 @@ impl Api {
 
     /// Bot APIへJSONをPOSTする。URLとbodyはtokenや本文を含み得るためログへ出さない。
     fn post_json(&self, method: &str, body: &Value) -> Result<(), Box<dyn Error>> {
-        use esp_idf_svc::io::Write;
-
-        // Issue #127: mbedTLSは実質同時1本。pollingスレッドと通知スレッドの両方が
-        // この関数を通るため、ここを単一のchoke pointとして直列化する。
-        // 保持中はHTTP送受信だけを行い、他のロックは取らない(leaf扱い)。
+        // Issue #127: mbedTLSは実質同時1本。単発POSTはこの関数、ボタン確定時の
+        // 連続POSTは `answer_callback_query_and_send` を通る。どちらも `HttpsLock`
+        // で直列化する。保持中はHTTP送受信だけを行い、他のロックは取らない(leaf扱い)。
         let _https_guard = lock_https(&self.https);
 
+        let mut client = self.http_client()?;
+        self.post_via(&mut client, method, body)
+    }
+
+    /// 既存の接続ハンドルでJSONを1回POSTする。ロックも接続生成もしない。
+    /// 呼び出し側が `HttpsLock` を握ったうえで呼ぶこと(Issue #163 a0)。
+    /// 保持中はHTTP送受信だけを行い、他のロックは取らない(leaf扱い。Issue #127)。
+    ///
+    /// 所要時間の計測ログ(Issue #163 c0)はここで出す。method名とミリ秒だけで、
+    /// URL(tokenを含む)やbody(本文・chat_idを含み得る)は出さない。
+    /// 応答本文は読まずに捨てる。次回の `request` 時に `initiate_request` が
+    /// `flush_response` で未読分を捨てる(`EspHttpConnection::initiate_request` は
+    /// `State::Response` からの再呼び出しに対応している)。Bot APIのPOST応答は
+    /// 小さいため、明示的な読み捨てはしない。
+    fn post_via(
+        &self,
+        client: &mut HttpClient<EspHttpConnection>,
+        method: &str,
+        body: &Value,
+    ) -> Result<(), Box<dyn Error>> {
+        use esp_idf_svc::io::Write;
+
+        let started = Instant::now();
         let payload = serde_json::to_string(body)?;
         let url = self.api_url(method);
-        let mut client = self.http_client()?;
         let content_length = payload.len().to_string();
         let headers = [
             ("Content-Type", "application/json"),
@@ -476,6 +497,10 @@ impl Api {
         request.flush()?;
         let response = request.submit()?;
         let status = response.status();
+        println!(
+            "telegram: {method} took {}ms",
+            started.elapsed().as_millis()
+        );
         if !(200..300).contains(&status) {
             // 呼び出し側が再送要否を判断できるよう、失敗はエラーとして返す。
             return Err(format!("telegram {method} failed: {status}").into());
@@ -493,6 +518,7 @@ impl Api {
 
         let _https_guard = lock_https(&self.https);
 
+        let started = Instant::now();
         let body = json!({ "chat_id": chat_id, "text": text });
         let payload = serde_json::to_string(&body).ok()?;
         let url = self.api_url("sendMessage");
@@ -506,8 +532,14 @@ impl Api {
         request.write_all(payload.as_bytes()).ok()?;
         request.flush().ok()?;
         let mut response = request.submit().ok()?;
-        if !(200..300).contains(&response.status()) {
-            println!("telegram: sendMessage failed: {}", response.status());
+        let status = response.status();
+        // 本文・chat_idは出さない。method名とミリ秒だけ(Issue #163 c0)。
+        println!(
+            "telegram: sendMessage took {}ms",
+            started.elapsed().as_millis()
+        );
+        if !(200..300).contains(&status) {
+            println!("telegram: sendMessage failed: {status}");
             return None;
         }
 
@@ -619,6 +651,61 @@ impl Api {
         // 原因の切り分けができない。応答本文は出さず、失敗の事実だけ残す。
         if let Err(e) = self.post_json("answerCallbackQuery", &body) {
             println!("telegram: answerCallbackQuery failed: {e}");
+        }
+    }
+
+    /// `answerCallbackQuery` と `sendMessage` を1つの接続ハンドルで連続送信する
+    /// (Issue #163 a0: ボタン確定時の2回POST)。
+    ///
+    /// `HttpsLock` は1回だけ取り、1つの `EspHttpConnection` で2回POSTする。
+    /// 2回目の `request` 時に1回目の未読応答は `initiate_request` 内の
+    /// `flush_response` で捨てられるため、明示の読み捨ては要らない。
+    /// 同時に張るTLS接続は1本のまま(Issue #127の排他性は変えない)。
+    /// 保持中はHTTP送受信だけを行い、他のロックは取らない(leaf扱い)。
+    /// `chat_id` が0のときはanswerだけ送る(従来の `handle_callback_query` と同じ)。
+    fn answer_callback_query_and_send(
+        &self,
+        id: &str,
+        answer_text: &str,
+        chat_id: i64,
+        send_text: &str,
+    ) {
+        let _https_guard = lock_https(&self.https);
+        let mut client = match self.http_client() {
+            Ok(client) => client,
+            Err(e) => {
+                println!("telegram: answer+send client failed: {e}");
+                return;
+            }
+        };
+        let mut answer_body = json!({ "callback_query_id": id });
+        if !answer_text.is_empty() {
+            answer_body["text"] = json!(answer_text);
+        }
+        // 失敗を握り潰すと「ボタンを押しても何も起きない」だけになり、
+        // 原因の切り分けができない。応答本文は出さず、失敗の事実だけ残す。
+        if let Err(e) = self.post_via(&mut client, "answerCallbackQuery", &answer_body) {
+            println!("telegram: answerCallbackQuery failed: {e}");
+            // 送信途中の失敗では接続の状態が不定(`State::Request` のまま残り得る)
+            // のため、2通目は新しいハンドルで送る(従来の挙動へ切り戻す)。
+            // 応答を受け取っての失敗(`State::Response`)なら使い回せたが、
+            // 区別せず作り直すほうが単純で安全。
+            client = match self.http_client() {
+                Ok(client) => client,
+                Err(e) => {
+                    println!("telegram: sendMessage skipped: {e}");
+                    return;
+                }
+            };
+        }
+        if chat_id != 0 {
+            if let Err(e) = self.post_via(
+                &mut client,
+                "sendMessage",
+                &json!({ "chat_id": chat_id, "text": send_text }),
+            ) {
+                println!("telegram: sendMessage failed: {e}");
+            }
         }
     }
 }
@@ -1400,34 +1487,39 @@ impl Client {
         let is_confirm = confirm;
 
         if !is_confirm {
-            self.api.answer_callback_query(
-                &id,
-                if valid.is_some() {
-                    "キャンセルしました"
-                } else {
-                    "処理済みです"
-                },
-            );
+            let answer_text = if valid.is_some() {
+                "キャンセルしました"
+            } else {
+                "処理済みです"
+            };
+            let reply = match &valid {
+                Some(kind) => format!("{}をキャンセルしました。", kind.label_ja()),
+                None => "有効な確認がありません。期限切れ、使用済み、またはnonce不一致です。"
+                    .to_string(),
+            };
+            // Issue #163 a0: answerとsendを1ハンドルで連続送信する。
             if chat_id != 0 {
-                let reply = match &valid {
-                    Some(kind) => format!("{}をキャンセルしました。", kind.label_ja()),
-                    None => "有効な確認がありません。期限切れ、使用済み、またはnonce不一致です。"
-                        .to_string(),
-                };
-                self.api.send_message(chat_id, &reply);
+                self.api
+                    .answer_callback_query_and_send(&id, answer_text, chat_id, &reply);
+            } else {
+                self.api.answer_callback_query(&id, answer_text);
             }
             return;
         }
 
         let Some(kind) = valid else {
-            self.api
-                .answer_callback_query(&id, "期限切れまたは処理済みです");
+            // Issue #163 a0: answerとsendを1ハンドルで連続送信する。
             if chat_id != 0 {
-                self.api.send_message(
+                self.api.answer_callback_query_and_send(
+                    &id,
+                    "期限切れまたは処理済みです",
                     chat_id,
                     "有効な確認がありません。期限切れ、使用済み、またはnonce不一致です。\
-                     \nもう一度実行してください。",
+                      \nもう一度実行してください。",
                 );
+            } else {
+                self.api
+                    .answer_callback_query(&id, "期限切れまたは処理済みです");
             }
             return;
         };
@@ -1445,9 +1537,13 @@ impl Client {
                 return;
             }
         };
-        self.api.answer_callback_query(&id, &result);
+        // Issue #163 a0: answerとsendを1ハンドルで連続送信する。
+        // OTAはrebootを伴うため対象外で、上でanswer後に別経路へ渡している。
         if chat_id != 0 {
-            self.api.send_message(chat_id, &result);
+            self.api
+                .answer_callback_query_and_send(&id, &result, chat_id, &result);
+        } else {
+            self.api.answer_callback_query(&id, &result);
         }
     }
 
@@ -1564,6 +1660,9 @@ impl Client {
             // その間通知スレッドはロック待ちになる(通知が遅れる上限)。
             // 握らないと2本同時TLSで通知側が落ち、黙って消える。
             let _https_guard = lock_https(&self.api.https);
+            // Issue #163 c0: 接続確立から応答完了までの所要時間を出す。
+            // URL(tokenを含む)は出さず、method名とミリ秒だけ。
+            let started = Instant::now();
             let mut client = self.api.http_client()?;
             let request = client.request(Method::Get, &url, &[])?;
             let mut response = request.submit()?;
@@ -1586,6 +1685,10 @@ impl Client {
                 }
                 body.extend_from_slice(&chunk[..read]);
             }
+            println!(
+                "telegram: getUpdates took {}ms",
+                started.elapsed().as_millis()
+            );
             body
         };
 
