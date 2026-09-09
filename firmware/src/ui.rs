@@ -332,6 +332,18 @@ fn draw_banner(
     Ok(())
 }
 
+/// ヘッダー帯(高さ26px)だけを描き直す。バッテリー残量の変化など、
+/// ヘッダー内のランプだけが変わったときに使う。
+/// `draw_header` は帯全体を先に塗りつぶすため、古いランプ文言の長さが
+/// 変わってもゴーストは残らない。全画面clearはしないので、ちらつきと
+/// 転送量(帯分16,640B、全画面の約1/9)が少ない。
+pub fn redraw_header(
+    display: &mut Core2Display<'_>,
+    status: &Status<'_>,
+) -> Result<(), Box<dyn Error>> {
+    draw_header(display, status)
+}
+
 pub fn draw_main(
     display: &mut Core2Display<'_>,
     status: &Status<'_>,

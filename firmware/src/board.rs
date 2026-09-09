@@ -18,15 +18,41 @@ use esp_idf_hal::gpio::{AnyIOPin, Gpio15, Gpio18, Gpio23, Gpio5, Output, PinDriv
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver, I2C0};
 use esp_idf_hal::prelude::*;
 use esp_idf_hal::spi::config::{Config as SpiConfig, DriverConfig, Duplex};
-use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver, SPI2};
+use esp_idf_hal::spi::{Dma, SpiDeviceDriver, SpiDriver, SPI2};
 use ft6x36::Ft6x36;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9342CRgb565;
 use mipidsi::options::{ColorInversion, Orientation, Rotation};
 use mipidsi::Builder;
 
-/// mipidsiのSPI転送バッファ。320px * 2bytesで1行分をまとめて送れる。
-const SPI_BUFFER_SIZE: usize = DISPLAY_WIDTH as usize * 2;
+/// mipidsiのSPI転送バッファ。1回のfillで約6.4行分(320px×2B×6.4)をまとめ送る。
+/// 従来640B(1行)ではDMA無効時の64B上限も相まって全画面で約2,400回の
+/// SPIトランザクションになっていた。4096Bでは全画面(320x240x2=153,600B)を
+/// 38回で送れる。さらに大きくしても転送時間(40MHzで全画面30.7msが下限)が
+/// 支配的になり効果は逓減するため、内部DRAMの静的消費4KBとの釣り合いで
+/// この大きさに留める。ESP-IDFのDMA有効時 `max_transfer_sz` 既定値4092と
+/// 同規模であり、無理のない大きさ。
+const SPI_BUFFER_SIZE: usize = 4096;
+
+/// `Dma::Auto` に渡す最大転送長。`SPI_BUFFER_SIZE` と同じにし、mipidsiの
+/// 1回の書き込みが複数トランザクションへ分割されないようにする。
+/// `Dma::max_transfer_size` の契約で4の倍数でなければならない。
+const SPI_DMA_MAX_TRANSFER_SIZE: usize = 4096;
+
+// 選んだ値がDMAの契約を満たすことをコンパイル時に縛る。値を変えたときに
+// 実行時panicや実機でのDMA失敗ではなくビルド時点で気づけるようにする。
+const _: () = assert!(
+    SPI_BUFFER_SIZE % 4 == 0,
+    "SPI_BUFFER_SIZE must be a multiple of 4 for DMA"
+);
+const _: () = assert!(
+    SPI_DMA_MAX_TRANSFER_SIZE % 4 == 0,
+    "SPI_DMA_MAX_TRANSFER_SIZE must be a multiple of 4 (Dma::max_transfer_size)"
+);
+const _: () = assert!(
+    SPI_BUFFER_SIZE <= SPI_DMA_MAX_TRANSFER_SIZE,
+    "SPI_BUFFER_SIZE must fit in one DMA transaction"
+);
 
 pub const DISPLAY_WIDTH: u16 = 320;
 pub const DISPLAY_HEIGHT: u16 = 240;
@@ -207,6 +233,30 @@ pub type Core2Display<'d> = mipidsi::Display<
     mipidsi::NoResetPin,
 >;
 
+/// DMA転送用のバッファを内部DRAMに確保する。
+///
+/// `Box::new` では確保先がPSRAMになりうる。ESP-IDFのmallocは
+/// `CONFIG_SPIRAM_USE_MALLOC` 設定で外部RAMへ回すことがあり(このボードは
+/// PSRAM有効)、PSRAM上のバッファではSPI DMAが使えない。一方
+/// `heap_caps_malloc(size, MALLOC_CAP_DMA)` は「DMA-Capable Memory」として
+/// 外部PSRAMを除外することがESP-IDF Programming Guide(Heap Memory
+/// Allocation)に明記されているため、内部DRAMを保証できる。推測ではなく
+/// この documented な意味に依存する。
+/// mipidsiのコマンド送信などの小片バッファはタスクスタック(=内部DRAM)に
+/// 載るためDMA可能で、確保先が問題になるのはこのヒープ確保分だけ。
+fn alloc_dma_buffer() -> &'static mut [u8] {
+    let ptr = unsafe {
+        esp_idf_sys::heap_caps_malloc(SPI_BUFFER_SIZE, esp_idf_sys::MALLOC_CAP_DMA) as *mut u8
+    };
+    assert!(!ptr.is_null(), "SPI DMA buffer allocation failed");
+    // mipidsiはfillしてから送るため中身は上書きされるが、端数送出時の
+    // ゴミ転送を避けるためゼロ初期化しておく。起動時1回だけのコスト。
+    unsafe {
+        core::ptr::write_bytes(ptr, 0, SPI_BUFFER_SIZE);
+        core::slice::from_raw_parts_mut(ptr, SPI_BUFFER_SIZE)
+    }
+}
+
 /// SPI経由でILI9342Cを初期化する。LCDリセットはAXP192 GPIO4側で行うため、
 /// 先に `init_power` を実行しておく。
 pub fn init_display<'d>(
@@ -215,12 +265,17 @@ pub fn init_display<'d>(
 ) -> Result<Core2Display<'d>, Box<dyn std::error::Error>> {
     // MISOは使わない。設定するとfull-duplex扱いになり、利用可能なSPI clockが
     // 26.7MHzに制限される。
+    //
+    // DMAを有効にしないと1トランザクション64バイト上限(`Dma::Disabled` 時の
+    // `max_transfer_size` = TRANS_LEN)になり、全画面で約2,400回の
+    // トランザクションでドライバ overhead が支配的になる(Issue #160)。
+    // `Dma::Auto` でESP-IDFにチャネル選択を任せる(SPI_DMA_CH_AUTO)。
     let spi_driver = SpiDriver::new(
         spi,
         pins.sclk,
         pins.mosi,
         None::<AnyIOPin>,
-        &DriverConfig::new(),
+        &DriverConfig::new().dma(Dma::Auto(SPI_DMA_MAX_TRANSFER_SIZE)),
     )?;
 
     // 画面からの読み取りはしないためhalf-duplex/write-onlyで駆動する。
@@ -233,7 +288,8 @@ pub fn init_display<'d>(
 
     let dc = PinDriver::output(pins.dc)?;
     // displayはプログラム全体で生存するため、SPIバッファもstaticとして保持する。
-    let buffer: &'static mut [u8] = Box::leak(Box::new([0u8; SPI_BUFFER_SIZE]));
+    // DMA転送のため内部DRAM確保が必須なので `Box::leak` は使わない(上記参照)。
+    let buffer: &'static mut [u8] = alloc_dma_buffer();
     let di = SpiInterface::new(spi_device, dc, buffer);
 
     let mut delay = Delay::new_default();

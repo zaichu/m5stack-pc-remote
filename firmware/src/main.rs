@@ -378,12 +378,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 *telegram::lock_battery(&battery_shared) = now_battery;
                 // 表示に使う値が変わったときだけ描き直す。毎回描くとちらつく。
                 // 判定式はhostテスト済みの `battery::needs_redraw` を使う。
+                // 描き直しはヘッダー帯だけ(`redraw_header`)にし、全画面clearは
+                // しない。バッテリー表示はヘッダー内にしか無いため(判定自体は
+                // PR #161のまま変えない)。
                 let prev_state = status.battery.map(|b| b.display_state());
                 let next_state = now_battery.map(|b| b.display_state());
                 if battery::needs_redraw(prev_state, next_state) {
                     status.battery = now_battery;
                     if matches!(screen, Screen::Main) {
-                        ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                        ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
                     }
                 }
             }
@@ -422,10 +425,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             // 表示内容が変わったときだけ描き直す。`draw_main`は全画面消去から
             // 始まるため、10秒ごとに無条件で呼ぶとその周期で画面がちらつく。
-            if matches!(screen, Screen::Main)
-                && (status.pc_online != previous_online || status.battery != previous_battery)
-            {
-                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+            // PC状態の変化はカード・ボタン配置に影響するため全画面描き直し、
+            // バッテリーだけの変化はヘッダー帯だけ描き直す(Issue #160)。
+            if matches!(screen, Screen::Main) {
+                if status.pc_online != previous_online {
+                    ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                } else if status.battery != previous_battery {
+                    ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
+                }
             }
 
             // 起動自己診断: 通ったときだけOTA後の新slotをvalidとマークする。
