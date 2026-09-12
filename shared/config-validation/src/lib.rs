@@ -61,6 +61,50 @@ pub fn validate_wol_port(input: &str) -> Result<u16, String> {
     validate_port(input.trim())
 }
 
+/// 画面の明るさとして妥当なパーセント(0〜100)か検証する(Issue #167)。
+///
+/// 0%を「消灯」の意味にはしない(消灯は別Issue #168のスリープ機能の役割)。
+/// ここでは0〜100の範囲だけを見て、下限電圧への丸めは
+/// `brightness_percent_to_dcdc3_mv` が担当する。
+pub fn validate_brightness_percent(input: &str) -> Result<u8, String> {
+    let trimmed = input.trim();
+    let percent: u8 = trimmed
+        .parse()
+        .map_err(|_| format!("`{trimmed}` は明るさ(0〜100の数値)ではありません(例: 80)"))?;
+    if percent > 100 {
+        return Err(format!(
+            "`{trimmed}` は範囲外です。明るさは0〜100で指定してください"
+        ));
+    }
+    Ok(percent)
+}
+
+/// 明るさ100%に対応するDCDC3電圧(mV)。従来の固定値であり実機で動作確認済み。
+pub const BRIGHTNESS_DCDC3_MAX_MV: u16 = 2800;
+/// 明るさ0%に対応するDCDC3電圧(mV)。
+///
+/// 実機で未検証の暫定値であり、後日実機で見ながら追い込む前提(Issue #167)。
+/// AXP192自体のDCDC3範囲は700〜3500mV/25mVステップだが、それはICの仕様上の
+/// 範囲であり、Core2のバックライトLEDが実際に安全かつ点灯する範囲ではない
+/// ため、ユーザーに公開する範囲は保守的に絞る。0%でも「暗いが点いている」
+/// 状態に留め、消灯にはしない(消灯は別Issue #168のスリープ機能の役割)。
+/// LDO2(LCD+タッチ電源、3300mV固定)は絶対に変更しないこと。
+pub const BRIGHTNESS_DCDC3_MIN_MV: u16 = 2500;
+
+/// 明るさパーセント(0〜100)をAXP192 DCDC3電圧(mV)へ線形に変換する純粋関数。
+///
+/// `BRIGHTNESS_DCDC3_MIN_MV`〜`BRIGHTNESS_DCDC3_MAX_MV` へ線形に割り付け、
+/// AXP192の25mVステップへ切り捨てる(`axp192` crateの `set_dcdc3_voltage` も
+/// 同じ切り捨てを行うため、ここで丸めて実電圧と一致させる)。
+/// 101以上が来ても `validate_brightness_percent` を素通りした不正値として
+/// 上限へ丸める(消灯側へは倒さない)。
+pub fn brightness_percent_to_dcdc3_mv(percent: u8) -> u16 {
+    let clamped = percent.min(100);
+    let range = BRIGHTNESS_DCDC3_MAX_MV - BRIGHTNESS_DCDC3_MIN_MV;
+    let mv = BRIGHTNESS_DCDC3_MIN_MV + range * clamped as u16 / 100;
+    mv - (mv % 25)
+}
+
 /// Telegram許可ユーザーIDの前後空白を取り除く。
 ///
 /// firmware側の `is_configured` は `trim()` して判定するのに、chat_id化と
@@ -186,6 +230,63 @@ mod tests {
         assert!(validate_wol_port("-1").is_err(), "負数");
         assert!(validate_wol_port("nine").is_err(), "数値でない");
         assert!(validate_wol_port("").is_err(), "空文字");
+    }
+
+    #[test]
+    fn accepts_valid_brightness_percent() {
+        assert_eq!(validate_brightness_percent("0").unwrap(), 0);
+        assert_eq!(validate_brightness_percent("80").unwrap(), 80);
+        assert_eq!(validate_brightness_percent("100").unwrap(), 100);
+        // 前後の空白は許容してtrimする(Telegramのコピペ経由の値を想定)。
+        assert_eq!(validate_brightness_percent("  80 \n").unwrap(), 80);
+    }
+
+    #[test]
+    fn rejects_invalid_brightness_percent() {
+        // Issue #167: 境界値は 0/100 が有効、101 が無効。
+        assert!(validate_brightness_percent("101").is_err(), "101は範囲外");
+        assert!(validate_brightness_percent("255").is_err(), "u8範囲内だが範囲外");
+        assert!(validate_brightness_percent("256").is_err(), "u8範囲外");
+        assert!(validate_brightness_percent("-1").is_err(), "負数");
+        assert!(validate_brightness_percent("abc").is_err(), "数値でない");
+        assert!(validate_brightness_percent("").is_err(), "空文字");
+        assert!(validate_brightness_percent("80%").is_err(), "単位付きは拒否");
+        assert!(validate_brightness_percent("8.5").is_err(), "小数は拒否");
+    }
+
+    #[test]
+    fn maps_brightness_percent_endpoints_to_dcdc3_mv() {
+        // Issue #167: 0%は下限(消灯ではない)、100%は現状の2800mV。
+        assert_eq!(brightness_percent_to_dcdc3_mv(0), BRIGHTNESS_DCDC3_MIN_MV);
+        assert_eq!(brightness_percent_to_dcdc3_mv(100), BRIGHTNESS_DCDC3_MAX_MV);
+        assert_eq!(BRIGHTNESS_DCDC3_MAX_MV, 2800);
+    }
+
+    #[test]
+    fn maps_brightness_percent_monotonically_in_25mv_steps() {
+        // 全域で単調非減少・範囲内・25mVステップであること。
+        // 境界の切り捨て(`>` と `>=` の取り違え等)を殺すため全点を検証する。
+        let mut prev = brightness_percent_to_dcdc3_mv(0);
+        for percent in 0..=100u8 {
+            let mv = brightness_percent_to_dcdc3_mv(percent);
+            assert!(
+                (BRIGHTNESS_DCDC3_MIN_MV..=BRIGHTNESS_DCDC3_MAX_MV).contains(&mv),
+                "{percent}% -> {mv}mV は範囲外"
+            );
+            assert_eq!(mv % 25, 0, "{percent}% -> {mv}mV は25mVステップでない");
+            assert!(mv >= prev, "{percent}% で減少した");
+            prev = mv;
+        }
+        // 中点の代表値。線形補間の向き(上限・下限の取り違え)を殺す。
+        assert_eq!(brightness_percent_to_dcdc3_mv(50), 2650);
+    }
+
+    #[test]
+    fn clamps_out_of_range_brightness_to_max() {
+        // `validate_brightness_percent` を素通りした不正値は上限へ丸める。
+        // 下限(消灯側)へ倒さないこと。
+        assert_eq!(brightness_percent_to_dcdc3_mv(101), BRIGHTNESS_DCDC3_MAX_MV);
+        assert_eq!(brightness_percent_to_dcdc3_mv(u8::MAX), BRIGHTNESS_DCDC3_MAX_MV);
     }
 
     #[test]

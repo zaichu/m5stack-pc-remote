@@ -40,6 +40,9 @@ const KEYS: &[Key] = &[
     // ビルドが通るよう既定値を持たせる(必須にするとkey追加まで壊れる)。
     Key::int("daily_report_hour", "DAILY_REPORT_HOUR", IntTy::I64).default(DAILY_REPORT_DISABLED),
     Key::int("timezone_offset_hours", "TIMEZONE_OFFSET_HOURS", IntTy::I64).default(0),
+    // 画面の明るさ(Issue #167)。後から追加した任意keyなので既定値100
+    // (現状の2800mVと同じ明るさ)を持たせ、既存のconfig.tomlでもビルドが通る。
+    Key::int("brightness", "BRIGHTNESS", IntTy::U8).default(100),
 ];
 
 enum Kind {
@@ -58,6 +61,7 @@ enum Kind {
 /// 両方で検証し、キー名入りのエラーにするため enum で持つ。
 #[derive(Clone, Copy)]
 enum IntTy {
+    U8,
     U16,
     U32,
     U64,
@@ -67,6 +71,7 @@ enum IntTy {
 impl IntTy {
     const fn rust_name(self) -> &'static str {
         match self {
+            IntTy::U8 => "u8",
             IntTy::U16 => "u16",
             IntTy::U32 => "u32",
             IntTy::U64 => "u64",
@@ -76,7 +81,7 @@ impl IntTy {
 
     const fn min_value(self) -> i64 {
         match self {
-            IntTy::U16 | IntTy::U32 | IntTy::U64 => 0,
+            IntTy::U8 | IntTy::U16 | IntTy::U32 | IntTy::U64 => 0,
             IntTy::I64 => i64::MIN,
         }
     }
@@ -86,6 +91,7 @@ impl IntTy {
     /// `i64::MAX` を上限として問題ない。
     const fn max_value(self) -> i64 {
         match self {
+            IntTy::U8 => u8::MAX as i64,
             IntTy::U16 => u16::MAX as i64,
             IntTy::U32 => u32::MAX as i64,
             IntTy::U64 | IntTy::I64 => i64::MAX,

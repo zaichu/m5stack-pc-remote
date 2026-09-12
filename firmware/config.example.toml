@@ -34,3 +34,8 @@ telegram_confirm_ttl_secs = 60
 # timezone_offset_hours はUTCからのずれ。JSTなら 9。
 daily_report_hour = -1
 timezone_offset_hours = 9
+
+# 画面の明るさ(任意、0〜100のパーセント。既定 100)。
+# AXP192 DCDC3(バックライト電源)の電圧へ変換する。100が現状の2800mVに対応する。
+# 0%を消灯の意味にはしない(消灯はスリープ機能の役割)。下限電圧は実機で追い込む前提の暫定値。
+brightness = 100
