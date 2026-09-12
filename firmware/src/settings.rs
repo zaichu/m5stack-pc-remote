@@ -1,8 +1,9 @@
-// Telegramから実行時に変更できる設定値(pc_ip_address / pc_status_addr / wol_port)。
+// Telegramから実行時に変更できる設定値(pc_ip_address / pc_status_addr / wol_port /
+// brightness)。
 //
-// `AppConfig` は起動時に読んで以後変更しない値の集まりだが、この3値だけは
+// `AppConfig` は起動時に読んで以後変更しない値の集まりだが、この4値だけは
 // Telegram経由で書き換わる。`AppConfig` 全体をMutex化すると、読み取りしかしない
-// 他フィールド(bot token等)まで毎回ロックを取ることになるため、この3値だけを
+// 他フィールド(bot token等)まで毎回ロックを取ることになるため、この4値だけを
 // 独立したMutexで持つ(読み取り多数・書き込みほぼゼロというアクセス形態に合わせる)。
 //
 // 値の検証は `config-validation` crate(host側でテストできる)側で行う。ここは
@@ -21,11 +22,17 @@ use crate::app_config::{AppConfig, NAMESPACE};
 const NVS_KEY_PC_IP: &str = "pc_ip";
 const NVS_KEY_STATUS_ADDR: &str = "status_addr";
 const NVS_KEY_WOL_PORT: &str = "wol_port";
+// 明るさの既定値(100、現状のDCDC3 2800mVと同じ明るさ)は `firmware/build.rs` の
+// `Key::int("brightness", ...).default(100)` が正本。NVSにもビルド時configにも
+// 値が無いときはそこへフォールバックするため、既存ユーザーのNVSにkeyが無い場合の
+// 後方互換は `wol_port` と同じ扱い(未設定なら現状維持)になる。
+const NVS_KEY_BRIGHTNESS: &str = "brightness";
 
 struct State {
     pc_ip_address: String,
     pc_status_addr: String,
     wol_port: u16,
+    brightness_percent: u8,
     /// 書き込み用に読み書きモードで開いたハンドル。`AppConfig::load` が起動時に
     /// 読み取り専用で開くハンドルとは別物で、両者は同時に生存しない
     /// (`load()` はhandleを関数内で使い切って返す前に手放す)。
@@ -44,6 +51,7 @@ impl RuntimeSettings {
                 pc_ip_address: app_config.pc_ip_address.clone(),
                 pc_status_addr: app_config.pc_status_addr.clone(),
                 wol_port: app_config.wol_port,
+                brightness_percent: app_config.brightness,
                 nvs,
             }),
         })
@@ -67,13 +75,18 @@ impl RuntimeSettings {
         self.lock().wol_port
     }
 
-    /// `/settings` 表示用の一括取得。3回ロックを取るより一貫した値が見える。
-    pub fn snapshot(&self) -> (String, String, u16) {
+    pub fn brightness_percent(&self) -> u8 {
+        self.lock().brightness_percent
+    }
+
+    /// `/settings` 表示用の一括取得。4回ロックを取るより一貫した値が見える。
+    pub fn snapshot(&self) -> (String, String, u16, u8) {
         let state = self.lock();
         (
             state.pc_ip_address.clone(),
             state.pc_status_addr.clone(),
             state.wol_port,
+            state.brightness_percent,
         )
     }
 
@@ -95,6 +108,13 @@ impl RuntimeSettings {
         let mut state = self.lock();
         state.nvs.set_str(NVS_KEY_WOL_PORT, &value.to_string())?;
         state.wol_port = value;
+        Ok(())
+    }
+
+    pub fn set_brightness_percent(&self, value: u8) -> Result<(), EspError> {
+        let mut state = self.lock();
+        state.nvs.set_str(NVS_KEY_BRIGHTNESS, &value.to_string())?;
+        state.brightness_percent = value;
         Ok(())
     }
 }

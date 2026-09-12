@@ -29,6 +29,9 @@ pub struct AppConfig {
     pub daily_report_hour: i64,
     /// UTCからのローカル時刻のずれ(時間)。JSTなら9。
     pub timezone_offset_hours: i64,
+    /// 画面の明るさ(0〜100のパーセント、Issue #167)。DCDC3電圧への変換は
+    /// `board::brightness_percent_to_dcdc3_mv` が担当する。
+    pub brightness: u8,
 }
 
 impl AppConfig {
@@ -65,6 +68,7 @@ impl AppConfig {
             telegram_confirm_ttl_secs: build_config::TELEGRAM_CONFIRM_TTL_SECS,
             daily_report_hour: build_config::DAILY_REPORT_HOUR,
             timezone_offset_hours: build_config::TIMEZONE_OFFSET_HOURS,
+            brightness: build_config::BRIGHTNESS,
         }
     }
 
@@ -93,6 +97,16 @@ impl AppConfig {
             );
             self.daily_report_hour = -1;
         }
+        // 明るさは0〜100のパーセント。u8なので101〜255が入り得る
+        // (build.rsの型チェックはu8範囲までしか見ない)ため、ここで丸める。
+        // Telegram経由の入力は `config_validation` が0〜100に制限する。
+        if self.brightness > 100 {
+            println!(
+                "brightness={} は範囲外(0〜100)です。100として扱います",
+                self.brightness
+            );
+            self.brightness = 100;
+        }
     }
 
     fn apply_nvs(&mut self, nvs: &EspNvs<NvsDefault>) {
@@ -118,6 +132,7 @@ impl AppConfig {
         replace(nvs, &["tg_ttl_secs"], &mut self.telegram_confirm_ttl_secs);
         replace(nvs, &["report_hour"], &mut self.daily_report_hour);
         replace(nvs, &["tz_offset"], &mut self.timezone_offset_hours);
+        replace(nvs, &["brightness"], &mut self.brightness);
     }
 }
 

@@ -4,8 +4,8 @@
 // axp192 crateのm5stack-core2 exampleを基準にしている。
 //   LCD (ILI9342C, 320x240): MOSI=23, MISO=38, SCLK=18, DC=15, CS=5
 //   LCD reset:     AXP192 GPIO4
-//   LCD power:     AXP192 LDO2  @ 3300mV
-//   LCD backlight: AXP192 DCDC3 @ 2800mV
+//   LCD power:     AXP192 LDO2  @ 3300mV(固定。LCD+タッチ両方の電源のため変更しない)
+//   LCD backlight: AXP192 DCDC3(明るさ設定0〜100%を電圧へ変換。100%で2800mV)
 //   Touch (FT6336U, FT5x06-compatible): I2C 0x38, INT=39
 //   AXP192: I2C 0x34; shared bus SDA=21, SCL=22 @ 400kHz
 
@@ -69,7 +69,12 @@ const AXP192_ADDRESS: u8 = 0x34;
 pub type SharedI2c<'d> = RefCell<I2cDriver<'d>>;
 
 /// LCDとタッチコントローラーを使う前に必要なAXP192電源投入手順。
-pub fn init_power<I2C, E>(axp: &mut Axp192<I2C>) -> Result<(), E>
+///
+/// `brightness_percent` は保存済みの明るさ設定(0〜100)を渡すこと。起動直後から
+/// 正しい明るさで表示されるよう、DCDC3(バックライト)はここで設定済み電圧にする。
+/// 変更確定後の即時反映は `apply_brightness` が担当し、呼び出し側(UIループ)が
+/// 設定の変化を見て呼ぶ(pollingスレッドはI2Cドライバを持たないため)。
+pub fn init_power<I2C, E>(axp: &mut Axp192<I2C>, brightness_percent: u8) -> Result<(), E>
 where
     I2C: embedded_hal::i2c::I2c<Error = E>,
 {
@@ -78,8 +83,7 @@ where
     axp.set_ldo2_on(true)?;
     axp.set_ldo3_voltage(2000)?; // vibration motor
     axp.set_ldo3_on(false)?;
-    axp.set_dcdc3_voltage(2800)?; // LCD backlight
-    axp.set_dcdc3_on(true)?;
+    apply_brightness(axp, brightness_percent)?;
 
     axp.set_gpio1_mode(axp192::GpioMode12::NmosOpenDrainOutput)?; // power LED
     axp.set_gpio1_output(false)?;
@@ -107,6 +111,24 @@ where
     axp.set_gpio4_output(true)?;
     FreeRtos::delay_ms(100);
 
+    Ok(())
+}
+
+/// バックライト(DCDC3)の電圧を明るさ設定へ合わせる(Issue #167)。
+///
+/// DCDC3だけを触り、LDO2(LCD+タッチ電源、3300mV固定)には絶対に触らない。
+/// LDO2を下げると表示だけでなくタッチも壊れる。
+/// パーセント→電圧の変換式と上限・下限の根拠は
+/// `config_validation::brightness_percent_to_dcdc3_mv` のコメントを参照
+/// (下限は実機で未検証の暫定値であり、後日調整する前提)。
+/// 変換の純粋関数部分はhost側でテストする(AXP192のI2C書き込み自体は
+/// hostでは検証できないため)。この関数はI2C書き込みの配線だけを担当する。
+pub fn apply_brightness<I2C, E>(axp: &mut Axp192<I2C>, percent: u8) -> Result<(), E>
+where
+    I2C: embedded_hal::i2c::I2c<Error = E>,
+{
+    axp.set_dcdc3_voltage(config_validation::brightness_percent_to_dcdc3_mv(percent))?;
+    axp.set_dcdc3_on(true)?;
     Ok(())
 }
 

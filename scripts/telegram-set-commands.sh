@@ -32,7 +32,7 @@ fi
 # 日常的に使う電源操作と、そこから辿れる入口(/settings)だけを登録する。
 #
 # 意図的に登録しないもの:
-# - /set_ip /set_status_addr /set_wol_port: 値の引数が必須で、一覧からタップしても
+# - /set_ip /set_status_addr /set_wol_port /set_brightness: 値の引数が必須で、一覧からタップしても
 #   そのままでは実行できない。/settings の応答が現在値入りの実行例を出すので、
 #   そこをコピーして使う導線にする。
 # - /lock /unlock: 設定変更と同じく日常操作ではない。/settings が現在のロック状態と

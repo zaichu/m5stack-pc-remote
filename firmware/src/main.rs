@@ -140,7 +140,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let peripherals = Peripherals::take()?;
     let nvs_partition = EspDefaultNvsPartition::take()?;
     let app_config = Arc::new(AppConfig::load(nvs_partition.clone()));
-    // Telegramから実行時に変更できる設定値(pc_ip_address/pc_status_addr/wol_port)。
+    // Telegramから実行時に変更できる設定値(pc_ip_address/pc_status_addr/wol_port/brightness)。
     // AppConfigは起動時の読み取り専用スナップショットのまま残す。
     let settings = Arc::new(RuntimeSettings::new(&app_config, nvs_partition.clone())?);
 
@@ -158,7 +158,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let i2c_bus = RefCell::new(i2c);
 
     let mut axp = board::new_axp(&i2c_bus);
-    board::init_power(&mut axp).map_err(|e| format!("AXP192 init failed: {e:?}"))?;
+    board::init_power(&mut axp, settings.brightness_percent())
+        .map_err(|e| format!("AXP192 init failed: {e:?}"))?;
     println!("AXP192 initialized");
 
     let mut display = board::init_display(
@@ -279,6 +280,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // しまう。Telegram pollerが最初のgetUpdatesを実行しないのと同じ考え方。
     let mut notified_online: Option<bool> = None;
     let mut notify_streak: u8 = 0;
+    // 直近にDCDC3へ反映した明るさ。`init_power` で起動時の保存値を反映済みのため
+    // 初期値は現在値にし、起動直後の余計なI2C書き込みをしない。
+    let mut applied_brightness = settings.brightness_percent();
 
     loop {
         // Wi-Fi切断時は一定間隔で再接続を試す。
@@ -475,6 +479,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             status.locked = now_locked;
             if matches!(screen, Screen::Main) {
                 ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+            }
+        }
+
+        // 明るさ設定の即時反映(Issue #167)。Telegramでの変更確定はpollingスレッドが
+        // NVSと共有メモリまで更新するため、I2Cを持つUIループが変化を見てDCDC3へ
+        // 適用する。変化時のみI2Cを触り、通常時はMutex取得1回だけで済ませる。
+        // 値はパーセントでありsecretではないためログへ出してよい。
+        let now_brightness = settings.brightness_percent();
+        if now_brightness != applied_brightness {
+            match board::apply_brightness(&mut axp, now_brightness) {
+                Ok(()) => {
+                    println!("brightness changed: {applied_brightness} -> {now_brightness}");
+                    applied_brightness = now_brightness;
+                }
+                Err(e) => println!("brightness apply failed: {e:?}"),
             }
         }
 

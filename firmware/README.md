@@ -36,7 +36,8 @@ abortするため採用しない(詳細は #16)。
 
 - LCD ILI9342C 320x240: MOSI=23, MISO=38(未使用), SCLK=18, DC=15, CS=5、SPI 40MHz
   half-duplex/write-only
-- LCDリセット: AXP192 GPIO4 / LCD電源: AXP192 LDO2 3300mV / バックライト: AXP192 DCDC3 2800mV
+- LCDリセット: AXP192 GPIO4 / LCD電源: AXP192 LDO2 3300mV(固定。LCD+タッチ両方の電源のため変更しない) /
+  バックライト: AXP192 DCDC3(明るさ設定0〜100%を電圧へ変換。100%で2800mV)
 - タッチ FT6336U: I2C 0x38、INT=39
 - AXP192: I2C 0x34(タッチと同一バス SDA=21, SCL=22 @400kHz)
 
@@ -87,6 +88,7 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 | `tg_ttl_secs` | `telegram_confirm_ttl_secs` | 必須 | 再起動/シャットダウン確認TTL |
 | `report_hour` | `daily_report_hour` | 任意（既定 -1、無効） | 定期レポートを送るローカル時刻(0-23、範囲外で無効) |
 | `tz_offset` | `timezone_offset_hours` | 任意（既定 0） | UTCからのローカル時刻のずれ(JSTなら9) |
+| `brightness` | `brightness` | 任意（既定 100） | 画面の明るさ(0〜100のパーセント) |
 
 この表は `scripts/config_keys.py` が `firmware/build.rs` と `src/app_config.rs` から
 導出する対応と機械的に突合される(`make config-key-check`、`make check`に含まれる)。
@@ -94,7 +96,7 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 
 NVS上では全keyを文字列として保存する。`wol_port`、`bridge_port`、
 `telegram_long_poll_timeout_seconds`、`telegram_confirm_ttl_secs`、
-`daily_report_hour`、`timezone_offset_hours` は起動時に数値へ変換する。
+`daily_report_hour`、`timezone_offset_hours`、`brightness` は起動時に数値へ変換する。
 既存NVSに残る `agent_port` / `agent_secret` は移行互換として読み込む。
 
 現時点の正本運用は `config.toml` 更新後に再build/flashする方式。NVS provisioningのみで
@@ -233,10 +235,11 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
   専用スレッドで動かすため、long pollingがタッチUIやSTATUS更新を止めない。
   電源操作はUIスレッドとの間を `Mutex` で直列化する(C++版のFreeRTOSミューテックス相当)。
 - **実行時設定変更**(`src/settings.rs`): `/set_ip <ipv4>` `/set_status_addr <host:port>`
-  `/set_wol_port <n>` `/settings`(現在値表示)`/confirm_set <nonce>`(手入力フォールバック)。
-  対象は `pc_ip_address` / `pc_status_addr` / `wol_port` の3値のみで、REBOOT/SHUTDOWNと
+  `/set_wol_port <n>` `/set_brightness <0-100>` `/settings`(現在値表示)`/confirm_set <nonce>`(手入力フォールバック)。
+  対象は `pc_ip_address` / `pc_status_addr` / `wol_port` / `brightness` の4値のみで、REBOOT/SHUTDOWNと
   同じnonce確認フローを経由する。値の検証(`config-validation` crate)は確認発行前に行い、
-  NVSへの書き込みに成功したときだけ即時反映する。`wifi_ssid` / `telegram_bot_token` などの
+  NVSへの書き込みに成功したときだけ即時反映する。明るさはNVSへ永続化し、起動時と
+  変更確定時にバックライト(DCDC3)へ反映する。`wifi_ssid` / `telegram_bot_token` などの
   自己断線し得る値は対象外で、これらはUSB経由のNVS provisioningのまま(#42設計)。
   `/lock`中はREBOOT/SHUTDOWNと同様に変更系コマンドを拒否する。
 
