@@ -132,6 +132,20 @@ where
     Ok(())
 }
 
+/// バックライト(DCDC3)自体をon/offする(Issue #168のスリープ機能用)。
+///
+/// `apply_brightness` と違い電圧は変更しない。DCDC3をoffにするだけで、
+/// 明るさ設定(電圧)は保持されるため、次に`apply_brightness`を呼べば
+/// 直前の明るさへそのまま復帰する。
+/// LDO2(LCD+タッチ電源、3300mV固定)には触らない。消灯中もタッチ検出は
+/// 生きたままにするため(タッチでの復帰に使う)。
+pub fn set_backlight_on<I2C, E>(axp: &mut Axp192<I2C>, on: bool) -> Result<(), E>
+where
+    I2C: embedded_hal::i2c::I2c<Error = E>,
+{
+    axp.set_dcdc3_on(on)
+}
+
 /// バッテリー状態。AXP192から読んだ値を `battery` crateの純粋ロジックで
 /// 残量へ概算したもの。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

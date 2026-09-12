@@ -44,6 +44,10 @@ const TOAST_TTL: Duration = Duration::from_secs(3);
 /// STATUS_INTERVAL(10秒)×2回なので、20秒続いた変化だけを通知する。
 /// タッチのポーリング間隔。取りこぼさない程度に短く、CPUを回しすぎない程度に長く。
 const TOUCH_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// スリープ(Issue #168): この時間タッチが無ければバックライトを消す。
+/// Telegramでのリモート操作(WOL/reboot/shutdown等)はこのタイマーをリセット
+/// しない(画面の前に人がいるとは限らないため)。
+const SLEEP_TIMEOUT: Duration = Duration::from_secs(60);
 
 const NOTIFY_STABLE_POLLS: u8 = 2;
 
@@ -283,6 +287,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // 直近にDCDC3へ反映した明るさ。`init_power` で起動時の保存値を反映済みのため
     // 初期値は現在値にし、起動直後の余計なI2C書き込みをしない。
     let mut applied_brightness = settings.brightness_percent();
+    // スリープ(Issue #168)。バックライトの点灯状態と、最後にタッチを検知した
+    // 時刻を持つ。起動直後は点灯・今を基準にする。
+    let mut backlight_on = true;
+    let mut last_touch_activity_at = Instant::now();
 
     loop {
         // Wi-Fi切断時は一定間隔で再接続を試す。
@@ -503,6 +511,36 @@ fn main() -> Result<(), Box<dyn Error>> {
             Err(_) => None,
         };
         let touch_down = touch_point.is_some();
+        let touch_rising_edge = touch_down && !touch_was_down;
+
+        // スリープ(Issue #168)。LDO2(LCD+タッチ電源)は触らないため、消灯中も
+        // タッチ検出自体は生きている。復帰用の最初のタッチはここで消費し、
+        // 下のボタン判定へは渡さない(誤操作防止)。
+        if backlight_on {
+            if touch_rising_edge {
+                last_touch_activity_at = Instant::now();
+            } else if last_touch_activity_at.elapsed() >= SLEEP_TIMEOUT {
+                match board::set_backlight_on(&mut axp, false) {
+                    Ok(()) => {
+                        backlight_on = false;
+                        println!("sleep: backlight off (idle {}s)", SLEEP_TIMEOUT.as_secs());
+                    }
+                    Err(e) => println!("sleep: backlight off failed: {e:?}"),
+                }
+            }
+        } else if touch_rising_edge {
+            match board::apply_brightness(&mut axp, applied_brightness) {
+                Ok(()) => {
+                    backlight_on = true;
+                    last_touch_activity_at = Instant::now();
+                    println!("sleep: backlight on (touch)");
+                }
+                Err(e) => println!("sleep: backlight on failed: {e:?}"),
+            }
+            touch_was_down = touch_down;
+            std::thread::sleep(TOUCH_POLL_INTERVAL);
+            continue;
+        }
 
         if let Some((x, y)) = touch_point {
             if !touch_was_down {
