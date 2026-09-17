@@ -306,6 +306,111 @@ fn draw_status_card(
     Ok(())
 }
 
+/// Clock band (Issue #172). Sits in the empty strip between the status card
+/// (ends at y=134) and the buttons (start at y=180). Drawn with ASCII only.
+pub struct ClockStrings {
+    pub time: String,
+    pub date: String,
+}
+
+/// Top of the clock band. The status card occupies y=52..134 and the buttons
+/// start at y=180, so y=134..180 is free.
+const CLOCK_TOP: i32 = 134;
+const CLOCK_HEIGHT: u32 = 46;
+/// Baselines relative to `CLOCK_TOP`. The time row uses the large font and the
+/// date row the small one, both centered.
+const CLOCK_TIME_BASELINE: i32 = CLOCK_TOP + 24;
+const CLOCK_DATE_BASELINE: i32 = CLOCK_TOP + 40;
+
+/// Short weekday names for the date row. Index 0 is Sunday.
+const WEEKDAY_NAMES: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+/// Placeholder rows shown while the clock is not trustworthy (SNTP not synced).
+/// Never show 1970 or any stale value as the current time.
+pub const CLOCK_TIME_UNSYNCED: &str = "--:--";
+pub const CLOCK_DATE_UNSYNCED: &str = "--/-- ---";
+
+/// Build the two clock rows from a UNIX timestamp and a UTC offset in hours.
+///
+/// Returns the unsynced placeholders when `unix_secs` looks pre-NTP (checked
+/// with `net::is_ntp_synced`, the same rule the power-command path uses).
+/// Pure arithmetic, no dependency on the running clock, so the formatting can
+/// be reasoned about without hardware.
+pub fn clock_strings(unix_secs: i64, tz_offset_hours: i64) -> ClockStrings {
+    if !crate::net::is_ntp_synced(unix_secs) {
+        return ClockStrings {
+            time: CLOCK_TIME_UNSYNCED.to_string(),
+            date: CLOCK_DATE_UNSYNCED.to_string(),
+        };
+    }
+    let local = unix_secs + tz_offset_hours * 3600;
+    let days = local.div_euclid(86_400);
+    let secs_of_day = local.rem_euclid(86_400);
+    let hour = (secs_of_day / 3600) as u32;
+    let minute = ((secs_of_day % 3600) / 60) as u32;
+    let (_, month, day) = civil_from_days(days);
+    let weekday = WEEKDAY_NAMES[((days + 4).rem_euclid(7)) as usize];
+    ClockStrings {
+        time: format!("{hour:02}:{minute:02}"),
+        date: format!("{month:02}/{day:02} {weekday}"),
+    }
+}
+
+/// Convert days since the UNIX epoch to (year, month, day).
+///
+/// Howard Hinnant's `civil_from_days` algorithm with integer arithmetic only;
+/// there is no tz database on the device, the caller already applied the UTC
+/// offset. The year is returned for completeness but the clock band only shows
+/// `MM/DD`.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Repaint the clock band only. Fills the whole band rectangle first so the
+/// previous minute's glyphs leave no ghost. Cheaper than a fullscreen clear
+/// and free of the flicker a 10s-interval full redraw would add.
+pub fn redraw_clock(
+    display: &mut Core2Display<'_>,
+    clock: &ClockStrings,
+) -> Result<(), Box<dyn Error>> {
+    Rectangle::new(
+        Point::new(0, CLOCK_TOP),
+        Size::new(DISPLAY_WIDTH as u32, CLOCK_HEIGHT),
+    )
+    .into_styled(PrimitiveStyle::with_fill(palette::BG))
+    .draw(display)
+    .map_err(|e| format!("clock band failed: {e:?}"))?;
+
+    Text::with_alignment(
+        clock.time.as_str(),
+        Point::new(DISPLAY_WIDTH as i32 / 2, CLOCK_TIME_BASELINE),
+        MonoTextStyle::new(&FONT_10X20, palette::TEXT),
+        Alignment::Center,
+    )
+    .draw(display)
+    .map_err(|e| format!("draw failed: {e:?}"))?;
+
+    Text::with_alignment(
+        clock.date.as_str(),
+        Point::new(DISPLAY_WIDTH as i32 / 2, CLOCK_DATE_BASELINE),
+        MonoTextStyle::new(&FONT_6X10, palette::TEXT_DIM),
+        Alignment::Center,
+    )
+    .draw(display)
+    .map_err(|e| format!("draw failed: {e:?}"))?;
+
+    Ok(())
+}
+
 /// 画面下部のバナー。トーストとロック表示で共用する。
 fn draw_banner(
     display: &mut Core2Display<'_>,
@@ -347,6 +452,7 @@ pub fn redraw_header(
 pub fn draw_main(
     display: &mut Core2Display<'_>,
     status: &Status<'_>,
+    clock: &ClockStrings,
 ) -> Result<(), Box<dyn Error>> {
     display
         .clear(palette::BG)
@@ -354,6 +460,7 @@ pub fn draw_main(
 
     draw_header(display, status)?;
     draw_status_card(display, status)?;
+    redraw_clock(display, clock)?;
 
     // ロック中はボタンを沈めた配色にして、押しても動かないことを見た目でも示す。
     let enabled = !status.locked;
