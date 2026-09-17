@@ -21,7 +21,7 @@ mod build_config {
 use std::cell::RefCell;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
@@ -192,12 +192,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         toast: None,
     };
     let mut toast_text: Option<String> = None;
-    ui::draw_main(
+    // 画面に出ている時計の内容を表すキー(Issue #172)。
+    // 全画面再描画と分更新のたびに更新する。
+    let mut clock_minute = current_clock_minute(&app_config);
+    refresh_main(
         &mut display,
         &Status {
             toast: Some("connecting Wi-Fi..."),
             ..status
         },
+        &app_config,
+        &mut clock_minute,
     )?;
 
     // UI操作とTelegram操作からの電源操作を直列化する。
@@ -253,7 +258,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    ui::draw_main(&mut display, &status)?;
+    refresh_main(&mut display, &status, &app_config, &mut clock_minute)?;
 
     // 起動自己診断の材料。display初期化と描画がここまで `?` で通ったことが
     // 「画面が動いた」の証拠になる。失敗していたらmain自体がErrで終わり、
@@ -330,7 +335,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     status.pc_online = false;
                 }
                 if matches!(screen, Screen::Main) {
-                    ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                    refresh_main(
+                        &mut display,
+                        &with_toast(&status, &toast_text),
+                        &app_config,
+                        &mut clock_minute,
+                    )?;
                 }
             }
             if now_connected {
@@ -357,7 +367,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         if now_telegram != status.telegram {
             status.telegram = now_telegram;
             if matches!(screen, Screen::Main) {
-                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                refresh_main(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &app_config,
+                    &mut clock_minute,
+                )?;
             }
         }
 
@@ -441,7 +456,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             // バッテリーだけの変化はヘッダー帯だけ描き直す(Issue #160)。
             if matches!(screen, Screen::Main) {
                 if status.pc_online != previous_online {
-                    ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                    refresh_main(
+                        &mut display,
+                        &with_toast(&status, &toast_text),
+                        &app_config,
+                        &mut clock_minute,
+                    )?;
                 } else if status.battery != previous_battery {
                     ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
                 }
@@ -486,7 +506,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         if now_locked != status.locked {
             status.locked = now_locked;
             if matches!(screen, Screen::Main) {
-                ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                refresh_main(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &app_config,
+                    &mut clock_minute,
+                )?;
             }
         }
 
@@ -538,6 +563,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Err(e) => println!("sleep: backlight on failed: {e:?}"),
             }
             touch_was_down = touch_down;
+            // 復帰時の再描画(Issue #172)。消灯中は描画しないため、ここで現在の
+            // 画面を描き直して時計帯を最新の分へ戻す。`screen` は借用だけにし、
+            // 確認画面を開いたまま消灯した場合も復帰後に確認画面を維持する。
+            if matches!(screen, Screen::Main) {
+                refresh_main(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &app_config,
+                    &mut clock_minute,
+                )?;
+            } else if let Screen::Confirm(action) = &screen {
+                ui::draw_confirm(&mut display, *action)?;
+            }
             std::thread::sleep(TOUCH_POLL_INTERVAL);
             continue;
         }
@@ -568,6 +606,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         &mut toast_text,
                         &mut toast_at,
                         &mut screen,
+                        &app_config,
+                        &mut clock_minute,
                     )?;
                     touch_was_down = touch_down;
                     std::thread::sleep(TOUCH_POLL_INTERVAL);
@@ -589,6 +629,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     &mut toast_text,
                                     &mut toast_at,
                                     &mut screen,
+                                    &app_config,
+                                    &mut clock_minute,
                                 )?;
                                 touch_was_down = touch_down;
                                 std::thread::sleep(TOUCH_POLL_INTERVAL);
@@ -611,7 +653,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             notify_panel_action(notifier.as_ref(), report);
                             toast_text = Some(toast.to_string());
                             toast_at = Instant::now();
-                            ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                            refresh_main(
+                                &mut display,
+                                &with_toast(&status, &toast_text),
+                                &app_config,
+                                &mut clock_minute,
+                            )?;
                         } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
                             screen = Screen::Confirm(PowerAction::Reboot);
                             ui::draw_confirm(&mut display, PowerAction::Reboot)?;
@@ -625,7 +672,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             println!("{} cancelled", action.slug());
                             screen = Screen::Main;
                             toast_text = None;
-                            ui::draw_main(&mut display, &status)?;
+                            refresh_main(&mut display, &status, &app_config, &mut clock_minute)?;
                         } else if ui::OK_BUTTON.contains(x, y) {
                             println!("{} confirmed", action.slug());
                             let _guard = telegram::lock_power(&power_lock);
@@ -637,6 +684,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     &mut toast_text,
                                     &mut toast_at,
                                     &mut screen,
+                                    &app_config,
+                                    &mut clock_minute,
                                 )?;
                                 touch_was_down = touch_down;
                                 std::thread::sleep(TOUCH_POLL_INTERVAL);
@@ -665,7 +714,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             toast_text = Some(toast);
                             toast_at = Instant::now();
                             screen = Screen::Main;
-                            ui::draw_main(&mut display, &with_toast(&status, &toast_text))?;
+                            refresh_main(
+                                &mut display,
+                                &with_toast(&status, &toast_text),
+                                &app_config,
+                                &mut clock_minute,
+                            )?;
                         }
                     }
                 }
@@ -676,7 +730,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         if toast_text.is_some() && toast_at.elapsed() >= TOAST_TTL {
             toast_text = None;
             if matches!(screen, Screen::Main) {
-                ui::draw_main(&mut display, &status)?;
+                refresh_main(&mut display, &status, &app_config, &mut clock_minute)?;
+            }
+        }
+
+        // 時計帯の更新(Issue #172)。表示中の分が変わったときだけ帯を描き直し、
+        // 秒単位の描画や余計なちらつきを避ける。消灯中はスキップし、復帰時の
+        // 再描画で最新表示へ戻す。
+        if backlight_on && matches!(screen, Screen::Main) {
+            let now_minute = current_clock_minute(&app_config);
+            if now_minute != clock_minute {
+                clock_minute = now_minute;
+                ui::redraw_clock(&mut display, &current_clock(&app_config))?;
             }
         }
 
@@ -707,12 +772,55 @@ fn reject_locked(
     toast_text: &mut Option<String>,
     toast_at: &mut Instant,
     screen: &mut Screen,
+    app_config: &AppConfig,
+    clock_minute: &mut i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     *toast_text = Some(LOCKED_TOAST.to_string());
     *toast_at = Instant::now();
     *screen = Screen::Main;
-    ui::draw_main(display, &with_toast(status, toast_text))?;
-    Ok(())
+    refresh_main(
+        display,
+        &with_toast(status, toast_text),
+        app_config,
+        clock_minute,
+    )
+}
+
+/// UNIX時刻(秒)。システム時刻を読めない場合は0を返す。
+/// 信頼できる時刻かどうかは呼び出し側が `net::is_ntp_synced` で判定する。
+fn now_unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// メイン画面へ表示する時計文字列(Issue #172)。
+/// 既存の `timezone_offset_hours` を使い、新しい設定は増やさない。
+fn current_clock(app_config: &AppConfig) -> ui::ClockStrings {
+    ui::clock_strings(now_unix_secs(), app_config.timezone_offset_hours)
+}
+
+/// 画面に出ている時計内容を表すローカル分の値。
+/// NTP未同期中は `i64::MIN` にし、同期状態が変わったときも必ず1回描き直す。
+fn current_clock_minute(app_config: &AppConfig) -> i64 {
+    let unix = now_unix_secs();
+    if !net::is_ntp_synced(unix) {
+        return i64::MIN;
+    }
+    (unix + app_config.timezone_offset_hours * 3600).div_euclid(60)
+}
+
+/// 時計を含めてメイン画面全体を描き直す。
+/// 表示した分を記録し、全画面描画直後の時計帯だけの再描画を避ける。
+fn refresh_main(
+    display: &mut board::Core2Display<'_>,
+    status: &Status<'_>,
+    app_config: &AppConfig,
+    clock_minute: &mut i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    *clock_minute = current_clock_minute(app_config);
+    ui::draw_main(display, status, &current_clock(app_config))
 }
 
 fn with_toast<'a>(status: &Status<'a>, toast: &'a Option<String>) -> Status<'a> {

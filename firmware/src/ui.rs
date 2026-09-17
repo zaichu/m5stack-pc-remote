@@ -306,6 +306,109 @@ fn draw_status_card(
     Ok(())
 }
 
+/// 時計帯の表示文字列(Issue #172)。
+/// 状態カード(y=134まで)とボタン(y=180から)の間にある空き帯へASCIIだけで描く。
+pub struct ClockStrings {
+    pub time: String,
+    pub date: String,
+}
+
+/// 時計帯の上端。状態カードは y=52..134、ボタンは y=180 からなので、
+/// y=134..180 の帯を使う。
+const CLOCK_TOP: i32 = 134;
+const CLOCK_HEIGHT: u32 = 46;
+/// `CLOCK_TOP` から見た各行のベースライン。時刻は大きいフォント、
+/// 日付は小さいフォントで中央寄せにする。
+const CLOCK_TIME_BASELINE: i32 = CLOCK_TOP + 24;
+const CLOCK_DATE_BASELINE: i32 = CLOCK_TOP + 40;
+
+/// 日付行に出す短い曜日名。0が日曜日。
+const WEEKDAY_NAMES: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+/// 時刻が信頼できない(SNTP未同期)間に出す表示。
+/// 1970年などの不正な値を現在時刻として出さない。
+pub const CLOCK_TIME_UNSYNCED: &str = "--:--";
+pub const CLOCK_DATE_UNSYNCED: &str = "--/-- ---";
+
+/// UNIX時刻とUTCオフセット(時間)から、時計の2行を作る。
+///
+/// `unix_secs` がNTP同期前に見える場合は未同期表示を返す。判定は電源操作経路と
+/// 同じ `net::is_ntp_synced` を使う。実行中の時計には依存しない純粋な計算なので、
+/// ハードウェア無しでも整形規則を追える。
+pub fn clock_strings(unix_secs: i64, tz_offset_hours: i64) -> ClockStrings {
+    if !crate::net::is_ntp_synced(unix_secs) {
+        return ClockStrings {
+            time: CLOCK_TIME_UNSYNCED.to_string(),
+            date: CLOCK_DATE_UNSYNCED.to_string(),
+        };
+    }
+    let local = unix_secs + tz_offset_hours * 3600;
+    let days = local.div_euclid(86_400);
+    let secs_of_day = local.rem_euclid(86_400);
+    let hour = (secs_of_day / 3600) as u32;
+    let minute = ((secs_of_day % 3600) / 60) as u32;
+    let (_, month, day) = civil_from_days(days);
+    let weekday = WEEKDAY_NAMES[((days + 4).rem_euclid(7)) as usize];
+    ClockStrings {
+        time: format!("{hour:02}:{minute:02}"),
+        date: format!("{month:02}/{day:02} {weekday}"),
+    }
+}
+
+/// UNIX epochからの日数を(year, month, day)へ変換する。
+///
+/// Howard Hinnant の `civil_from_days` を整数演算だけで使う。端末側にtz databaseは
+/// 無いため、UTCオフセットは呼び出し側で適用済みとする。年も返すが、時計帯には
+/// `MM/DD` だけを表示する。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// 時計帯だけを描き直す。
+/// 前の分の文字が残らないよう帯全体を塗ってから描く。全画面clearより軽く、
+/// 10秒周期の全画面再描画で増えるちらつきも避けられる。
+pub fn redraw_clock(
+    display: &mut Core2Display<'_>,
+    clock: &ClockStrings,
+) -> Result<(), Box<dyn Error>> {
+    Rectangle::new(
+        Point::new(0, CLOCK_TOP),
+        Size::new(DISPLAY_WIDTH as u32, CLOCK_HEIGHT),
+    )
+    .into_styled(PrimitiveStyle::with_fill(palette::BG))
+    .draw(display)
+    .map_err(|e| format!("clock band failed: {e:?}"))?;
+
+    Text::with_alignment(
+        clock.time.as_str(),
+        Point::new(DISPLAY_WIDTH as i32 / 2, CLOCK_TIME_BASELINE),
+        MonoTextStyle::new(&FONT_10X20, palette::TEXT),
+        Alignment::Center,
+    )
+    .draw(display)
+    .map_err(|e| format!("draw failed: {e:?}"))?;
+
+    Text::with_alignment(
+        clock.date.as_str(),
+        Point::new(DISPLAY_WIDTH as i32 / 2, CLOCK_DATE_BASELINE),
+        MonoTextStyle::new(&FONT_6X10, palette::TEXT_DIM),
+        Alignment::Center,
+    )
+    .draw(display)
+    .map_err(|e| format!("draw failed: {e:?}"))?;
+
+    Ok(())
+}
+
 /// 画面下部のバナー。トーストとロック表示で共用する。
 fn draw_banner(
     display: &mut Core2Display<'_>,
@@ -347,6 +450,7 @@ pub fn redraw_header(
 pub fn draw_main(
     display: &mut Core2Display<'_>,
     status: &Status<'_>,
+    clock: &ClockStrings,
 ) -> Result<(), Box<dyn Error>> {
     display
         .clear(palette::BG)
@@ -354,6 +458,7 @@ pub fn draw_main(
 
     draw_header(display, status)?;
     draw_status_card(display, status)?;
+    redraw_clock(display, clock)?;
 
     // ロック中はボタンを沈めた配色にして、押しても動かないことを見た目でも示す。
     let enabled = !status.locked;
