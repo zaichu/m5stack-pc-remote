@@ -192,8 +192,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         toast: None,
     };
     let mut toast_text: Option<String> = None;
-    // Identifier of the clock content currently on screen (Issue #172).
-    // Updated by every fullscreen redraw and by the per-minute updater below.
+    // 画面に出ている時計の内容を表すキー(Issue #172)。
+    // 全画面再描画と分更新のたびに更新する。
     let mut clock_minute = current_clock_minute(&app_config);
     refresh_main(
         &mut display,
@@ -563,10 +563,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Err(e) => println!("sleep: backlight on failed: {e:?}"),
             }
             touch_was_down = touch_down;
-            // Wake repaint (Issue #172). Nothing is redrawn while the backlight
-            // is off, so repaint the current screen here to bring the clock
-            // band back to the latest minute. `screen` is only borrowed so the
-            // confirm screen survives the wake when it was open.
+            // 復帰時の再描画(Issue #172)。消灯中は描画しないため、ここで現在の
+            // 画面を描き直して時計帯を最新の分へ戻す。`screen` は借用だけにし、
+            // 確認画面を開いたまま消灯した場合も復帰後に確認画面を維持する。
             if matches!(screen, Screen::Main) {
                 refresh_main(
                     &mut display,
@@ -735,10 +734,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        // Clock band update (Issue #172). Repaints the band only when the
-        // displayed minute changes, so there is no per-second redraw and no
-        // extra flicker. Skipped while the backlight is off; the wake path
-        // above repaints the screen on return.
+        // 時計帯の更新(Issue #172)。表示中の分が変わったときだけ帯を描き直し、
+        // 秒単位の描画や余計なちらつきを避ける。消灯中はスキップし、復帰時の
+        // 再描画で最新表示へ戻す。
         if backlight_on && matches!(screen, Screen::Main) {
             let now_minute = current_clock_minute(&app_config);
             if now_minute != clock_minute {
@@ -788,8 +786,8 @@ fn reject_locked(
     )
 }
 
-/// UNIX timestamp in seconds, or 0 when the system clock is not usable yet.
-/// Trustworthiness is decided by the caller with `net::is_ntp_synced`.
+/// UNIX時刻(秒)。システム時刻を読めない場合は0を返す。
+/// 信頼できる時刻かどうかは呼び出し側が `net::is_ntp_synced` で判定する。
 fn now_unix_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -797,15 +795,14 @@ fn now_unix_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// Current clock rows for the main screen (Issue #172). Uses the existing
-/// `timezone_offset_hours` setting; no new configuration is added.
+/// メイン画面へ表示する時計文字列(Issue #172)。
+/// 既存の `timezone_offset_hours` を使い、新しい設定は増やさない。
 fn current_clock(app_config: &AppConfig) -> ui::ClockStrings {
     ui::clock_strings(now_unix_secs(), app_config.timezone_offset_hours)
 }
 
-/// Identifier of the clock content currently on screen: the local minute
-/// count. `i64::MIN` while NTP is unsynced, so gaining or losing sync always
-/// counts as a change and repaints the band exactly once.
+/// 画面に出ている時計内容を表すローカル分の値。
+/// NTP未同期中は `i64::MIN` にし、同期状態が変わったときも必ず1回描き直す。
 fn current_clock_minute(app_config: &AppConfig) -> i64 {
     let unix = now_unix_secs();
     if !net::is_ntp_synced(unix) {
@@ -814,8 +811,8 @@ fn current_clock_minute(app_config: &AppConfig) -> i64 {
     (unix + app_config.timezone_offset_hours * 3600).div_euclid(60)
 }
 
-/// Fullscreen main redraw with a fresh clock. Records the displayed minute so
-/// the per-minute updater does not repaint right after a fullscreen draw.
+/// 時計を含めてメイン画面全体を描き直す。
+/// 表示した分を記録し、全画面描画直後の時計帯だけの再描画を避ける。
 fn refresh_main(
     display: &mut board::Core2Display<'_>,
     status: &Status<'_>,

@@ -306,36 +306,35 @@ fn draw_status_card(
     Ok(())
 }
 
-/// Clock band (Issue #172). Sits in the empty strip between the status card
-/// (ends at y=134) and the buttons (start at y=180). Drawn with ASCII only.
+/// 時計帯の表示文字列(Issue #172)。
+/// 状態カード(y=134まで)とボタン(y=180から)の間にある空き帯へASCIIだけで描く。
 pub struct ClockStrings {
     pub time: String,
     pub date: String,
 }
 
-/// Top of the clock band. The status card occupies y=52..134 and the buttons
-/// start at y=180, so y=134..180 is free.
+/// 時計帯の上端。状態カードは y=52..134、ボタンは y=180 からなので、
+/// y=134..180 の帯を使う。
 const CLOCK_TOP: i32 = 134;
 const CLOCK_HEIGHT: u32 = 46;
-/// Baselines relative to `CLOCK_TOP`. The time row uses the large font and the
-/// date row the small one, both centered.
+/// `CLOCK_TOP` から見た各行のベースライン。時刻は大きいフォント、
+/// 日付は小さいフォントで中央寄せにする。
 const CLOCK_TIME_BASELINE: i32 = CLOCK_TOP + 24;
 const CLOCK_DATE_BASELINE: i32 = CLOCK_TOP + 40;
 
-/// Short weekday names for the date row. Index 0 is Sunday.
+/// 日付行に出す短い曜日名。0が日曜日。
 const WEEKDAY_NAMES: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
-/// Placeholder rows shown while the clock is not trustworthy (SNTP not synced).
-/// Never show 1970 or any stale value as the current time.
+/// 時刻が信頼できない(SNTP未同期)間に出す表示。
+/// 1970年などの不正な値を現在時刻として出さない。
 pub const CLOCK_TIME_UNSYNCED: &str = "--:--";
 pub const CLOCK_DATE_UNSYNCED: &str = "--/-- ---";
 
-/// Build the two clock rows from a UNIX timestamp and a UTC offset in hours.
+/// UNIX時刻とUTCオフセット(時間)から、時計の2行を作る。
 ///
-/// Returns the unsynced placeholders when `unix_secs` looks pre-NTP (checked
-/// with `net::is_ntp_synced`, the same rule the power-command path uses).
-/// Pure arithmetic, no dependency on the running clock, so the formatting can
-/// be reasoned about without hardware.
+/// `unix_secs` がNTP同期前に見える場合は未同期表示を返す。判定は電源操作経路と
+/// 同じ `net::is_ntp_synced` を使う。実行中の時計には依存しない純粋な計算なので、
+/// ハードウェア無しでも整形規則を追える。
 pub fn clock_strings(unix_secs: i64, tz_offset_hours: i64) -> ClockStrings {
     if !crate::net::is_ntp_synced(unix_secs) {
         return ClockStrings {
@@ -356,12 +355,11 @@ pub fn clock_strings(unix_secs: i64, tz_offset_hours: i64) -> ClockStrings {
     }
 }
 
-/// Convert days since the UNIX epoch to (year, month, day).
+/// UNIX epochからの日数を(year, month, day)へ変換する。
 ///
-/// Howard Hinnant's `civil_from_days` algorithm with integer arithmetic only;
-/// there is no tz database on the device, the caller already applied the UTC
-/// offset. The year is returned for completeness but the clock band only shows
-/// `MM/DD`.
+/// Howard Hinnant の `civil_from_days` を整数演算だけで使う。端末側にtz databaseは
+/// 無いため、UTCオフセットは呼び出し側で適用済みとする。年も返すが、時計帯には
+/// `MM/DD` だけを表示する。
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
@@ -375,9 +373,9 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// Repaint the clock band only. Fills the whole band rectangle first so the
-/// previous minute's glyphs leave no ghost. Cheaper than a fullscreen clear
-/// and free of the flicker a 10s-interval full redraw would add.
+/// 時計帯だけを描き直す。
+/// 前の分の文字が残らないよう帯全体を塗ってから描く。全画面clearより軽く、
+/// 10秒周期の全画面再描画で増えるちらつきも避けられる。
 pub fn redraw_clock(
     display: &mut Core2Display<'_>,
     clock: &ClockStrings,
