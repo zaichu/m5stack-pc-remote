@@ -54,6 +54,7 @@ const NOTIFY_STABLE_POLLS: u8 = 2;
 /// タッチUIの現在画面。
 enum Screen {
     Main,
+    Calendar,
     Confirm(PowerAction),
 }
 
@@ -195,6 +196,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // 画面に出ている時計の内容を表すキー(Issue #172)。
     // 全画面再描画と分更新のたびに更新する。
     let mut clock_minute = current_clock_minute(&app_config);
+    // Calendar画面に出ている日付(Issue #173)。未同期時はNone。
+    // 日付が変わったときだけCalendarを描き直すために使う。
+    let mut calendar_day: Option<ui::CalendarDay> = None;
     refresh_main(
         &mut display,
         &Status {
@@ -341,6 +345,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                         &app_config,
                         &mut clock_minute,
                     )?;
+                } else if matches!(screen, Screen::Calendar) {
+                    // Calendar滞在中もヘッダー(Wi-Fiランプ等)が破綻しないよう追随する。
+                    refresh_calendar(
+                        &mut display,
+                        &with_toast(&status, &toast_text),
+                        &app_config,
+                        &mut calendar_day,
+                    )?;
                 }
             }
             if now_connected {
@@ -373,6 +385,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &app_config,
                     &mut clock_minute,
                 )?;
+            } else if matches!(screen, Screen::Calendar) {
+                // Calendar滞在中もヘッダー(Telegramランプ)が破綻しないよう追随する。
+                refresh_calendar(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &app_config,
+                    &mut calendar_day,
+                )?;
             }
         }
 
@@ -395,9 +415,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let now_battery = board::read_battery(&mut axp);
                 // ラッチが出っぱなしになると次の抜き挿しを見分けられないため、
                 // 読み出し後は必ずクリアする。失敗しても次の周期で再試行する。
-                if let Err(e) =
-                    board::clear_power_irq_status(&mut *i2c_bus.borrow_mut())
-                {
+                if let Err(e) = board::clear_power_irq_status(&mut *i2c_bus.borrow_mut()) {
                     println!("battery: failed to clear AXP192 IRQ status (will retry): {e:?}");
                 }
                 // pollingスレッドはI2Cを持たないため、読み取り結果の値を共有する。
@@ -412,7 +430,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let next_state = now_battery.map(|b| b.display_state());
                 if battery::needs_redraw(prev_state, next_state) {
                     status.battery = now_battery;
-                    if matches!(screen, Screen::Main) {
+                    // `redraw_header` はヘッダー帯だけ塗り直すため、Mainでも
+                    // Calendarでも安全に呼べる。Calendar滞在中も電池表示が固まらない。
+                    if matches!(screen, Screen::Main) || matches!(screen, Screen::Calendar) {
                         ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
                     }
                 }
@@ -465,6 +485,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else if status.battery != previous_battery {
                     ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
                 }
+            } else if matches!(screen, Screen::Calendar) {
+                // Calendar滞在中もPC状態の変化に追随し、REBOOT/SHUTDOWNの
+                // 表示条件をMainと一致させる。バッテリーだけの変化は
+                // ヘッダー帯だけ描き直す(Mainと同じ)。
+                if status.pc_online != previous_online {
+                    refresh_calendar(
+                        &mut display,
+                        &with_toast(&status, &toast_text),
+                        &app_config,
+                        &mut calendar_day,
+                    )?;
+                } else if status.battery != previous_battery {
+                    ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
+                }
             }
 
             // 起動自己診断: 通ったときだけOTA後の新slotをvalidとマークする。
@@ -511,6 +545,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &with_toast(&status, &toast_text),
                     &app_config,
                     &mut clock_minute,
+                )?;
+            } else if matches!(screen, Screen::Calendar) {
+                // Calendar滞在中もLOCK表示とボタンの有効・無効表示を追随させる。
+                refresh_calendar(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &app_config,
+                    &mut calendar_day,
                 )?;
             }
         }
@@ -573,6 +615,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &app_config,
                     &mut clock_minute,
                 )?;
+            } else if matches!(screen, Screen::Calendar) {
+                refresh_calendar(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &app_config,
+                    &mut calendar_day,
+                )?;
             } else if let Screen::Confirm(action) = &screen {
                 ui::draw_confirm(&mut display, *action)?;
             }
@@ -592,7 +641,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // しただけでロックのトーストが出る。CANCELは電源操作ではないため
                 // ロック中でも通す(でないと確認画面から戻れない)。
                 let power_button_tapped = match screen {
-                    Screen::Main => {
+                    Screen::Main | Screen::Calendar => {
                         ui::WAKE_BUTTON.contains(x, y)
                             || ui::REBOOT_BUTTON.contains(x, y)
                             || ui::SHUTDOWN_BUTTON.contains(x, y)
@@ -665,7 +714,84 @@ fn main() -> Result<(), Box<dyn Error>> {
                         } else if status.pc_online && ui::SHUTDOWN_BUTTON.contains(x, y) {
                             screen = Screen::Confirm(PowerAction::Shutdown);
                             ui::draw_confirm(&mut display, PowerAction::Shutdown)?;
+                        } else if ui::CLOCK_TAP_ZONE.contains(x, y) {
+                            // 時計帯タップでCalendar画面へ(Issue #173)。
+                            // 電源操作ではないためLOCK中でも許可する。
+                            // タップ領域は電源ボタン行と重ならない内側に絞ってある。
+                            println!("clock tapped at x={x} y={y}");
+                            screen = Screen::Calendar;
+                            refresh_calendar(
+                                &mut display,
+                                &with_toast(&status, &toast_text),
+                                &app_config,
+                                &mut calendar_day,
+                            )?;
                         }
+                    }
+                    Screen::Calendar => {
+                        if ui::WAKE_BUTTON.contains(x, y) {
+                            println!("WAKE tapped at x={x} y={y} (calendar)");
+                            let _guard = telegram::lock_power(&power_lock);
+                            // status.lockedはループ先頭で読んだ値なので、判定から
+                            // ここまでの間にTelegramの/lockが通っている可能性がある。
+                            // 実行直前に共有状態を直接見る。
+                            if operation_lock.is_locked() {
+                                reject_locked(
+                                    &mut display,
+                                    &status,
+                                    &mut toast_text,
+                                    &mut toast_at,
+                                    &mut screen,
+                                    &app_config,
+                                    &mut clock_minute,
+                                )?;
+                                touch_was_down = touch_down;
+                                std::thread::sleep(TOUCH_POLL_INTERVAL);
+                                continue;
+                            }
+                            let wol_result = net::send_wake_on_lan(
+                                &app_config.pc_mac_address,
+                                settings.wol_port(),
+                            );
+                            let (toast, report) = match wol_result {
+                                Ok(()) => {
+                                    println!("WOL sent");
+                                    ("Magic packet sent", "WOLを送信しました。")
+                                }
+                                Err(e) => {
+                                    println!("WOL failed: {e}");
+                                    ("WOL failed", "WOL送信に失敗しました。")
+                                }
+                            };
+                            notify_panel_action(notifier.as_ref(), report);
+                            toast_text = Some(toast.to_string());
+                            toast_at = Instant::now();
+                            refresh_calendar(
+                                &mut display,
+                                &with_toast(&status, &toast_text),
+                                &app_config,
+                                &mut calendar_day,
+                            )?;
+                        } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
+                            screen = Screen::Confirm(PowerAction::Reboot);
+                            ui::draw_confirm(&mut display, PowerAction::Reboot)?;
+                        } else if status.pc_online && ui::SHUTDOWN_BUTTON.contains(x, y) {
+                            screen = Screen::Confirm(PowerAction::Shutdown);
+                            ui::draw_confirm(&mut display, PowerAction::Shutdown)?;
+                        } else if ui::CALENDAR_BACK_BUTTON.contains(x, y) {
+                            // BACKボタン。電源ボタン行と重ならない専用座標のため、
+                            // 電源ボタン判定の後に置いても見た目と結果が一致する。
+                            // LOCK中でも表示切替は許可する。
+                            println!("calendar BACK tapped at x={x} y={y}");
+                            screen = Screen::Main;
+                            refresh_main(
+                                &mut display,
+                                &with_toast(&status, &toast_text),
+                                &app_config,
+                                &mut clock_minute,
+                            )?;
+                        }
+                        // カレンダーグリッド内タップは何も起こさない。
                     }
                     Screen::Confirm(action) => {
                         if ui::CANCEL_BUTTON.contains(x, y) {
@@ -692,24 +818,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 continue;
                             }
                             let pc_ip_address = settings.pc_ip_address();
-                            let (toast, report) =
-                                match bridge_client::send_command(action, app_config.as_ref(), &pc_ip_address) {
-                                    Ok(code) if bridge_client::is_accepted(code) => (
-                                        "Command accepted".to_string(),
-                                        format!("{}を受け付けました。", action.label_ja()),
-                                    ),
-                                    Ok(code) => (
-                                        format!("Command rejected ({code})"),
-                                        format!("{}が拒否されました。({code})", action.label_ja()),
-                                    ),
-                                    Err(e) => {
-                                        println!("bridge command failed: {e}");
-                                        (
-                                            "Command failed".to_string(),
-                                            format!("{}に失敗しました。", action.label_ja()),
-                                        )
-                                    }
-                                };
+                            let (toast, report) = match bridge_client::send_command(
+                                action,
+                                app_config.as_ref(),
+                                &pc_ip_address,
+                            ) {
+                                Ok(code) if bridge_client::is_accepted(code) => (
+                                    "Command accepted".to_string(),
+                                    format!("{}を受け付けました。", action.label_ja()),
+                                ),
+                                Ok(code) => (
+                                    format!("Command rejected ({code})"),
+                                    format!("{}が拒否されました。({code})", action.label_ja()),
+                                ),
+                                Err(e) => {
+                                    println!("bridge command failed: {e}");
+                                    (
+                                        "Command failed".to_string(),
+                                        format!("{}に失敗しました。", action.label_ja()),
+                                    )
+                                }
+                            };
                             notify_panel_action(notifier.as_ref(), &report);
                             toast_text = Some(toast);
                             toast_at = Instant::now();
@@ -731,17 +860,40 @@ fn main() -> Result<(), Box<dyn Error>> {
             toast_text = None;
             if matches!(screen, Screen::Main) {
                 refresh_main(&mut display, &status, &app_config, &mut clock_minute)?;
+            } else if matches!(screen, Screen::Calendar) {
+                refresh_calendar(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &app_config,
+                    &mut calendar_day,
+                )?;
             }
         }
 
         // 時計帯の更新(Issue #172)。表示中の分が変わったときだけ帯を描き直し、
         // 秒単位の描画や余計なちらつきを避ける。消灯中はスキップし、復帰時の
-        // 再描画で最新表示へ戻す。
+        // 再描画で最新表示へ戻す。Calendar滞在中は走らせない(Issue #173)。
         if backlight_on && matches!(screen, Screen::Main) {
             let now_minute = current_clock_minute(&app_config);
             if now_minute != clock_minute {
                 clock_minute = now_minute;
                 ui::redraw_clock(&mut display, &current_clock(&app_config))?;
+            }
+        }
+
+        // Calendar滞在中の日付変化(Issue #173)。時計帯の分更新は走らせないが、
+        // 日が変わったときだけグリッドとハイライトを描き直す。消灯中は
+        // スキップし、復帰時の再描画に任せる。未同期->同期の遷移(None->Some)でも
+        // 1回描き直し、`NO CLOCK` から当月グリッドへ切り替える。
+        if backlight_on && matches!(screen, Screen::Calendar) {
+            let now_day = ui::calendar_date(now_unix_secs(), app_config.timezone_offset_hours);
+            if now_day != calendar_day {
+                refresh_calendar(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &app_config,
+                    &mut calendar_day,
+                )?;
             }
         }
 
@@ -821,6 +973,24 @@ fn refresh_main(
 ) -> Result<(), Box<dyn std::error::Error>> {
     *clock_minute = current_clock_minute(app_config);
     ui::draw_main(display, status, &current_clock(app_config))
+}
+
+/// Calendar画面全体を描き直す(Issue #173)。
+/// 表示した日付を記録し、日付変化の検出に使う。未同期時はNoneのまま残し、
+/// 同期した瞬間の遷移も検出できるようにする。
+fn refresh_calendar(
+    display: &mut board::Core2Display<'_>,
+    status: &Status<'_>,
+    app_config: &AppConfig,
+    calendar_day: &mut Option<ui::CalendarDay>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let unix = now_unix_secs();
+    *calendar_day = ui::calendar_date(unix, app_config.timezone_offset_hours);
+    ui::draw_calendar(
+        display,
+        status,
+        &ui::calendar_view(unix, app_config.timezone_offset_hours),
+    )
 }
 
 fn with_toast<'a>(status: &Status<'a>, toast: &'a Option<String>) -> Status<'a> {
