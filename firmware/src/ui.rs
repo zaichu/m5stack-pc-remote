@@ -130,6 +130,26 @@ pub const SHUTDOWN_BUTTON: Button = Button {
     h: 48,
 };
 
+/// Main画面の時計帯タップでCalendar画面へ遷移する領域(Issue #173)。
+/// 時計帯(y=134..180)の内側へ絞る。電源ボタン行(y=180..)との間に
+/// 10px以上の不感帯(y=170..180)を確保する。
+pub const CLOCK_TAP_ZONE: Button = Button {
+    x: 24,
+    y: 138,
+    w: 272,
+    h: 32,
+};
+
+/// Calendar画面のBACKボタン。電源ボタン行(y=180..228)と重ならないよう、
+/// CANCEL_BUTTON(Confirm専用、y=150..210)とは別に小さく取る。
+/// グリッド下端(148)とも重ならない。
+pub const CALENDAR_BACK_BUTTON: Button = Button {
+    x: 20,
+    y: 150,
+    w: 130,
+    h: 26,
+};
+
 /// 確認画面のボタン。
 pub const CANCEL_BUTTON: Button = Button {
     x: 20,
@@ -405,6 +425,206 @@ pub fn redraw_clock(
     )
     .draw(display)
     .map_err(|e| format!("draw failed: {e:?}"))?;
+
+    Ok(())
+}
+
+/// 月間カレンダーの1日分の日付。年月日すべて含めて持ち、日付変化の検出にも使う。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CalendarDay {
+    pub year: i64,
+    pub month: u32,
+    pub day: u32,
+}
+
+/// UNIX時刻とUTCオフセット(時間)から当日の日付を求める。
+/// SNTP未同期時はNoneを返し、1970年などの誤った日付を作らない。
+/// 判定は時計帯と同じ `net::is_ntp_synced` を使う。
+pub fn calendar_date(unix_secs: i64, tz_offset_hours: i64) -> Option<CalendarDay> {
+    if !crate::net::is_ntp_synced(unix_secs) {
+        return None;
+    }
+    let local = unix_secs + tz_offset_hours * 3600;
+    let days = local.div_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    Some(CalendarDay { year, month, day })
+}
+
+/// うるう年判定。`civil_from_days` と同じグレゴリオ暦(先発)を前提にする。
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+/// 月の日数。呼び出し元は `civil_from_days` 由来の1..=12だけを渡す。
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        // うるう年2月だけ29日。
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        // `civil_from_days` からは来ない経路の保険。panicより安全側の30日。
+        _ => 30,
+    }
+}
+
+/// Calendar画面に渡す当月分の表示データ。日曜始まり固定、前月/次月なし。
+/// 計算は実行中の時計に依存しない純粋な組み立てにする。
+pub struct CalendarView {
+    /// ヘッダータイトル。`YYYY-MM`、未同期時は`----/--`。
+    pub title: String,
+    /// 同期済みかどうか。falseならグリッドは空で `NO CLOCK` を出す。
+    pub synced: bool,
+    /// 6行7列の日曜始まりグリッド。当月外はNone。
+    pub weeks: [[Option<u32>; 7]; 6],
+    /// 今日の日付。未同期時はNone。
+    pub today: Option<u32>,
+}
+
+/// 当月の月間カレンダーを組み立てる。
+/// 月初の曜日は、当日の通日からの差分で求める。`days_from_civil` のような
+/// 逆変換を増やさず、既存 `civil_from_days` と曜日計算を整合させる。
+pub fn calendar_view(unix_secs: i64, tz_offset_hours: i64) -> CalendarView {
+    let Some(today) = calendar_date(unix_secs, tz_offset_hours) else {
+        return CalendarView {
+            title: "----/--".to_string(),
+            synced: false,
+            weeks: [[None; 7]; 6],
+            today: None,
+        };
+    };
+    let local = unix_secs + tz_offset_hours * 3600;
+    let days = local.div_euclid(86_400);
+    let first_days = days - (today.day as i64 - 1);
+    // 0=日曜。`clock_strings` と同じ式で、1970-01-01(木曜)=4になる。
+    let first_weekday = (first_days + 4).rem_euclid(7) as usize;
+    let month_len = days_in_month(today.year, today.month);
+    let mut weeks = [[None; 7]; 6];
+    for day in 1..=month_len {
+        let idx = first_weekday + (day as usize - 1);
+        weeks[idx / 7][idx % 7] = Some(day);
+    }
+    CalendarView {
+        title: format!("{:04}-{:02}", today.year, today.month),
+        synced: true,
+        weeks,
+        today: Some(today.day),
+    }
+}
+
+/// Calendar画面の配置。ヘッダー(0..26)と電源ボタン行(180..228)は維持し、
+/// 中央にタイトル・曜日行・6行グリッドを置く。グリッド下端(148)は
+/// BACKボタン(y=150..176)や電源ボタンと重ならないようにする。
+const CAL_TITLE_BASELINE: i32 = 48;
+const CAL_WEEKDAY_BASELINE: i32 = 64;
+const CAL_GRID_TOP: i32 = 70;
+const CAL_GRID_LEFT: i32 = 27;
+const CAL_COL_W: i32 = 38;
+const CAL_ROW_H: i32 = 13;
+const CAL_NO_CLOCK_BASELINE: i32 = 112;
+/// 曜日行。日曜始まり固定。
+const CAL_WEEKDAY_NAMES: [&str; 7] = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+
+/// グリッド列の中央x座標。
+fn calendar_cell_center_x(col: usize) -> i32 {
+    CAL_GRID_LEFT + col as i32 * CAL_COL_W + CAL_COL_W / 2
+}
+
+/// Calendar画面の描画。ヘッダーと電源ボタン行はMainと同じ座標・条件で描き、
+/// 中央領域にだけ月間カレンダーを出す。トーストとロック表示もMainと同じ扱い。
+/// BACKボタンは `CALENDAR_BACK_BUTTON` を使う。`CANCEL_BUTTON` はConfirm専用で、
+/// 電源ボタン行と重なるためCalendarでは使わない。
+pub fn draw_calendar(
+    display: &mut Core2Display<'_>,
+    status: &Status<'_>,
+    view: &CalendarView,
+) -> Result<(), Box<dyn Error>> {
+    display
+        .clear(palette::BG)
+        .map_err(|e| format!("clear failed: {e:?}"))?;
+
+    draw_header(display, status)?;
+
+    Text::with_alignment(
+        view.title.as_str(),
+        Point::new(DISPLAY_WIDTH as i32 / 2, CAL_TITLE_BASELINE),
+        MonoTextStyle::new(&FONT_8X13_BOLD, palette::TEXT),
+        Alignment::Center,
+    )
+    .draw(display)
+    .map_err(|e| format!("draw failed: {e:?}"))?;
+
+    if !view.synced {
+        // 未同期時はグリッドを出さず、誤った1970年カレンダーを見せない。
+        Text::with_alignment(
+            "NO CLOCK",
+            Point::new(DISPLAY_WIDTH as i32 / 2, CAL_NO_CLOCK_BASELINE),
+            MonoTextStyle::new(&FONT_10X20, palette::TEXT),
+            Alignment::Center,
+        )
+        .draw(display)
+        .map_err(|e| format!("draw failed: {e:?}"))?;
+    } else {
+        for (col, name) in CAL_WEEKDAY_NAMES.iter().enumerate() {
+            Text::with_alignment(
+                name,
+                Point::new(calendar_cell_center_x(col), CAL_WEEKDAY_BASELINE),
+                MonoTextStyle::new(&FONT_6X10, palette::TEXT_DIM),
+                Alignment::Center,
+            )
+            .draw(display)
+            .map_err(|e| format!("draw failed: {e:?}"))?;
+        }
+        for (row, week) in view.weeks.iter().enumerate() {
+            for (col, cell) in week.iter().enumerate() {
+                if let Some(day) = cell {
+                    let center_x = calendar_cell_center_x(col);
+                    let row_top = CAL_GRID_TOP + row as i32 * CAL_ROW_H;
+                    let is_today = view.today == Some(*day);
+                    if is_today {
+                        // 今日のセルだけ背景を塗る。セル単位の矩形なので
+                        // フォントのベースライン位置に依存しない。
+                        Rectangle::new(
+                            Point::new(center_x - 12, row_top),
+                            Size::new(24, CAL_ROW_H as u32),
+                        )
+                        .into_styled(PrimitiveStyle::with_fill(palette::ACCENT))
+                        .draw(display)
+                        .map_err(|e| format!("calendar today failed: {e:?}"))?;
+                    }
+                    Text::with_alignment(
+                        day.to_string().as_str(),
+                        Point::new(center_x, row_top + 10),
+                        MonoTextStyle::new(&FONT_6X10, palette::TEXT),
+                        Alignment::Center,
+                    )
+                    .draw(display)
+                    .map_err(|e| format!("draw failed: {e:?}"))?;
+                }
+            }
+        }
+    }
+
+    // BACKボタン。電源ボタン行(y=180..)ともグリッド(下端148)とも重ならない。
+    // `Button::draw` のラベルはボタン中央(y=167付近)に出て、隠れずに見える。
+    CALENDAR_BACK_BUTTON.draw(display, "BACK", palette::NEUTRAL, true)?;
+
+    // ロック中はMainと同じく沈めた配色にする。タップ自体はmain.rs側で弾く。
+    let enabled = !status.locked;
+    WAKE_BUTTON.draw(display, "WAKE", palette::ACCENT, enabled)?;
+    // REBOOT / SHUTDOWNはMainと同じくPC起動中だけ表示する。
+    if status.pc_online {
+        REBOOT_BUTTON.draw(display, "REBOOT", palette::WARN, enabled)?;
+        SHUTDOWN_BUTTON.draw(display, "SHUTDOWN", palette::DANGER, enabled)?;
+    }
+
+    // トーストは一時的な結果表示なので、常時表示のロックより優先する。
+    // Main画面とあえて同じ文言・同じ優先順位にする。
+    if let Some(text) = status.toast {
+        draw_banner(display, text, palette::ACCENT)?;
+    } else if status.locked {
+        draw_banner(display, "LOCKED - send /unlock in Telegram", palette::WARN)?;
+    }
 
     Ok(())
 }
