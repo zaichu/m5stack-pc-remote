@@ -103,9 +103,9 @@ pub fn lamp_label(percent: u8, state: PowerState) -> String {
 /// Telegram `/status` 用の表示文言(日本語)。
 pub fn status_ja(percent: u8, state: PowerState) -> String {
     match state {
-        PowerState::Charging => format!("バッテリー: {percent}%(充電中)"),
-        PowerState::Powered => format!("バッテリー: {percent}%(満充電・給電中)"),
-        PowerState::OnBattery => format!("バッテリー: {percent}%(電池駆動)"),
+        PowerState::Charging => format!("{percent}% 充電中"),
+        PowerState::Powered => format!("{percent}% 満充電・給電中"),
+        PowerState::OnBattery => format!("{percent}% 電池駆動"),
     }
 }
 
@@ -366,15 +366,15 @@ mod tests {
     fn status_ja_distinguishes_three_states() {
         assert_eq!(
             status_ja(95, PowerState::Charging),
-            "バッテリー: 95%(充電中)"
+            "95% 充電中"
         );
         assert_eq!(
             status_ja(100, PowerState::Powered),
-            "バッテリー: 100%(満充電・給電中)"
+            "100% 満充電・給電中"
         );
         assert_eq!(
             status_ja(95, PowerState::OnBattery),
-            "バッテリー: 95%(電池駆動)"
+            "95% 電池駆動"
         );
     }
 
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(lamp_label(percent, state), "PWR 100%");
         assert_eq!(
             status_ja(percent, state),
-            "バッテリー: 100%(満充電・給電中)"
+            "100% 満充電・給電中"
         );
 
         // USB抜: 4.114V・給電なし・充電なし → 電池駆動の表示。
@@ -395,7 +395,7 @@ mod tests {
         let state = classify(false, false);
         assert_eq!(percent, 95);
         assert_eq!(lamp_label(percent, state), "95%");
-        assert_eq!(status_ja(percent, state), "バッテリー: 95%(電池駆動)");
+        assert_eq!(status_ja(percent, state), "95% 電池駆動");
 
         // 充電中: 3.90V・給電あり・充電あり → 充電中表示。
         // 3.90V → 50 + (0.05/0.15)*25 = 58.3% → 60%。
@@ -403,7 +403,7 @@ mod tests {
         let state = classify(true, true);
         assert_eq!(percent, 60);
         assert_eq!(lamp_label(percent, state), "CHG 60%");
-        assert_eq!(status_ja(percent, state), "バッテリー: 60%(充電中)");
+        assert_eq!(status_ja(percent, state), "60% 充電中");
     }
 
     // --- needs_redraw ---
