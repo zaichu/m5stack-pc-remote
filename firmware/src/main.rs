@@ -504,14 +504,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             // 何も送らない。
             // 通知の送信は既存の `Notifier` 経由のみにする(Issue #127の直列化を
             // 守るため、自前でTelegramへ送らない)。
-            let wake_notice = match *telegram::lock_wake_watch(&wake_watch_shared) {
+            // 共有ロックのガードは `wake_watch_started` / `clear_wake_watch` の中で
+            // 手放す。`match *lock(..)` の対象にガードを置いたまま取り直すと、
+            // `match` が終わるまで解放されず自己デッドロックする(std Mutexは再入不可)。
+            let started = telegram::wake_watch_started(&wake_watch_shared);
+            let wake_notice = match started {
                 None => None,
                 Some(started_at) => {
                     let elapsed_secs = started_at.elapsed().as_secs();
                     let (next, notice) = wake_check::WakeWatch { waiting: true }
                         .poll(now_online, elapsed_secs);
                     if !next.waiting {
-                        *telegram::lock_wake_watch(&wake_watch_shared) = None;
+                        telegram::clear_wake_watch(&wake_watch_shared);
                     }
                     notice.map(|notice| (notice, elapsed_secs))
                 }

@@ -150,10 +150,27 @@ pub type SharedWakeWatch = Arc<Mutex<Option<Instant>>>;
 
 /// 共有待機状態の排他を取る。poisonしていても排他は維持する。
 /// 守るのは値型(`Option<Instant>`)だけなので `lock_battery` と同じ扱いで回復する。
-pub fn lock_wake_watch(
+///
+/// ガードをこの関数を呼んだ文の外へ持ち出さないこと。`std::sync::Mutex` は
+/// 再入不可のため、例えば `match *lock_wake_watch(..)` の腕の中で同じMutexを
+/// 取り直すと、`match` 全体が終わるまで最初のガードが解放されず、自分自身で
+/// デッドロックする(実機で再現済み)。呼び出し側は下の `wake_watch_started` /
+/// `clear_wake_watch` / `begin_wake_watch` を使い、この関数は直接呼ばない。
+fn lock_wake_watch(
     wake_watch: &Mutex<Option<Instant>>,
 ) -> std::sync::MutexGuard<'_, Option<Instant>> {
     wake_watch.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 起動指示後の待機の有無と開始時刻を読む。ガードはこの関数内で手放すため、
+/// 呼び出し側がガード保持中の再ロック(自己デッドロック)を起こせない。
+pub fn wake_watch_started(wake_watch: &SharedWakeWatch) -> Option<Instant> {
+    *lock_wake_watch(wake_watch)
+}
+
+/// 起動指示後の待機を終わらせる。ガードはこの関数内で手放す。
+pub fn clear_wake_watch(wake_watch: &SharedWakeWatch) {
+    *lock_wake_watch(wake_watch) = None;
 }
 
 /// 起動指示後の待機を開始・更新する。WOL送信に成功した呼び出し側だけが呼ぶ。
@@ -162,8 +179,9 @@ pub fn lock_wake_watch(
 /// - オフなら待機を開始する。待機中の再指示は開始時刻を今に置き換える
 ///   (=期限を最後の指示から数え直す)。
 pub fn begin_wake_watch(wake_watch: &SharedWakeWatch, pc_online: bool) {
-    let prev_waiting = lock_wake_watch(wake_watch).is_some();
-    let (next, _) = wake_check::WakeWatch { waiting: prev_waiting }.begin(pc_online);
+    // `begin()` の結果は `pc_online` だけで決まり直前の待機有無には依らないため、
+    // 読み取りのためのロックは取らず書き込みの1回だけにする。
+    let (next, _) = wake_check::WakeWatch::idle().begin(pc_online);
     *lock_wake_watch(wake_watch) = next.waiting.then(Instant::now);
 }
 
