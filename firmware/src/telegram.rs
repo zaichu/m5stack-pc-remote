@@ -992,11 +992,30 @@ impl Client {
             }
             None => "バッテリー: 不明".to_string(),
         };
+        // 操作サービス(bridge)の応答有無(Issue #183)。再起動・シャットダウンが効かない
+        // とき、原因が「PCがオフ」なのか「PCはオンだが操作サービスが落ちている」のかを
+        // 切り分けられるようにする。PCがオフなら接続しても必ず失敗するので、オンの
+        // ときだけ確認する(オフのときは行そのものを出さない)。bridgeへの接続はplain
+        // HTTPで `HttpsLock` の対象外だが、待ちは `BRIDGE_STATUS_TIMEOUT`(800ms)で
+        // 打ち切る。共有状態のロックは保持していない(バッテリー行のガードは上の
+        // `match` の式で解放済み)。
+        let bridge_line = if online {
+            let bridge_online = bridge_client::check_bridge_online(
+                self.config.as_ref(),
+                &self.settings.pc_ip_address(),
+            );
+            pc_remote_signing::bridge_status_line_ja(online, bridge_online)
+        } else {
+            None
+        };
+        let bridge_line = bridge_line
+            .map(|line| format!("{line}\n"))
+            .unwrap_or_default();
         // firmwareのバージョンを必ず含める。これが無いと、`/update` で更新したあとに
         // 新版が動いているのかを利用者が確認できない。実際、初回のOTA(Issue #79)では
         // シリアルで otadata を読むまで成否を判定できなかった。
         format!(
-            "PC: {}\n{battery_line}\n操作: {}\nM5Stack: Rust firmware {}",
+            "PC: {}\n{bridge_line}{battery_line}\n操作: {}\nM5Stack: Rust firmware {}",
             net::pc_online_label_ja(online),
             if self.operation_lock.is_locked() {
                 "ロック中"

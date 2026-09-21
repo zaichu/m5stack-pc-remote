@@ -552,6 +552,64 @@ impl PowerAction {
     }
 }
 
+/// bridgeの `GET /status` 応答の解釈と、Telegram `/status` に出す操作サービス行
+/// (Issue #183)。
+///
+/// 置き場所の理由: `firmware` はxtensa-esp32-espidf専用のbinary crateでhost上に
+/// ビルド・テストできないため、応答の解釈と表示文の組み立てはここへ置いてhostで
+/// テストする(`battery`・`wake-check` と同じ方針)。`config-validation` は設定値の
+/// 検証専用、`battery`・`wake-check` は対象ドメインが違うため、新しいcrateを
+/// 起こすほどの量でもなく、firmware・bridgeの両方が既に依存しているこのcrateへ
+/// 置く。応答の形(`agent_online`)はbridgeとfirmwareの両側で同一でなければ壊れる
+/// wire protocolの解釈であり、HMAC署名・OTA manifestと同じくここが正本。
+/// 表示文自体は `bridge_status_line_ja` が正本(用語は `docs/glossary.md`)。
+///
+/// `GET /status` は無認証のまま使う。返すのは固定値だけで情報を漏らさないため
+/// 現状維持し、稼働時間などの環境情報は載せない(載せるなら認証付きの別
+/// エンドポイントが必要で、今回の範囲外)。
+/// 操作サービスの呼び方は `docs/glossary.md` が正本(内部名の「bridge」は
+/// ユーザー向け文言に使わない)。
+/// 電源操作のパス(`PowerAction::path`)と違い、ここは署名対象ではないため
+/// `BRIDGE_STATUS_PATH` を変えても署名の互換性には影響しない。
+pub const BRIDGE_STATUS_PATH: &str = "/status";
+
+/// bridgeの `GET /status` 応答本文から「操作サービスが応答しているか」を返す。
+///
+/// `agent_online` がJSONの真偽値 `true` のときだけtrueを返す。不正なJSON・
+/// キー欠落・想定外の型(文字列 `"true"`・数値 `1`・`null` 等)・空本文はすべて
+/// falseにする。応答を解釈できないときに「応答あり」へは倒さない。
+/// 余分なキー(`agent`・`status` 等)があっても判定には使わない。
+pub fn bridge_status_online(body: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    value
+        .get("agent_online")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Telegram `/status` に出す操作サービス行(Issue #183)。
+///
+/// - PCがオン かつ 操作サービス応答あり → `Some("操作サービス: 応答あり")`
+/// - PCがオン かつ 操作サービス応答なし → `Some("操作サービス: 応答なし(...)")`
+/// - PCがオフ → `None`(行を出さない。オフなら接続しても必ず失敗するため、
+///   呼び出し側はbridgeへ接続しない)
+///
+/// 再起動・シャットダウンは対象(PC)を必ず明記する(`docs/glossary.md`)。
+pub fn bridge_status_line_ja(pc_online: bool, bridge_online: bool) -> Option<String> {
+    if !pc_online {
+        return None;
+    }
+    if bridge_online {
+        Some("操作サービス: 応答あり".to_string())
+    } else {
+        Some(
+            "操作サービス: 応答なし(PCの再起動・シャットダウンは実行できません)".to_string(),
+        )
+    }
+}
+
 /// 認証・認可の失敗が続いたときに通知を出すかどうかを決める抑制ロジック。
 ///
 /// firmware(Telegramの未許可ユーザー)とbridge(HTTP認証失敗)で同じポリシーを使う。
@@ -1322,5 +1380,90 @@ mod ota_progress_tests {
         assert_ne!(full, applying, "{full} vs {applying}");
         // 用語集: 再起動の対象(M5Stack)を必ず明記する。
         assert!(applying.contains("M5Stackを再起動します"), "{applying}");
+    }
+}
+
+#[cfg(test)]
+mod bridge_status_tests {
+    use super::{bridge_status_line_ja, bridge_status_online, BRIDGE_STATUS_PATH};
+
+    #[test]
+    fn status_path_is_slash_status() {
+        // bridge側(`server.rs`)のrouteと一致させること。署名対象ではないため
+        // 変えても署名の互換性には影響しないが、確認先がずれる。
+        assert_eq!(BRIDGE_STATUS_PATH, "/status");
+    }
+
+    #[test]
+    fn accepts_agent_online_true_with_extra_keys() {
+        // bridgeの実際の応答(`agent`・`status`付き)を受け入れること。
+        assert!(bridge_status_online(
+            br#"{"agent_online":true,"agent":"m5stack-pc-bridge","status":"ok"}"#
+        ));
+        // 余分な空白・改行があっても受け入れること。
+        assert!(bridge_status_online(
+            b"{\n  \"agent_online\" : true\n}"
+        ));
+    }
+
+    #[test]
+    fn rejects_agent_online_false() {
+        assert!(!bridge_status_online(
+            br#"{"agent_online":false,"agent":"m5stack-pc-bridge","status":"ok"}"#
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_key() {
+        assert!(!bridge_status_online(br#"{"agent":"m5stack-pc-bridge"}"#));
+        assert!(!bridge_status_online(b"{}"));
+    }
+
+    #[test]
+    fn rejects_invalid_json_and_empty_body() {
+        assert!(!bridge_status_online(b"{not json"));
+        assert!(!bridge_status_online(b""));
+        // JSONとしては有効だがオブジェクトではない。
+        assert!(!bridge_status_online(b"[true]"));
+        assert!(!bridge_status_online(b"true"));
+    }
+
+    #[test]
+    fn rejects_unexpected_types_without_treating_as_online() {
+        // 想定外の型はすべて「応答なし」に倒す。truthyな値でもtrueにしない。
+        for body in [
+            r#"{"agent_online":"true"}"#,
+            r#"{"agent_online":1}"#,
+            r#"{"agent_online":null}"#,
+            r#"{"agent_online":{}}"#,
+            r#"{"agent_online":[]}"#,
+        ] {
+            assert!(!bridge_status_online(body.as_bytes()), "{body}");
+        }
+    }
+
+    #[test]
+    fn line_shows_online_when_pc_on_and_bridge_responds() {
+        assert_eq!(
+            bridge_status_line_ja(true, true),
+            Some("操作サービス: 応答あり".to_string())
+        );
+    }
+
+    #[test]
+    fn line_shows_unavailable_with_power_action_note_when_bridge_down() {
+        // PCはオンだが操作サービスが応答しないときは、電源操作が実行できない
+        // 旨を添える。用語集どおり対象(PC)を明記した文言に固定する。
+        assert_eq!(
+            bridge_status_line_ja(true, false),
+            Some("操作サービス: 応答なし(PCの再起動・シャットダウンは実行できません)".to_string())
+        );
+    }
+
+    #[test]
+    fn line_is_absent_when_pc_is_off() {
+        // PCがオフのときは確認しないため、bridgeの応答有無にかかわらず行を出さない。
+        assert_eq!(bridge_status_line_ja(false, true), None);
+        assert_eq!(bridge_status_line_ja(false, false), None);
     }
 }

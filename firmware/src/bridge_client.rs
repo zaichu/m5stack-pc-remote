@@ -17,6 +17,20 @@ use crate::app_config::AppConfig;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const BODY: &str = r#"{"confirm":true}"#;
 
+/// bridgeの `GET /status` 確認の受信タイムアウト(Issue #183)。
+///
+/// `net::STATUS_PROBE_TIMEOUT`(800ms)と同じ値にそろえる。LAN内の固定値応答は
+/// 数msで返るため十分に余裕があり、bridgeが落ちているときの待ちも800msで
+/// 打ち切れる。`/status` 全体の最悪はPC probe 800ms + bridge 800ms = 1.6秒
+/// (+Telegram往復)。電源操作の `REQUEST_TIMEOUT`(3秒)より短くする。あちらは
+/// 電源操作ロック保持中の確定操作で、こちらは参照系の表示のための確認のため。
+pub const BRIDGE_STATUS_TIMEOUT: Duration = Duration::from_millis(800);
+
+/// bridgeの `GET /status` 応答の受け入れ上限。固定値の小さなJSON(100B未満)の
+/// ため十分に余裕がある。ESP32のヒープ保護のため、超過分は読まずに失敗扱いに
+/// する(`ota.rs` の `MANIFEST_MAX_BYTES` と同じ考え方)。
+pub const BRIDGE_STATUS_MAX_BYTES: usize = 1024;
+
 /// 電源操作の識別子はwire protocolの一部なので `pc-remote-signing` が正本。
 /// firmware側は再エクスポートして使う。
 pub use pc_remote_signing::PowerAction;
@@ -137,4 +151,60 @@ pub fn send_command(
 /// m5stack-pc-bridgeがコマンドを受理した場合にtrue。
 pub fn is_accepted(status: u16) -> bool {
     (200..300).contains(&status)
+}
+
+/// bridgeの `GET /status` に接続し、操作サービスが応答しているかを返す(Issue #183)。
+///
+/// 無認証の固定値応答なので署名は付けない(bridge側も無認証のまま。稼働時間などの
+/// 環境情報は返さない)。次のどれでも `false`(応答あり扱いにしない):
+/// 接続失敗・タイムアウト・2xx以外・応答本文が上限超過・本文を解釈できない。
+/// 解釈は `pc_remote_signing::bridge_status_online` が正本(hostでテスト済み)。
+///
+/// 呼び出し側(`/status` の処理)はPCがオンのときだけ呼ぶこと。PCがオフなら
+/// 接続は必ず失敗し、`BRIDGE_STATUS_TIMEOUT` ぶん無駄に待つだけになる。
+/// 共有状態のロックは取らない(呼び出し中にロックを保持しないため、自己デッドロックの
+/// 余地が無い)。
+pub fn check_bridge_online(config: &AppConfig, pc_ip_address: &str) -> bool {
+    let url = format!(
+        "http://{pc_ip_address}:{}{}",
+        config.bridge_port,
+        pc_remote_signing::BRIDGE_STATUS_PATH
+    );
+
+    let result: Result<bool, Box<dyn Error>> = (|| {
+        let mut client = HttpClient::wrap(EspHttpConnection::new(&HttpConfiguration {
+            timeout: Some(BRIDGE_STATUS_TIMEOUT),
+            ..Default::default()
+        })?);
+        let request = client.request(Method::Get, &url, &[])?;
+        let mut response = request.submit()?;
+        if !is_accepted(response.status()) {
+            return Ok(false);
+        }
+
+        // 上限を超える本文は読まずに失敗扱いにする(ESP32のヒープ保護。
+        // `ota.rs` の `MANIFEST_MAX_BYTES` と同じ考え方)。
+        let mut body = Vec::new();
+        let mut chunk = [0u8; 256];
+        loop {
+            let read = response.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            if body.len() + read > BRIDGE_STATUS_MAX_BYTES {
+                return Ok(false);
+            }
+            body.extend_from_slice(&chunk[..read]);
+        }
+        Ok(pc_remote_signing::bridge_status_online(&body))
+    })();
+
+    match result {
+        Ok(online) => online,
+        Err(e) => {
+            // URL(IP・ポート)は出さない。失敗の事実だけ残す。
+            println!("bridge status check failed: {e}");
+            false
+        }
+    }
 }
