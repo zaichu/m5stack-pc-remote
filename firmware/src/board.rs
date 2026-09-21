@@ -1,7 +1,6 @@
 // M5Stack Core2(初代、AXP192)のハードウェア初期化。
 //
-// ピン配置とAXP192の電源投入手順は、M5GFXのCore2 autodetect実装と
-// axp192 crateのm5stack-core2 exampleを基準にしている。
+// ピン配置と電源投入手順はM5GFXのCore2実装とaxp192 crateのexampleが根拠。
 //   LCD (ILI9342C, 320x240): MOSI=23, MISO=38, SCLK=18, DC=15, CS=5
 //   LCD reset:     AXP192 GPIO4
 //   LCD power:     AXP192 LDO2  @ 3300mV(固定。LCD+タッチ両方の電源のため変更しない)
@@ -25,13 +24,8 @@ use mipidsi::models::ILI9342CRgb565;
 use mipidsi::options::{ColorInversion, Orientation, Rotation};
 use mipidsi::Builder;
 
-/// mipidsiのSPI転送バッファ。1回のfillで約6.4行分(320px×2B×6.4)をまとめ送る。
-/// 従来640B(1行)ではDMA無効時の64B上限も相まって全画面で約2,400回の
-/// SPIトランザクションになっていた。4096Bでは全画面(320x240x2=153,600B)を
-/// 38回で送れる。さらに大きくしても転送時間(40MHzで全画面30.7msが下限)が
-/// 支配的になり効果は逓減するため、内部DRAMの静的消費4KBとの釣り合いで
-/// この大きさに留める。ESP-IDFのDMA有効時 `max_transfer_sz` 既定値4092と
-/// 同規模であり、無理のない大きさ。
+/// mipidsiのSPI転送バッファ。640B(1行)では全画面で約2,400回のトランザクションに
+/// なっていた(Issue #160)。4096Bなら38回。これ以上は転送時間が支配的で効果が薄い。
 const SPI_BUFFER_SIZE: usize = 4096;
 
 /// `Dma::Auto` に渡す最大転送長。`SPI_BUFFER_SIZE` と同じにし、mipidsiの
@@ -193,20 +187,12 @@ impl Battery {
 
 /// 給電・充電系の割り込みだけを有効化する。
 ///
-/// `axp192` crate 0.2.0には割り込み設定APIが無い(lib.rs全522行を確認。
-/// enable/statusレジスタへの言及自体が無い)ため、生レジスタ書き込みになる。
-/// マスク定義は `battery::power_irq` に寄せてあり、ビットの根拠はそちらに書いた。
-/// 有効化は既存値へのOR(read-modify-write)で行い、ボタン(PEK)など
-/// 他用途の有効ビットを殺さない(M5UnifiedはCore2初期化で電源系を全無効にするが、
-/// ここでは既存設定を温存する)。
+/// `axp192` crate 0.2.0に割り込み設定APIが無いため生レジスタ書き込みになる。
+/// 既存値へのOR(read-modify-write)で、ボタン(PEK)など他用途のビットを殺さない。
 ///
-/// GPIO割り込み(ISR)は設定しない。量産Core2のAXP192 IRQピンはESP32の
-/// どのGPIOにも未接続で(M5Stack公式フォーラムtopic/2600でM5技術者が回答、
-/// 公式回路図CORE2_V1.0_SCHでも別ネット、M-BusのG35はADC用途)、stock実機では
-/// 立ち下がりが来ない。改造で配線した個体向けの土台としてenableだけ行い、
-/// 検出はメインループのラッチ確認(`power_event_pending`)で行う。
-/// ISRから共有I2Cバス(ft6x36と共用)を触ると壊れるため、I2C読み出しと
-/// 描画は従来どおりメインループが担当する。
+/// **GPIO割り込み(ISR)は使えない。** 量産Core2のAXP192 IRQピンはESP32のどのGPIOにも
+/// 未接続(M5公式フォーラムtopic/2600、回路図CORE2_V1.0_SCHで確認)。検出はメインループの
+/// ラッチ確認で行う。ISRから共有I2Cバス(ft6x36と共用)を触ると壊れる。
 pub fn enable_power_irqs<I2C, E>(i2c: &mut I2C) -> Result<(), E>
 where
     I2C: embedded_hal::i2c::I2c<Error = E>,
@@ -271,15 +257,8 @@ pub type Core2Display<'d> = mipidsi::Display<
 
 /// DMA転送用のバッファを内部DRAMに確保する。
 ///
-/// `Box::new` では確保先がPSRAMになりうる。ESP-IDFのmallocは
-/// `CONFIG_SPIRAM_USE_MALLOC` 設定で外部RAMへ回すことがあり(このボードは
-/// PSRAM有効)、PSRAM上のバッファではSPI DMAが使えない。一方
-/// `heap_caps_malloc(size, MALLOC_CAP_DMA)` は「DMA-Capable Memory」として
-/// 外部PSRAMを除外することがESP-IDF Programming Guide(Heap Memory
-/// Allocation)に明記されているため、内部DRAMを保証できる。推測ではなく
-/// この documented な意味に依存する。
-/// mipidsiのコマンド送信などの小片バッファはタスクスタック(=内部DRAM)に
-/// 載るためDMA可能で、確保先が問題になるのはこのヒープ確保分だけ。
+/// `Box::new` だと確保先がPSRAMになり得て、PSRAM上ではSPI DMAが使えない。
+/// `MALLOC_CAP_DMA` は外部PSRAMを除外するとESP-IDF公式ドキュメントに明記されている。
 fn alloc_dma_buffer() -> &'static mut [u8] {
     let ptr = unsafe {
         esp_idf_sys::heap_caps_malloc(SPI_BUFFER_SIZE, esp_idf_sys::MALLOC_CAP_DMA) as *mut u8

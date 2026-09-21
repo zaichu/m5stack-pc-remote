@@ -28,8 +28,7 @@ pub struct AppState {
     dry_run: bool,
     /// 認証失敗アラートの送信先。config未設定なら None(通知しないだけ)。
     alert: Option<Arc<AlertNotifier>>,
-    /// テストで時刻を固定するためのクロック。デフォルトは now_utc()。
-    #[allow(dead_code)]
+    /// テストで時刻を固定するためのクロック。
     clock: Arc<dyn Fn() -> time::OffsetDateTime + Send + Sync>,
     /// firmware配信ファイルの配置。既定は実行ファイルと同じディレクトリ。
     firmware: FirmwarePaths,

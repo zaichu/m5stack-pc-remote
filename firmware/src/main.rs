@@ -8,12 +8,8 @@ mod telegram;
 mod telegram_root_ca;
 mod ui;
 
-/// Git管理外の `config.toml` からビルド時に生成する設定。
-/// secretを `src/` 配下のRustソースへ直接置かないことで、コンパイラ警告による
-/// ビルドログ漏えいを防ぐ。`app_config` module(実行時設定、NVS優先)とは別物。
-/// このcrateでは `src/config.rs` というファイル名は使わない(旧方式でsecretを
-/// 直接書いていたファイル名と同じにすると、`scripts/check-local-firmware-secrets.sh`
-/// の再発防止チェックと衝突するため)。
+/// Git管理外の `config.toml` からビルド時に生成する設定。secretをRustソースへ
+/// 直接置くと、コンパイラ警告がソース行をビルドログへ出して漏えいする。
 mod build_config {
     include!(concat!(env!("OUT_DIR"), "/generated_config.rs"));
 }
@@ -59,14 +55,8 @@ enum Screen {
 }
 
 /// Wi-Fi接続後にだけ意味があるサービス(SNTPとTelegram poller)を開始する。
-/// 既に開始済みなら何もしないため、再接続時に何度呼んでもよい。
-///
-/// NTP同期完了までは待たない。ここはUIループ上で動くため、STATUS更新やタッチ処理を
-/// 止めないことを優先する。電源操作側で未同期時計は拒否する。
-///
-/// 呼び出し元(main内)がこの数だけの状態を個別に持っているため、素直に引数へ
-/// 並べている。呼び出し箇所は2つだけで、構造体へまとめても本体の複雑さは
-/// 変わらない。
+/// 再接続時に何度呼んでもよい。NTP同期は待たない(UIループを止めない。
+/// 未同期の時計は電源操作側が拒否する)。
 #[allow(clippy::too_many_arguments)]
 fn start_online_services(
     sntp: &mut Option<esp_idf_svc::sntp::EspSntp<'static>>,
@@ -294,12 +284,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut wifi_check_at = Instant::now();
     let mut toast_at = Instant::now();
     let mut touch_was_down = false;
-    // Telegramへ通知済みのPC状態。画面表示(status.pc_online)とは別に持ち、
-    // 瞬断による通知の連投を防ぐ。
-    //
-    // 起動直後の最初の観測は通知せず基準値として取り込むだけにする(Noneの間)。
-    // そうしないとM5Stackを再起動するたびに「PCが起動しました」を送って
-    // しまう。Telegram pollerが最初のgetUpdatesを実行しないのと同じ考え方。
+    // 画面表示とは別に持ち、瞬断での連投を防ぐ。起動直後の最初の観測は通知せず
+    // 基準値として取り込む(そうしないと再起動のたびに通知が飛ぶ)。
     let mut notified_online: Option<bool> = None;
     let mut notify_streak: u8 = 0;
     // Telegramへ通知済みの給電状態。PC状態通知と同じ考え方で、
@@ -411,16 +397,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        // バッテリーはI2Cで読むだけなのでWi-Fiに依存しない。PC状態の確認と
-        // 同じ条件に入れていると、Wi-Fi断の間ずっと電池表示が固まる。
-        //
-        // 高速経路: 1秒ごとにAXP192のIRQラッチだけ確認し、給電・充電系の
-        // イベントが残っていれば即座に `read_battery` して表示へ反映する。
-        // 10秒ごとの無条件読みは保険として残し、ラッチの取りこぼしや
-        // I2Cの一時失敗があっても最大10秒で復帰できる。
-        // I2Cはタッチと共有だが、同一スレッドから順に触るので競合しない。
-        // 割り込み文脈(ISR)からはI2Cを触らない。量産Core2ではIRQピン自体が
-        // 未接続なので、ISRではなくこのラッチ確認が即時反映の実体になる。
+        // Wi-Fi断中も電池表示を止めないため、PC状態の確認とは条件を分ける。
+        // 1秒ごとにIRQラッチだけ見て、立っていればすぐ読む。10秒の無条件読みは
+        // 取りこぼしの保険。量産Core2はIRQピンが未接続なのでISRは使えない。
         if battery_fast_at.elapsed() >= BATTERY_POLL_INTERVAL {
             battery_fast_at = Instant::now();
             // ラッチ読みに失敗したら安全側に倒して読む側にする。
@@ -452,22 +431,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            // 給電変化のTelegram通知。PC状態通知と同じ「連続観測で確定」方式で、
-            // 一瞬の抜き差し(接触不良など)では送らない。判定はhostテスト済みの
-            // `battery::PowerNotify::poll` に寄せ、ここにはI/Oと呼び出しだけを残す。
-            //
-            // 読み出し(`read_battery`)自体は変化時と10秒保険のときだけだが、
-            // 判定は毎秒この周期で回す。最新の既知値(`status.battery`)を毎秒
-            // 観測することで `POWER_NOTIFY_STABLE_POLLS`(5回)=約5秒の確定に
-            // なる。読み取り失敗(None)の間は前回値をそのまま観測するため、
-            // 失敗が通知を誘発することはない。
-            //
-            // Wi-Fi断中も判定は進める。送れなかった変化は基準値として取り込む
-            // (PC通知と同じ扱い)。停電ではルーターも落ちて送れないため、
-            // 復帰後に「給電が戻りました」だけが届く場合がある。
-            // 通知の送信自体は既存の `Notifier` 経由のみにする(Issue #127の
-            // 直列化を守るため、自前でTelegramへ送らない)。バッテリー駆動中は
-            // 電力が有限なため、同じ状態での重複送信は `PowerNotify` 側で抑える。
+            // 毎秒この判定を回すことで5回=約5秒で確定する。読み取り失敗(None)の間は
+            // 前回値を観測するので、失敗が通知を誘発しない。
+            // 停電ではルーターも落ちるため、復帰後に「戻りました」だけ届くことがある。
             if let Some(known) = status.battery {
                 let (next_power, should_notify) = power_notify.poll(known.powered);
                 power_notify = next_power;
@@ -494,19 +460,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("PC status changed: online={}", status.pc_online);
             }
 
-            // 起動指示後の待機の更新(Issue #182)。判定はhostテスト済みの
-            // `wake_check::WakeWatch::poll` に寄せ、ここにはI/Oと呼び出しだけを残す
-            // (`battery::PowerNotify` と同じ形)。メインループはブロックせず、
-            // 開始時刻(`Instant`: 単調時計)からの経過秒で判定する(NTPに依存しない)。
-            //
-            // 成功時は下の安定通知の代わりに所要時間付きで送り、安定通知側を
-            // 既済に進める(10秒後の安定通知と二重にならない)。待機なしの観測では
-            // 何も送らない。
-            // 通知の送信は既存の `Notifier` 経由のみにする(Issue #127の直列化を
-            // 守るため、自前でTelegramへ送らない)。
-            // 共有ロックのガードは `wake_watch_started` / `clear_wake_watch` の中で
-            // 手放す。`match *lock(..)` の対象にガードを置いたまま取り直すと、
-            // `match` が終わるまで解放されず自己デッドロックする(std Mutexは再入不可)。
+            // 単調時計の経過秒で判定する(NTPに依存しない)。成功時は所要時間付きで
+            // 送り、安定通知側を既済に進める(10秒後の通知と二重にしない)。
+            // **ガードを `match *lock(..)` の対象に置いたまま取り直さない。**
+            // `match` が終わるまで解放されず自己デッドロックする(Issue #182)。
             let started = telegram::wake_watch_started(&wake_watch_shared);
             let wake_notice = match started {
                 None => None,
@@ -599,11 +556,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
 
-            // 起動自己診断: 通ったときだけOTA後の新slotをvalidとマークする。
-            // 通らなければ何もしない(次回起動で旧slotへ戻る)。判定式の根拠は
-            // `pc_remote_signing::boot_self_test_passed` のコメントを参照。
-            // このブロックはWi-Fi接続中にしか走らないため、一時的な接続失敗は
-            // 次の周期で再試行される。失敗してもpanicしない(戻る方向が安全側)。
+            // 通ったときだけ新slotをvalidにする。通らなければ次回起動で旧slotへ戻る。
+            // 失敗してもpanicしない(戻る方向が安全側)。
             if !ota_validated && display_ok {
                 let checks = pc_remote_signing::BootChecks {
                     display_ok,
@@ -729,14 +683,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if let Some((x, y)) = touch_point {
             if !touch_was_down {
-                // ロック中はどのボタンも実行しない。REBOOT/SHUTDOWNは確認画面を
-                // 開くだけだが、OKまで進んでから弾くより先に理由を返す。
-                // `status.locked`はループ先頭で読んだ値なので共有状態を直接見る。
-                //
-                // 判定対象は今表示している画面のボタンだけにする。全画面分を
-                // まとめて見ると、Main画面でOK_BUTTON(170,150,130,60)の領域まで
-                // 拾ってしまい、そこはMainでは何も無い場所なので、空白をタップ
-                // しただけでロックのトーストが出る。CANCELは電源操作ではないため
+                // 判定対象は今表示している画面のボタンだけにする。全画面分を見ると
+                // Main画面の空白(OK_BUTTONの領域)をタップしただけでトーストが出る。
+                // CANCELは電源操作ではないため
                 // ロック中でも通す(でないと確認画面から戻れない)。
                 let power_button_tapped = match screen {
                     Screen::Main | Screen::Calendar => {
@@ -790,12 +739,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             let (toast, report) = match wol_result {
                                 Ok(()) => {
                                     println!("WOL sent");
-                                    // 起動指示後の待機を開始する(Issue #182)。すでに
-                                    // オンなら待機しない。判定本体はhostテスト済みの
-                                    // `wake_check::WakeWatch::begin` に寄せる。
-                                    // 文言の正本は `wake_check::wake_request_text`
-                                    // (用語集に従いWOLを使わない)。画面のトーストは
-                                    // ASCIIフォントのため英語のまま変えない。
+                                    // 画面のトーストはASCIIフォントのため英語のまま。
                                     telegram::begin_wake_watch(
                                         &wake_watch_shared,
                                         status.pc_online,
@@ -864,12 +808,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             let (toast, report) = match wol_result {
                                 Ok(()) => {
                                     println!("WOL sent");
-                                    // 起動指示後の待機を開始する(Issue #182)。すでに
-                                    // オンなら待機しない。判定本体はhostテスト済みの
-                                    // `wake_check::WakeWatch::begin` に寄せる。
-                                    // 文言の正本は `wake_check::wake_request_text`
-                                    // (用語集に従いWOLを使わない)。画面のトーストは
-                                    // ASCIIフォントのため英語のまま変えない。
+                                    // 画面のトーストはASCIIフォントのため英語のまま。
                                     telegram::begin_wake_watch(
                                         &wake_watch_shared,
                                         status.pc_online,

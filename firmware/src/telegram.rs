@@ -28,26 +28,20 @@ use crate::net;
 use crate::settings::RuntimeSettings;
 use crate::telegram_root_ca::TELEGRAM_ROOT_CA_PEM;
 
-/// ロック中でも受け付けるコマンド。これ以外はロック中に拒否する(default-deny)。
-///
-/// 参照系と、ロックの切り替えだけ。ここへ追加するときは「ロック中の利用者に
-/// 許してよいか」を必ず考えること。
+/// ロック中でも受け付けるコマンド。これ以外は拒否する(default-deny)。
+/// 追加するときは「ロック中の利用者に許してよいか」を必ず考えること。
 const ALLOWED_WHILE_LOCKED: [&str; 4] = ["/status", "/settings", "/lock", "/unlock"];
 
 const PLACEHOLDER_TOKEN: &str = "replace-with-your-telegram-bot-token";
 const PLACEHOLDER_USER_ID: &str = "replace-with-your-telegram-user-id";
 
-/// `/status` で返すfirmwareのバージョン。`firmware/Cargo.toml` の `version` が正本。
-/// OTAで配るイメージの版と同じ値になるため、更新の成否を利用者が確認できる
-/// (`scripts/package-firmware.sh` も同じ `version` から `firmware.version` を作る)。
+/// OTAで配るイメージの版と同じ値になるため、利用者が更新の成否を確認できる。
 const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const BACKOFF_MIN: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPONSE_BUFFER: usize = 4096;
-/// getUpdates応答の受け入れ上限。ESP32のヒープは小さく、応答をVecへ無制限に
-/// ためると枯渇し得る。超過分は読まずにエラーとし、backoffへ回す。
-/// 通常のupdateは数KB程度で、上限に当たるのは異常時だけ。
+/// ESP32のヒープ保護。超過分は読まずにエラーとし、backoffへ回す。
 const RESPONSE_MAX_BYTES: usize = 32 * 1024;
 
 /// UIスレッドへ共有するTelegram状態。
@@ -63,38 +57,16 @@ pub type PowerLock = Arc<Mutex<()>>;
 
 /// Telegram HTTPS接続の直列化ロック(Issue #127)。
 ///
-/// ESP32のmbedTLSヒープでは実質同時に1本のTLS接続しか張れず、pollingスレッドの
-/// long poll保持中に通知スレッドが `sendMessage` を開くと2本目が
-/// `ESP_ERR_HTTP_CONNECT` で失敗し、通知が黙って消える(ログにも残らない)。
-/// 以前の「接続を閉じ切ってから次を開く」構造は単一スレッド内の順序付けで、
-/// スレッド間には効かなかった。
+/// ESP32のmbedTLSヒープでは実質同時に1本のTLS接続しか張れない。long poll保持中に
+/// 2本目を開くと `ESP_ERR_HTTP_CONNECT` で失敗し、**通知が黙って消える**
+/// (ログにも残らない)。pollingスレッドと通知スレッドで共有して直列化する。
 ///
-/// 方式: pollingスレッドと通知スレッドで1つの `HttpsLock` を共有し、`post_json`
-/// (単発POST)と `answer_callback_query_and_send` (ボタン確定時の連続POST、
-/// Issue #163 a0)と `poll_once` のGET取得部で握る。`main.rs` で作り
-/// 両スレッドへ渡す形にし、global staticにはしない(`PowerLock` と同じ扱い。
-/// 共有関係が呼び出し側から見え、hostテスト可能な純粋部品と切り分けやすいため)。
-/// 検討した代替案:
-/// - 通知をpollingスレッドへ集約する一元化: 遅延の上限は同じ(下記)なのに
-///   pollingループとキュー排出・定期レポートの責務が絡み、差分が大きくなる。
-/// - try_lockで空振り時に捨てる: 再び黙って消える。後回しにするなら結局待ちで
-///   あり、Mutex待ちと変わらない。
-///   よって待ち行列つきのMutex共有が最小差分で確実、と判断した。
+/// トレードオフ: long poll中(最大 `long_poll_timeout+10` 秒)は通知がそのぶん遅れる。
+/// 「遅れて届く」は許容し「黙って消える」は許さない、という選択。
 ///
-/// トレードオフ: long poll中(最大 `long_poll_timeout+10` 秒)は通知スレッドが
-/// ロック待ちになり、通知が最大そのぶん遅れる。ただしUIループは止めない
-/// (`Notifier::notify` はmpsc送信だけで即戻る)。「遅れて届く」は許容し、
-/// 「黙って消える」は許さない、という選択である。遅延を縮めたい場合は
-/// `telegram_long_poll_timeout_seconds` を小さくする(設定で調整可能)。
-///
-/// デッドロック回避: このロックはleafとして扱う。握っている間に他のロック
-/// (power/state)を取らず、他のロックの内側でも取らない(現状の全送信箇所は
-/// この順序を守っている。`run_power_action` 等はpowerを関数内で取り切り、
-/// 送信前に離す)。`poll_once` はGET取得部だけをスコープへ閉じ込め、
-/// `process_updates` の送信はロックを離してから行い再取得にする。std Mutexは
-/// 再入不可のため、握ったまま `send_message` 系を呼ぶと自己デッドロックする。
-/// 送信箇所を増やすときもこの順序を守ること。
-/// poison時は `lock_power` と同じ扱いで回復する(守るのは `()` のため)。
+/// **leafとして扱う。** 握ったまま他のロック(power/state)を取らず、他のロックの
+/// 内側でも取らない。std Mutexは再入不可のため、握ったまま `send_message` 系を
+/// 呼ぶと自己デッドロックする。送信箇所を増やすときもこの順序を守ること。
 pub type HttpsLock = Arc<Mutex<()>>;
 
 /// Telegram HTTPSの排他を取る。poisonしていても排他は維持する。
@@ -104,58 +76,36 @@ pub fn lock_https(https_lock: &HttpsLock) -> std::sync::MutexGuard<'_, ()> {
 
 /// 電源操作の排他を取る。poisonしていても排他は維持する。
 ///
-/// `lock()` の `Result` をそのまま束縛すると、poison時(保持中に他スレッドが
-/// panic)にguardを得られないまま処理が進み、排他が外れる。逆に `unwrap()` は
-/// UIループごとpanicさせてしまう。このMutexが守っているのは `()` で、
-/// 壊れた状態を引き継ぐ心配がないため `into_inner()` で回復してよい。
+/// `unwrap()` だと無関係なスレッドのpanicでUIループごと落ちる。守っているのは
+/// 値型だけで壊れた状態を引き継ぐ心配がないため `into_inner()` で回復してよい
+/// (このファイルの `lock_*` はすべて同じ扱い)。
 pub fn lock_power(power_lock: &PowerLock) -> std::sync::MutexGuard<'_, ()> {
     power_lock.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// UIスレッドへ共有するTelegram状態の排他を取る。poisonしていても排他は維持する。
-///
-/// このMutexが守るのは `State` 一つだけで、書きかけの壊れた状態を引き継ぐ心配が
-/// ない。ここで `unwrap()` すると、無関係なスレッドのpanicに巻き込まれてUIループや
-/// pollingスレッドごと落ち、端末が止まる。`lock_power` と同じ扱いにそろえる。
 pub fn lock_state(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
     state.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// UIループが読んだ最新のバッテリー状態。pollingスレッドはI2Cドライバを持たない
-/// (AXP192はUIループ側の `axp` 経由でしか読めない)ため、読み取り結果の値だけを
-/// `telegram::State` と同じ `Arc<Mutex<...>>` 方式で共有する。I2Cドライバ(`axp`)
-/// 自体は共有しない。`main.rs` で作り、UIループとpollingスレッドへ渡す形にし、
-/// global staticにはしない(`PowerLock` と同じ扱い)。
+/// (AXP192はUIループ側の `axp` 経由でしか読めない)ため、読み取り結果の値だけを共有する。
 pub type SharedBattery = Arc<Mutex<Option<Battery>>>;
 
 /// 共有バッテリー状態の排他を取る。poisonしていても排他は維持する。
-/// 守るのは値型(`Option<Battery>`)だけなので `lock_state` と同じ扱いで回復する。
 pub fn lock_battery(
     battery: &Mutex<Option<Battery>>,
 ) -> std::sync::MutexGuard<'_, Option<Battery>> {
     battery.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// PCの起動指示後の待機開始時刻。`None`=待機なし。画面ボタンからの指示はUIループ、
-/// `/wake` からの指示はpollingスレッドで入るため、両者で共有する。
-/// `SharedBattery` と同じ `Arc<Mutex<...>>` 方式で、`main.rs` で作り、
-/// UIループとpollingスレッドへ渡す形にし、global staticにはしない
-/// (`PowerLock` と同じ扱い)。
-///
-/// leaf扱い: 短時間だけ握り、`HttpsLock` や `PowerLock` とネストさせない。
-/// 握ったまま `send_message` 系を呼ばないこと(Issue #127の規律と同じ)。
-/// 期限判定の本体はhostテスト済みの `wake_check::WakeWatch` に寄せ、
-/// ここには共有と呼び出しだけを残す(Issue #182)。
+/// PCの起動指示後の待機開始時刻。`None`=待機なし。画面ボタンはUIループ、`/wake` は
+/// pollingスレッドで入るため共有する。leaf扱い(握ったまま送信系を呼ばない)。
 pub type SharedWakeWatch = Arc<Mutex<Option<Instant>>>;
 
-/// 共有待機状態の排他を取る。poisonしていても排他は維持する。
-/// 守るのは値型(`Option<Instant>`)だけなので `lock_battery` と同じ扱いで回復する。
-///
-/// ガードをこの関数を呼んだ文の外へ持ち出さないこと。`std::sync::Mutex` は
-/// 再入不可のため、例えば `match *lock_wake_watch(..)` の腕の中で同じMutexを
-/// 取り直すと、`match` 全体が終わるまで最初のガードが解放されず、自分自身で
-/// デッドロックする(実機で再現済み)。呼び出し側は下の `wake_watch_started` /
-/// `clear_wake_watch` / `begin_wake_watch` を使い、この関数は直接呼ばない。
+/// **ガードを呼び出した文の外へ持ち出さないこと。** `match *lock_wake_watch(..)` の
+/// 腕の中で取り直すと、`match` が終わるまでガードが解放されず自己デッドロックする
+/// (実機で再現済み、Issue #182)。呼び出し側は下の3つの公開関数を使う。
 fn lock_wake_watch(
     wake_watch: &Mutex<Option<Instant>>,
 ) -> std::sync::MutexGuard<'_, Option<Instant>> {
@@ -212,11 +162,7 @@ pub fn boot_notification_text() -> String {
 }
 
 pub fn is_configured(config: &AppConfig) -> bool {
-    // 前後の空白を除いてから判定する。config.tomlやNVSに ` token ` のような
-    // 値が入っていると、完全一致だけではplaceholder判定をすり抜け、無効な
-    // tokenのままHTTPSを試し続けることになる。
-    // user_id側の正規化は `config_validation` に一本化し、chat_id化・ID照合と
-    // 同じ値を使う(Issue #130-1)。
+    // trimしないと ` token ` のような値がplaceholder判定をすり抜ける(Issue #130-1)。
     let token = config.telegram_bot_token.trim();
     let user_id =
         config_validation::normalize_telegram_user_id(&config.telegram_allowed_user_id);
@@ -237,18 +183,12 @@ fn install_root_ca() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// global CA storeはプロセス全体で1つなので、pollingスレッドと通知スレッドの
-/// どちらが先に走っても登録が1回になるようにする。
-///
-/// `Once`は使わない。`Once`は失敗しても「完了」扱いになるため、最初の呼び出しが
-/// 一時的なエラー(heap不足等)で失敗すると、以降どのスレッドも再試行できず、
-/// CA store未設定のままHTTPSを使い続けてしまう。成功フラグ + Mutexにして、
-/// 失敗した場合は次の呼び出しで再試行できるようにする。
+/// `Once` は使わない。失敗しても「完了」扱いになり、heap不足等で1回失敗すると
+/// 以降どのスレッドも再試行できずCA store未設定のままHTTPSを使ってしまう。
 static ROOT_CA_INSTALLED: AtomicBool = AtomicBool::new(false);
 static ROOT_CA_LOCK: Mutex<()> = Mutex::new(());
 
 fn ensure_root_ca() -> Result<(), Box<dyn Error>> {
-    // 毒されたMutexでも初期化は続行してよい(共有している状態はフラグだけ)。
     let _guard = ROOT_CA_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if ROOT_CA_INSTALLED.load(Ordering::Acquire) {
         return Ok(());
@@ -261,8 +201,7 @@ fn ensure_root_ca() -> Result<(), Box<dyn Error>> {
 /// private chatではchat_idがuser_idと一致するため、許可ユーザーIDをそのまま
 /// 送信先として使う。能動送信(pollingの応答ではない通知)で必要になる。
 fn allowed_chat_id(config: &AppConfig) -> Option<i64> {
-    // Issue #130-1: パース前にtrimする。正規化は `config_validation` に一本化し、
-    // `is_configured`・ID照合と同じ値を使う(3箇所が別々にtrimするとまたずれる)。
+    // Issue #130-1: 正規化を `config_validation` に一本化する(3箇所が別々にtrimするとずれる)。
     config_validation::parse_telegram_user_id(&config.telegram_allowed_user_id)
 }
 
@@ -278,11 +217,8 @@ struct Api {
 enum PendingKind {
     Power(PowerAction),
     Config(ConfigChange),
-    /// `/update` の確認。確認時に提示した版を保持し、実行直前に取得し直した
-    /// manifestの版と突き合わせる。確認から確定までの差し替わりは署名検証を
-    /// すり抜ける(正規に署名された別版への差し替えは署名が通る)ため、
-    /// 合意した版との一致も要求する。pendingが証明するのは「TTL内の確定」と
-    /// 「合意した版」の両方。
+    /// 確認時に提示した版を保持し、実行直前に取り直したmanifestと突き合わせる。
+    /// 正規に署名された別版への差し替えは署名検証をすり抜けるため(Issue #180)。
     FirmwareUpdate {
         version: String,
     },
@@ -448,13 +384,8 @@ impl ConfigChange {
         }
     }
 
-    /// NVSへ永続化し、成功したときだけ`settings`上の値も更新する
-    /// (`RuntimeSettings`側の書き込み成功後だけメモリを更新する方針をそのまま踏襲)。
-    ///
-    /// 明るさの画面への即時反映はUIループが担当する(pollingスレッドはI2Cドライバを
-    /// 持たないため、ここではNVSと共有メモリの更新まで行い、次回起動を待たせない
-    /// 反映は `main.rs` のループが `brightness_percent()` の変化を見て
-    /// `board::apply_brightness` を呼ぶことで行う)。
+    /// NVSへ永続化し、成功したときだけメモリ上の値も更新する。
+    /// 明るさの画面への反映はUIループ側(pollingスレッドはI2Cドライバを持たない)。
     fn apply(&self, settings: &RuntimeSettings) -> Result<(), esp_idf_sys::EspError> {
         match self {
             ConfigChange::PcIpAddress(value) => settings.set_pc_ip_address(value.clone()),
@@ -464,12 +395,8 @@ impl ConfigChange {
     }
 }
 
-/// 確認待ちは**同時に1件だけ**保持する。意図的な仕様。
-///
-/// `/reboot` の直後に `/shutdown` を送ると前の確認は無効になり、古いボタンは
-/// 「有効な確認がありません」になる。操作ごとにスロットを分けると、古い確認が
-/// 生き続けて「いつ押されるか分からないボタン」が増える。電源操作という性質上、
-/// 最後に意図した1件だけを有効にするほうが安全なため、この形を維持する。
+/// 確認待ちは**同時に1件だけ**。操作ごとにスロットを分けると古い確認が生き続け、
+/// 「いつ押されるか分からないボタン」が増える。最後の1件だけを有効にする。
 struct Pending {
     kind: PendingKind,
     nonce: String,
@@ -519,25 +446,16 @@ impl Api {
 
     /// Bot APIへJSONをPOSTする。URLとbodyはtokenや本文を含み得るためログへ出さない。
     fn post_json(&self, method: &str, body: &Value) -> Result<(), Box<dyn Error>> {
-        // Issue #127: mbedTLSは実質同時1本。単発POSTはこの関数、ボタン確定時の
-        // 連続POSTは `answer_callback_query_and_send` を通る。どちらも `HttpsLock`
-        // で直列化する。保持中はHTTP送受信だけを行い、他のロックは取らない(leaf扱い)。
+        // Issue #127: 保持中はHTTP送受信だけを行い、他のロックは取らない(leaf扱い)。
         let _https_guard = lock_https(&self.https);
 
         let mut client = self.http_client()?;
         self.post_via(&mut client, method, body)
     }
 
-    /// 既存の接続ハンドルでJSONを1回POSTする。ロックも接続生成もしない。
-    /// 呼び出し側が `HttpsLock` を握ったうえで呼ぶこと(Issue #163 a0)。
-    /// 保持中はHTTP送受信だけを行い、他のロックは取らない(leaf扱い。Issue #127)。
-    ///
-    /// 所要時間の計測ログ(Issue #163 c0)はここで出す。method名とミリ秒だけで、
-    /// URL(tokenを含む)やbody(本文・chat_idを含み得る)は出さない。
-    /// 応答本文は読まずに捨てる。次回の `request` 時に `initiate_request` が
-    /// `flush_response` で未読分を捨てる(`EspHttpConnection::initiate_request` は
-    /// `State::Response` からの再呼び出しに対応している)。Bot APIのPOST応答は
-    /// 小さいため、明示的な読み捨てはしない。
+    /// 既存の接続ハンドルでJSONを1回POSTする。**呼び出し側が `HttpsLock` を握ること。**
+    /// ログにはmethod名とミリ秒だけを出す(URLはtoken、bodyは本文を含む)。
+    /// 未読応答は次回 `request` 時に `initiate_request` が捨てる。
     fn post_via(
         &self,
         client: &mut HttpClient<EspHttpConnection>,
@@ -716,15 +634,9 @@ impl Api {
         }
     }
 
-    /// `answerCallbackQuery` と `sendMessage` を1つの接続ハンドルで連続送信する
-    /// (Issue #163 a0: ボタン確定時の2回POST)。
-    ///
-    /// `HttpsLock` は1回だけ取り、1つの `EspHttpConnection` で2回POSTする。
-    /// 2回目の `request` 時に1回目の未読応答は `initiate_request` 内の
-    /// `flush_response` で捨てられるため、明示の読み捨ては要らない。
-    /// 同時に張るTLS接続は1本のまま(Issue #127の排他性は変えない)。
-    /// 保持中はHTTP送受信だけを行い、他のロックは取らない(leaf扱い)。
-    /// `chat_id` が0のときはanswerだけ送る(従来の `handle_callback_query` と同じ)。
+    /// `answerCallbackQuery` と `sendMessage` を1接続で連続送信する(Issue #163)。
+    /// 接続を張り直さないぶんハンドシェイク1回分速い。同時TLSは1本のまま。
+    /// `chat_id` が0のときはanswerだけ送る。
     fn answer_callback_query_and_send(
         &self,
         id: &str,
@@ -1273,16 +1185,8 @@ impl Client {
         self.api.send_message(chat_id, &reply);
     }
 
-    /// `/update`: manifestを取得・検証し、現在の版(`FIRMWARE_VERSION`)と比較して
-    /// 確認を求める。同じ版のときは確認ボタンを出さず、nonceも発行しない
-    /// (使われないnonceを残さない)。無確認で更新はしない。
-    /// `ALLOWED_WHILE_LOCKED` には入れないため、
-    /// ロック中は `dispatch_command` のdefault-denyで拒否される。
-    ///
-    /// この関数は `process_updates` から呼ばれる。`poll_once` がlong pollingの
-    /// HTTPS接続を閉じ切った後なので、ここで開くmanifest取得のplain HTTP接続は
-    /// 同時1本に収まる。取得した接続は関数内で閉じ、確認メッセージの送信は
-    /// その後に新しい接続で行う。
+    /// `/update`: manifestを取得・検証し、現在の版と比較して確認を求める。
+    /// 同じ版なら確認ボタンもnonceも出さない。**無確認で更新はしない。**
     fn handle_update_command(&mut self, chat_id: i64) {
         let pc_ip_address = self.settings.pc_ip_address();
         let manifest =
@@ -1375,14 +1279,9 @@ impl Client {
         }
     }
 
-    /// 確認済みのfirmware更新を開始する。
+    /// 確認済みのfirmware更新を開始する。成功時はrebootして戻らない。
     ///
-    /// 呼び出し時点でTelegram long pollingのHTTPS接続は閉じていること
-    /// (`poll_once` が接続ブロックを抜け、`process_updates` 経由で呼ばれている)。
-    /// 開始通知の `send_message` も接続を開いて閉じ切るため、この関数が
-    /// `run_ota_update` を呼ぶ瞬間には開いている接続が無い。ヒープ制約の詳細は
-    /// `ota.rs` の冒頭コメントを参照。
-    /// 成功時はrebootして戻らない。失敗時だけ結果文を送る。
+    /// 呼び出し時点でlong pollingのHTTPS接続が閉じていること(ヒープ制約、`ota.rs` 冒頭)。
     fn execute_ota_update(&self, chat_id: i64) {
         // 進捗表示用のメッセージを1つ立て、以降は editMessageText で書き換える。
         // 新しいメッセージを毎回送るとチャットが進捗で埋まるため。
@@ -1483,15 +1382,8 @@ impl Client {
     }
 
     fn dispatch_command(&mut self, chat_id: i64, command: &str, args: &str) {
-        // ロック中に通すコマンドだけを列挙する(default-deny)。
-        //
-        // 以前は逆に「ロック中に禁止するコマンド」を列挙していたが、それだと
-        // コマンドを追加したときに列挙し忘れると、ロック中でも実行できてしまう。
-        // 失敗の向きが危険側なので反転させた。いまは列挙し忘れるとロック中に
-        // 使えなくなるだけで、安全側に倒れる。
-        //
-        // ロックの解除自体を通さないとロックから戻れないので `/unlock` は必須。
-        // `/lock` は冪等、`/status` `/settings` は参照のみなので通す。
+        // default-deny: 通すものだけを列挙する。禁止側を列挙すると、コマンド追加時に
+        // 書き忘れたものがロック中に実行できてしまう(失敗の向きが危険側になる)。
         if self.operation_lock.is_locked() && !ALLOWED_WHILE_LOCKED.contains(&command) {
             self.api.send_message(
                 chat_id,
