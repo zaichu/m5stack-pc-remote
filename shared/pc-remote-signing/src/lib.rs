@@ -569,25 +569,54 @@ pub fn bridge_status_online(body: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
-/// Telegram `/status` に出す操作サービス行(Issue #183)。
-///
-/// - PCがオン かつ 操作サービス応答あり → `Some("操作サービス: 応答あり")`
-/// - PCがオン かつ 操作サービス応答なし → `Some("操作サービス: 応答なし(...)")`
-/// - PCがオフ → `None`(行を出さない。オフなら接続しても必ず失敗するため、
-///   呼び出し側はbridgeへ接続しない)
-///
-/// 再起動・シャットダウンは対象(PC)を必ず明記する(`docs/glossary.md`)。
-pub fn bridge_status_line_ja(pc_online: bool, bridge_online: bool) -> Option<String> {
-    if !pc_online {
-        return None;
+#[derive(Clone, Copy, Debug)]
+pub struct PcStatusSnapshot {
+    pub pc_online: bool,
+    pub bridge_online: bool,
+    pub locked: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PcControlStatus {
+    Locked,
+    Off,
+    Ready,
+    BridgeUnavailable,
+}
+
+impl From<PcStatusSnapshot> for PcControlStatus {
+    fn from(snapshot: PcStatusSnapshot) -> Self {
+        match snapshot {
+            PcStatusSnapshot { locked: true, .. } => Self::Locked,
+            PcStatusSnapshot {
+                pc_online: false, ..
+            } => Self::Off,
+            PcStatusSnapshot {
+                bridge_online: true,
+                ..
+            } => Self::Ready,
+            _ => Self::BridgeUnavailable,
+        }
     }
-    if bridge_online {
-        Some("操作サービス: 応答あり".to_string())
-    } else {
-        Some(
-            "操作サービス: 応答なし(PCの再起動・シャットダウンは実行できません)".to_string(),
-        )
-    }
+}
+
+pub fn status_text_ja(
+    status: PcControlStatus,
+    pc_label: &str,
+    battery_line: &str,
+    version: &str,
+) -> String {
+    let actions = match status {
+        PcControlStatus::Locked => {
+            "操作をロックしています。\n解除するまでPCの起動・再起動・シャットダウンはできません。"
+        }
+        PcControlStatus::Off => "PCの起動ができます。",
+        PcControlStatus::Ready => "PCの再起動・シャットダウンができます。",
+        PcControlStatus::BridgeUnavailable => {
+            "再起動・シャットダウンはできません。\n(PC側の操作サービスが応答していません)"
+        }
+    };
+    format!("PC: {pc_label}\n{actions}\n\nM5Stack\n{battery_line}\nバージョン: {version}")
 }
 
 /// 認証・認可の失敗が続いたときに通知を出すかどうかを決める抑制ロジック。
@@ -1365,7 +1394,7 @@ mod ota_progress_tests {
 
 #[cfg(test)]
 mod bridge_status_tests {
-    use super::{bridge_status_line_ja, bridge_status_online, BRIDGE_STATUS_PATH};
+    use super::{bridge_status_online, BRIDGE_STATUS_PATH};
 
     #[test]
     fn status_path_is_slash_status() {
@@ -1421,29 +1450,75 @@ mod bridge_status_tests {
             assert!(!bridge_status_online(body.as_bytes()), "{body}");
         }
     }
+}
+
+#[cfg(test)]
+mod status_text_tests {
+    use super::{status_text_ja, PcStatusSnapshot};
+
+    fn render(
+        pc_online: bool,
+        bridge_online: bool,
+        locked: bool,
+        label: &str,
+        battery: &str,
+    ) -> String {
+        status_text_ja(
+            PcStatusSnapshot {
+                pc_online,
+                bridge_online,
+                locked,
+            }
+            .into(),
+            label,
+            battery,
+            "0.12.0",
+        )
+    }
 
     #[test]
-    fn line_shows_online_when_pc_on_and_bridge_responds() {
+    fn a_pc_on_ready() {
+        assert_eq!(render(true, true, false, "オン", &battery::status_ja(100, battery::PowerState::Powered)),
+            "PC: オン\nPCの再起動・シャットダウンができます。\n\nM5Stack\nバッテリー: 100%(満充電・給電中)\nバージョン: 0.12.0");
+    }
+
+    #[test]
+    fn b_pc_off() {
+        for bridge_online in [false, true] {
+            assert_eq!(render(false, bridge_online, false, "オフ", &battery::status_ja(78, battery::PowerState::OnBattery)),
+                "PC: オフ\nPCの起動ができます。\n\nM5Stack\nバッテリー: 78%(電池駆動)\nバージョン: 0.12.0");
+        }
+    }
+
+    #[test]
+    fn c_bridge_unavailable() {
+        assert_eq!(render(true, false, false, "オン", &battery::status_ja(100, battery::PowerState::Powered)),
+            "PC: オン\n再起動・シャットダウンはできません。\n(PC側の操作サービスが応答していません)\n\nM5Stack\nバッテリー: 100%(満充電・給電中)\nバージョン: 0.12.0");
+    }
+
+    #[test]
+    fn d_locked() {
+        assert_eq!(render(true, true, true, "オン", &battery::status_ja(100, battery::PowerState::Powered)),
+            "PC: オン\n操作をロックしています。\n解除するまでPCの起動・再起動・シャットダウンはできません。\n\nM5Stack\nバッテリー: 100%(満充電・給電中)\nバージョン: 0.12.0");
+    }
+
+    #[test]
+    fn unknown_battery() {
         assert_eq!(
-            bridge_status_line_ja(true, true),
-            Some("操作サービス: 応答あり".to_string())
+            render(false, false, false, "オフ", "バッテリー: 不明"),
+            "PC: オフ\nPCの起動ができます。\n\nM5Stack\nバッテリー: 不明\nバージョン: 0.12.0"
         );
     }
 
     #[test]
-    fn line_shows_unavailable_with_power_action_note_when_bridge_down() {
-        // PCはオンだが操作サービスが応答しないときは、電源操作が実行できない
-        // 旨を添える。用語集どおり対象(PC)を明記した文言に固定する。
-        assert_eq!(
-            bridge_status_line_ja(true, false),
-            Some("操作サービス: 応答なし(PCの再起動・シャットダウンは実行できません)".to_string())
-        );
+    fn lock_takes_priority_over_bridge_unavailable() {
+        assert_eq!(render(true, false, true, "オン", &battery::status_ja(100, battery::PowerState::Powered)),
+            "PC: オン\n操作をロックしています。\n解除するまでPCの起動・再起動・シャットダウンはできません。\n\nM5Stack\nバッテリー: 100%(満充電・給電中)\nバージョン: 0.12.0");
     }
 
     #[test]
-    fn line_is_absent_when_pc_is_off() {
-        // PCがオフのときは確認しないため、bridgeの応答有無にかかわらず行を出さない。
-        assert_eq!(bridge_status_line_ja(false, true), None);
-        assert_eq!(bridge_status_line_ja(false, false), None);
+    fn lock_takes_priority_over_pc_off() {
+        assert_eq!(render(false, false, true, "オフ", "バッテリー: 不明"),
+            "PC: オフ\n操作をロックしています。\n解除するまでPCの起動・再起動・シャットダウンはできません。\n\nM5Stack\nバッテリー: 不明\nバージョン: 0.12.0");
     }
 }
