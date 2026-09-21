@@ -370,14 +370,114 @@ pub fn boot_self_test_passed(checks: &BootChecks) -> bool {
     checks.display_ok && checks.wifi_connected
 }
 
+/// firmwareの版の新旧比較の結果。`/update` の確認画面の出し分けに使う。
+///
+/// 呼び出し側は戻り値を網羅的に `match` すること。`Unknown` を握り潰して
+/// 「新しい」扱いにしない(根拠なく更新を促さない)し、「同じ/古い」扱いにも
+/// しない(警告や確認なしに黙って適用させない)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VersionOrder {
+    /// 提示された版が現在の版より新しい。通常の更新として提示する。
+    Newer,
+    /// 提示された版が現在の版と同じ。確認ボタンを出さない。
+    Same,
+    /// 提示された版が現在の版より古い。巻き戻しになるため明示して確認する
+    /// (誤操作の防止。意図的な巻き戻しは許す)。
+    Older,
+    /// 版の文字列を解釈できず、新旧を判定できない。確認画面には両方の版を
+    /// そのまま出し、比較できないことを明示する。
+    Unknown,
+}
+
+impl VersionOrder {
+    /// 確認ボタン付きの確認画面を出すか。「同じ」のときだけ出さない。
+    /// `false` のとき呼び出し側はnonceを発行しないこと
+    /// (使われないnonceを残さない)。
+    pub fn shows_confirm_button(self) -> bool {
+        !matches!(self, VersionOrder::Same)
+    }
+}
+
+/// 版文字列を数値の三つ組と接尾辞に分ける。
+///
+/// - `0.7.0-diag2` のように、最初の `-` / `+` 以降は接尾辞として切り分ける。
+/// - 数値部はちょうど3要素で、各要素は空でないASCII数字でなければならない。
+/// - 前後の空白などの正規化はしない。bridgeが送る版と `CARGO_PKG_VERSION` は
+///   どちらも正規化済みの想定であり、余計な正規化は別物の版の取り違えになる。
+/// - `u64` へ収まらない桁数は解釈不能として扱う(panicさせない)。
+fn split_version(version: &str) -> Option<([u64; 3], &str)> {
+    let numeric_len = version.find(['-', '+']).unwrap_or(version.len());
+    let (numeric, suffix) = version.split_at(numeric_len);
+    let mut parts = [0u64; 3];
+    let mut iter = numeric.split('.');
+    for slot in parts.iter_mut() {
+        let part = iter.next()?;
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        *slot = part.parse::<u64>().ok()?;
+    }
+    if iter.next().is_some() {
+        return None;
+    }
+    Some((parts, suffix))
+}
+
+/// 現在の版(`FIRMWARE_VERSION`)とbridgeが提示した版(manifestの `version`)を
+/// 数値で比較する。**文字列比較にしない**: 文字列比較だと `"0.8.0" > "0.11.0"`
+/// になり、古い版を「更新」として提示する事故(Issue #180)になる。
+///
+/// 仕様:
+/// - 数値部が異なればその大小で決める(接尾辞の有無は問わない)。
+/// - 数値部が同じ場合、接尾辞まで完全一致のときだけ `Same` とする。
+///   `0.7.0` と `0.7.0-diag2` は数値が同じでも別物として扱う(=同じ扱いにしない)。
+///   接尾辞の順序(`-diag2` が新しいのか古いのか)は定義できないため `Unknown` とし、
+///   「新しい」とも「古い」とも断定しない。確認画面では比較できない旨を明示する。
+/// - どちらか一方が解釈できない(空文字、`unknown`、`1.2` のような要素不足、
+///   非数値、4要素以上など)場合も `Unknown` とする。bridgeは版が無いときに
+///   `"unknown"` を入れる仕様(`check_manifest_fields` のコメント参照)。
+/// - panicしない。
+pub fn compare_versions(current: &str, offered: &str) -> VersionOrder {
+    match (split_version(current), split_version(offered)) {
+        (Some((cur, cur_suffix)), Some((off, off_suffix))) => match cur.cmp(&off) {
+            std::cmp::Ordering::Less => VersionOrder::Newer,
+            std::cmp::Ordering::Greater => VersionOrder::Older,
+            std::cmp::Ordering::Equal if cur_suffix == off_suffix => VersionOrder::Same,
+            std::cmp::Ordering::Equal => VersionOrder::Unknown,
+        },
+        _ => VersionOrder::Unknown,
+    }
+}
+
 /// `/update` 実行前にmanifestのversionとsizeを提示する確認文。
 /// version/sizeは公開情報でありsecretではない。sha256や署名は載せない
 /// (Telegramへの送信文に不要な情報を増やさない)。
-pub fn ota_confirm_text(version: &str, size: u64) -> String {
-    format!(
-        "firmware更新があります。\nversion: {version}\nsize: {size} bytes\n\
-         更新しますか？\nボタンを押すと開始します。完了すると自動でM5Stackを再起動します。"
-    )
+///
+/// `current` は実行中の版(`FIRMWARE_VERSION`)、`offered` はmanifestの版。
+/// 新旧の判定は [`compare_versions`] が正本で、この関数は文面の出し分けだけを行う。
+/// - 新しい版: 従来どおり更新を提示し、現在の版も併記する。
+/// - 同じ版: 「すでに最新です」とだけ返す。呼び出し側は確認ボタンを出さず、
+///   nonceも発行しないこと。
+/// - 古い版: 巻き戻しであることを明示し、意図的な場合のみ進める旨を添える。
+/// - 比較不能: 両方の版をそのまま出し、判定できない旨を明示する。
+///   新しいとも古いとも断定できないため、版の確認を利用者に委ねる。
+pub fn ota_confirm_text(current: &str, offered: &str, size: u64) -> String {
+    match compare_versions(current, offered) {
+        VersionOrder::Newer => format!(
+            "firmware更新があります。\n現在: {current}\nversion: {offered}\nsize: {size} bytes\n\
+             更新しますか？\nボタンを押すと開始します。完了すると自動でM5Stackを再起動します。"
+        ),
+        VersionOrder::Same => format!("すでに最新です(現在 {current})"),
+        VersionOrder::Older => format!(
+            "古い版への変更です。\n現在: {current} → 提示: {offered}\nsize: {size} bytes\n\
+             意図的に巻き戻す場合のみボタンを押してください。完了すると自動でM5Stackを再起動します。"
+        ),
+        VersionOrder::Unknown => format!(
+            "firmwareの版の新旧を判定できませんでした。\n現在: {current}\n提示: {offered}\n\
+             size: {size} bytes\n版を確認してからボタンを押してください。\
+             完了すると自動でM5Stackを再起動します。"
+        ),
+    }
 }
 
 /// manifestの各fieldが配信物としてあり得る値か。
@@ -968,12 +1068,152 @@ mod ota_tests {
     }
 
     #[test]
-    fn ota_confirm_text_shows_version_and_size() {
-        let text = ota_confirm_text(VERSION, SIZE);
+    fn ota_confirm_text_newer_shows_both_versions() {
+        let text = ota_confirm_text("0.1.0", VERSION, SIZE);
+        assert!(text.contains("firmware更新があります"), "{text}");
+        assert!(text.contains("0.1.0"), "{text}");
         assert!(text.contains(VERSION), "{text}");
         assert!(text.contains(&SIZE.to_string()), "{text}");
         // 用語集: 再起動の対象(M5Stack)を必ず明記する。
         assert!(text.contains("M5Stackを再起動します"), "{text}");
+    }
+
+    #[test]
+    fn ota_confirm_text_same_says_already_latest() {
+        let text = ota_confirm_text(VERSION, VERSION, SIZE);
+        assert!(text.contains("すでに最新です"), "{text}");
+        assert!(text.contains(VERSION), "{text}");
+    }
+
+    #[test]
+    fn ota_confirm_text_older_warns_downgrade() {
+        let text = ota_confirm_text("0.11.0", "0.8.0", SIZE);
+        assert!(text.contains("古い版への変更です"), "{text}");
+        assert!(text.contains("0.11.0"), "{text}");
+        assert!(text.contains("0.8.0"), "{text}");
+        // 用語集: 再起動の対象(M5Stack)を必ず明記する。
+        assert!(text.contains("M5Stackを再起動します"), "{text}");
+    }
+
+    #[test]
+    fn ota_confirm_text_unknown_shows_both_versions_without_claiming() {
+        let text = ota_confirm_text("0.11.0", "unknown", SIZE);
+        assert!(text.contains("判定できませんでした"), "{text}");
+        assert!(text.contains("0.11.0"), "{text}");
+        assert!(text.contains("unknown"), "{text}");
+        assert!(!text.contains("すでに最新です"), "{text}");
+        assert!(!text.contains("firmware更新があります"), "{text}");
+        assert!(!text.contains("古い版への変更です"), "{text}");
+        // 用語集: 再起動の対象(M5Stack)を必ず明記する。
+        assert!(text.contains("M5Stackを再起動します"), "{text}");
+    }
+
+    #[test]
+    fn only_same_version_hides_confirm_button() {
+        use super::VersionOrder;
+        assert!(!VersionOrder::Same.shows_confirm_button());
+        for order in [
+            VersionOrder::Newer,
+            VersionOrder::Older,
+            VersionOrder::Unknown,
+        ] {
+            assert!(order.shows_confirm_button(), "{order:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod version_order_tests {
+    use super::{compare_versions, VersionOrder};
+
+    #[test]
+    fn accident_case_0_8_0_is_older_than_0_11_0() {
+        // Issue #180そのもの: 文字列比較だと "0.8.0" > "0.11.0" になり逆転する。
+        // 数値で比較するため、桁が違っても正しく判定できること。
+        assert_eq!(compare_versions("0.11.0", "0.8.0"), VersionOrder::Older);
+        assert_eq!(compare_versions("0.8.0", "0.11.0"), VersionOrder::Newer);
+    }
+
+    #[test]
+    fn same_version_is_same() {
+        assert_eq!(compare_versions("0.11.0", "0.11.0"), VersionOrder::Same);
+        assert_eq!(compare_versions("0.2.0", "0.2.0"), VersionOrder::Same);
+        assert_eq!(
+            compare_versions("0.7.0-diag2", "0.7.0-diag2"),
+            VersionOrder::Same
+        );
+    }
+
+    #[test]
+    fn numeric_parts_decide_regardless_of_digit_count() {
+        assert_eq!(compare_versions("0.10.0", "0.9.0"), VersionOrder::Older);
+        assert_eq!(compare_versions("0.9.0", "0.10.0"), VersionOrder::Newer);
+        assert_eq!(compare_versions("0.99.99", "1.0.0"), VersionOrder::Newer);
+        assert_eq!(compare_versions("1.0.0", "0.99.99"), VersionOrder::Older);
+    }
+
+    #[test]
+    fn numeric_parts_decide_regardless_of_suffix() {
+        // 数値部が異なれば接尾辞の有無は結果を変えない。
+        assert_eq!(
+            compare_versions("0.7.0-diag2", "0.7.1"),
+            VersionOrder::Newer
+        );
+        assert_eq!(
+            compare_versions("0.8.0", "0.7.0-diag2"),
+            VersionOrder::Older
+        );
+    }
+
+    #[test]
+    fn same_numeric_parts_with_different_suffix_is_not_same() {
+        // 接尾辞の順序は定義できないため、新しいとも古いとも断定しない。
+        // 同じ扱いにすると確認ボタンが出ず、別物の版を見逃す。
+        assert_eq!(
+            compare_versions("0.7.0", "0.7.0-diag2"),
+            VersionOrder::Unknown
+        );
+        assert_eq!(
+            compare_versions("0.7.0-diag2", "0.7.0"),
+            VersionOrder::Unknown
+        );
+        assert_eq!(
+            compare_versions("0.7.0-diag2", "0.7.0-diag3"),
+            VersionOrder::Unknown
+        );
+    }
+
+    #[test]
+    fn unparsable_versions_are_unknown() {
+        // bridgeは版が無いときに "unknown" を入れる仕様。
+        // 解釈できないときは新しい・同じ・古いのいずれにも倒さない。
+        for bad in [
+            "",
+            "unknown",
+            "1.2",
+            "1",
+            "1.2.3.4",
+            "a.b.c",
+            "1.x.3",
+            "v1.2.3",
+            " 0.8.0",
+            "0.8.0 ",
+            "1..3",
+            ".1.2.3",
+            "-diag2",
+            "99999999999999999999999.0.0",
+        ] {
+            assert_eq!(
+                compare_versions("0.11.0", bad),
+                VersionOrder::Unknown,
+                "{bad}"
+            );
+            assert_eq!(
+                compare_versions(bad, "0.11.0"),
+                VersionOrder::Unknown,
+                "{bad}"
+            );
+        }
     }
 }
 
