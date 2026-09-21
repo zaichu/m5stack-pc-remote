@@ -1,11 +1,7 @@
 //! M5Stack firmwareとm5stack-pc-bridgeが共有する実装。
 //!
-//! 中心はHMAC署名のwire protocolだが、「両側で同一でなければ壊れる」ものは
-//! 電源操作の識別子(`PowerAction`)やアラート抑制ポリシー(`AlertThrottle`)も
-//! ここへ置く。
-//!
-//! canonical文字列は次の形式で固定する。片方だけを変更すると署名が一致しなくなるため、
-//! 実装を1箇所にまとめてある。
+//! 「両側で同一でなければ壊れる」ものをここへ置く。canonical文字列は片方だけ
+//! 変えると署名が一致しなくなるため、実装を1箇所にまとめる。
 //!
 //! ```text
 //! METHOD + "\n" + PATH + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + SHA256(BODY)
@@ -80,25 +76,18 @@ pub fn verify_signature(
 
 /// m5stack-pc-bridgeが配信するfirmware manifestの署名。
 ///
-/// bridgeは「配布場所」であって「信頼の根」ではないため、manifestへ
-/// HMAC-SHA256署名を付ける。M5Stack側(Phase 3のOTAクライアント)は
-/// 公開値(version/size/sha256)だけを信じず、この署名を検証してから
-/// ダウンロードへ進む。
+/// bridgeは「配布場所」であって「信頼の根」ではないため、manifestへ署名を付ける。
 ///
-/// canonical文字列は次の形式で固定する。リクエスト署名(`canonical_string`)
-/// の流用ではなくmanifest専用の文字列にする。理由はドメイン分離のため:
-/// 先頭の `FIRMWARE-MANIFEST-v1` が無いと、manifest署名が何らかのリクエスト
-/// 署名と一致し得て、署名の使い回し(クロスプロトコル confusion)の余地が
-/// 残る。鍵とアルゴリズム(HMAC-SHA256 + shared_secret + hex)は
-/// リクエスト署名と同じで、新しい署名方式は発明しない。
+/// 先頭の `FIRMWARE-MANIFEST-v1` はドメイン分離。これが無いとmanifest署名が
+/// リクエスト署名と一致し得て、署名の使い回し(クロスプロトコル confusion)を許す。
 ///
 /// ```text
 /// "FIRMWARE-MANIFEST-v1" + "\n" + VERSION + "\n" + SIZE + "\n" + SHA256_HEX + "\n" + CREATED_AT
 /// Manifest-Signature = hmac_sha256_hex(shared_secret, canonical)
 /// ```
 ///
-/// `SIZE` は10進のバイト数、`SHA256_HEX` は小文字hex、`CREATED_AT` はRFC3339。
-/// フィールド順序はこの関数が一意に決める。呼び出し側で順序を組み立てないこと。
+/// `SIZE` は10進、`SHA256_HEX` は小文字hex、`CREATED_AT` はRFC3339。
+/// 順序はこの関数が決める。呼び出し側で組み立てないこと。
 pub fn manifest_canonical_string(
     version: &str,
     size: u64,
@@ -558,22 +547,10 @@ impl PowerAction {
 /// bridgeの `GET /status` 応答の解釈と、Telegram `/status` に出す操作サービス行
 /// (Issue #183)。
 ///
-/// 置き場所の理由: `firmware` はxtensa-esp32-espidf専用のbinary crateでhost上に
-/// ビルド・テストできないため、応答の解釈と表示文の組み立てはここへ置いてhostで
-/// テストする(`battery`・`wake-check` と同じ方針)。`config-validation` は設定値の
-/// 検証専用、`battery`・`wake-check` は対象ドメインが違うため、新しいcrateを
-/// 起こすほどの量でもなく、firmware・bridgeの両方が既に依存しているこのcrateへ
-/// 置く。応答の形(`agent_online`)はbridgeとfirmwareの両側で同一でなければ壊れる
-/// wire protocolの解釈であり、HMAC署名・OTA manifestと同じくここが正本。
-/// 表示文自体は `bridge_status_line_ja` が正本(用語は `docs/glossary.md`)。
+/// 応答の形(`agent_online`)は両側で同一でなければ壊れるwire protocolなのでここが正本。
 ///
-/// `GET /status` は無認証のまま使う。返すのは固定値だけで情報を漏らさないため
-/// 現状維持し、稼働時間などの環境情報は載せない(載せるなら認証付きの別
-/// エンドポイントが必要で、今回の範囲外)。
-/// 操作サービスの呼び方は `docs/glossary.md` が正本(内部名の「bridge」は
-/// ユーザー向け文言に使わない)。
-/// 電源操作のパス(`PowerAction::path`)と違い、ここは署名対象ではないため
-/// `BRIDGE_STATUS_PATH` を変えても署名の互換性には影響しない。
+/// `GET /status` は無認証のまま使う(返すのは固定値だけ)。**稼働時間などの環境情報を
+/// 載せないこと。** 載せるなら認証付きの別エンドポイントが要る。
 pub const BRIDGE_STATUS_PATH: &str = "/status";
 
 /// bridgeの `GET /status` 応答本文から「操作サービスが応答しているか」を返す。

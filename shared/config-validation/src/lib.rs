@@ -1,14 +1,7 @@
 //! firmwareの実行時設定値(Telegramから変更可能なもの)のvalidation。
 //!
-//! `firmware` はxtensa-esp32-espidf専用のbinary crateで、host上でビルド・
-//! テストできない(`[[bin]]` のみで `[lib]` を持たず、`esp_idf_hal` 等を
-//! ソース側で無条件importしているため)。入力検証ロジックだけをここへ分離
-//! することで、実ネットワーク・実機なしでhost側のテストを回せるようにする
-//! (Issue #78、AGENTS.mdの方針に沿う)。
-//!
-//! 扱うのは文字列の形式チェックのみで、DNS解決やネットワーク接続はしない。
-//! 呼び出し側(firmware)が確認nonce発行前にこれを通し、確認フローと
-//! NVSへの永続化は担当しない。
+//! `firmware` はESP32専用でhostビルドできないため、入力検証だけをここへ分離して
+//! hostでテストする(`shared/*` 共通の方針)。**DNS解決やネットワーク接続はしない。**
 
 use std::net::Ipv4Addr;
 use std::str::FromStr;
@@ -26,14 +19,9 @@ pub fn validate_ipv4(input: &str) -> Result<String, String> {
 
 /// STATUS確認(オン/オフ判定のTCP probe)の接続先を組み立てる。
 ///
-/// 接続先は常に `{pc_ip_address}:{status_port}` を**読み出し時に組み立てる**。
-/// hostを別の設定値として持たない理由: 同じ情報(IP)を2箇所に持つと、PCのIPが
-/// 変わったときに2項目の直しが必要になり、片方の直し忘れで電源操作は通るのに
-/// STATUSが常にオフになる(またはその逆)。hostの正本は `pc_ip_address` の
-/// 1箇所だけにし、ここでは連結だけを行う。
-/// DNS解決はしない。IPv4リテラルを連結するだけで、`check_pc_online` が
-/// IPリテラルなら `SocketAddr` として直接parseする高速経路に乗る
-/// (Issue #130-3の方針を維持)。
+/// **読み出し時に組み立てる。** hostを別の設定値として持つと、PCのIPが変わったとき
+/// 2箇所を直す必要があり、片方の直し忘れで電源操作は通るのにSTATUSが常にオフになる
+/// (Issue #176)。DNS解決はしない(`check_pc_online` の高速経路に乗せる。Issue #130-3)。
 pub fn compose_status_addr(pc_ip_address: &str, status_port: u16) -> String {
     format!("{}:{status_port}", pc_ip_address.trim())
 }
