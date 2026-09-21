@@ -229,10 +229,14 @@ struct Api {
 enum PendingKind {
     Power(PowerAction),
     Config(ConfigChange),
-    /// `/update` の確認。manifestの中身は保持しない。実行時は `run_ota_update` が
-    /// manifestを取得し直して署名検証するため、確認から確定までの差し替わりは
-    /// 検証をすり抜けない。pendingが証明するのは「TTL内の確定」だけ。
-    FirmwareUpdate,
+    /// `/update` の確認。確認時に提示した版を保持し、実行直前に取得し直した
+    /// manifestの版と突き合わせる。確認から確定までの差し替わりは署名検証を
+    /// すり抜ける(正規に署名された別版への差し替えは署名が通る)ため、
+    /// 合意した版との一致も要求する。pendingが証明するのは「TTL内の確定」と
+    /// 「合意した版」の両方。
+    FirmwareUpdate {
+        version: String,
+    },
 }
 
 impl PendingKind {
@@ -240,7 +244,7 @@ impl PendingKind {
         match self {
             PendingKind::Power(action) => action.label_ja().to_string(),
             PendingKind::Config(change) => change.label_ja().to_string(),
-            PendingKind::FirmwareUpdate => "firmware更新".to_string(),
+            PendingKind::FirmwareUpdate { .. } => "firmware更新".to_string(),
         }
     }
 }
@@ -288,7 +292,7 @@ impl CallbackTarget {
         match (self, kind) {
             (CallbackTarget::Power(a), PendingKind::Power(b)) => a == b,
             (CallbackTarget::Config, PendingKind::Config(_)) => true,
-            (CallbackTarget::FirmwareUpdate, PendingKind::FirmwareUpdate) => true,
+            (CallbackTarget::FirmwareUpdate, PendingKind::FirmwareUpdate { .. }) => true,
             _ => false,
         }
     }
@@ -1170,8 +1174,10 @@ impl Client {
         self.api.send_message(chat_id, &reply);
     }
 
-    /// `/update`: manifestを取得・検証し、version/sizeを提示して確認を求める。
-    /// 無確認で更新はしない。`ALLOWED_WHILE_LOCKED` には入れないため、
+    /// `/update`: manifestを取得・検証し、現在の版(`FIRMWARE_VERSION`)と比較して
+    /// 確認を求める。同じ版のときは確認ボタンを出さず、nonceも発行しない
+    /// (使われないnonceを残さない)。無確認で更新はしない。
+    /// `ALLOWED_WHILE_LOCKED` には入れないため、
     /// ロック中は `dispatch_command` のdefault-denyで拒否される。
     ///
     /// この関数は `process_updates` から呼ばれる。`poll_once` がlong pollingの
@@ -1190,17 +1196,23 @@ impl Client {
                     return;
                 }
             };
+        let order = pc_remote_signing::compare_versions(FIRMWARE_VERSION, &manifest.version);
+        let body =
+            pc_remote_signing::ota_confirm_text(FIRMWARE_VERSION, &manifest.version, manifest.size);
+        if !order.shows_confirm_button() {
+            self.api.send_message(chat_id, &body);
+            return;
+        }
         let nonce = Self::generate_nonce();
         self.pending = Some(Pending {
-            kind: PendingKind::FirmwareUpdate,
+            kind: PendingKind::FirmwareUpdate {
+                version: manifest.version,
+            },
             nonce: nonce.clone(),
             expires_at: Instant::now() + Duration::from_secs(self.config.telegram_confirm_ttl_secs),
         });
 
-        let text = format!(
-            "{}\n手入力する場合: /confirm_update {nonce}",
-            pc_remote_signing::ota_confirm_text(&manifest.version, manifest.size)
-        );
+        let text = format!("{body}\n手入力する場合: /confirm_update {nonce}");
         let confirm_data = format!("confirm:update:{nonce}");
         let cancel_data = format!("cancel:update:{nonce}");
         self.api.send_message_with_confirm_buttons(
@@ -1214,18 +1226,54 @@ impl Client {
 
     /// `/confirm_update <nonce>` の手入力フォールバック。ボタンが押せない場合に使う。
     fn handle_update_confirmation(&mut self, chat_id: i64, supplied: &str) {
-        let confirmed = self
-            .consume_pending(supplied)
-            .is_some_and(|kind| matches!(kind, PendingKind::FirmwareUpdate));
-        if !confirmed {
+        let confirmed = self.consume_pending(supplied).and_then(|kind| match kind {
+            PendingKind::FirmwareUpdate { version } => Some(version),
+            _ => None,
+        });
+        let Some(confirmed_version) = confirmed else {
             self.api.send_message(
                 chat_id,
                 "有効な更新確認がありません。期限切れ、使用済み、またはnonce不一致です。\
                  \nもう一度 /update から実行してください。",
             );
             return;
+        };
+        self.execute_confirmed_ota_update(chat_id, &confirmed_version);
+    }
+
+    /// 確認時に合意した版と実行時のmanifestが食い違っていないか確認してから
+    /// OTAを実行する。ボタン経路と `/confirm_update` 手入力経路の共通 choke point。
+    ///
+    /// 確認から確定までの間にbridgeの配信物が差し替わると、正規に署名された
+    /// 別版でも署名検証は通る。合意した版と違う版を黙って適用しないため、
+    /// 実行直前に取得し直したmanifestの版の一致を要求する。不一致・取得失敗の
+    /// ときは更新せず、`/update` のやり直しを求める(確認は消費済みのため)。
+    fn execute_confirmed_ota_update(&self, chat_id: i64, confirmed_version: &str) {
+        let pc_ip_address = self.settings.pc_ip_address();
+        match crate::ota::fetch_verified_manifest(self.config.as_ref(), &pc_ip_address) {
+            Ok(manifest) if manifest.version == confirmed_version => {
+                self.execute_ota_update(chat_id);
+            }
+            Ok(manifest) => {
+                println!(
+                    "ota: manifest version changed since confirm (confirmed={confirmed_version} now={})",
+                    manifest.version
+                );
+                self.api.send_message(
+                    chat_id,
+                    "更新情報が確認時から変わりました。更新は行いません。\
+                     \nもう一度 /update から実行してください。",
+                );
+            }
+            Err(e) => {
+                println!("ota: manifest re-fetch failed: {e}");
+                self.api.send_message(
+                    chat_id,
+                    "更新情報の取得に失敗しました。更新は行いません。\
+                     \nもう一度 /update から実行してください。",
+                );
+            }
         }
-        self.execute_ota_update(chat_id);
     }
 
     /// 確認済みのfirmware更新を開始する。
@@ -1534,13 +1582,15 @@ impl Client {
         let result = match kind {
             PendingKind::Power(action) => self.run_power_action(action),
             PendingKind::Config(change) => self.apply_config_change(&change),
-            PendingKind::FirmwareUpdate => {
+            PendingKind::FirmwareUpdate { version } => {
                 // OTAはrebootを伴うため、通常の「結果をanswer+送信」とは別経路にする。
                 // 先に開始をanswerして接続を閉じてから `execute_ota_update` へ渡す。
                 // ヒープ制約(long polling接続を開いたままOTAを呼ばない)の詳細は
                 // `ota.rs` の冒頭コメントと `poll_once` 内のコメントを参照。
+                // 実行直前にmanifestを取り直し、合意した版との一致を要求する
+                // (`execute_confirmed_ota_update` のコメント参照)。
                 self.api.answer_callback_query(&id, "更新を開始します");
-                self.execute_ota_update(chat_id);
+                self.execute_confirmed_ota_update(chat_id, &version);
                 return;
             }
         };
