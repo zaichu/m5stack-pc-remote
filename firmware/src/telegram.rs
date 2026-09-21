@@ -918,12 +918,6 @@ impl Client {
     fn status_text(&self) -> String {
         let online =
             net::check_pc_online(&self.settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
-        // pollingスレッドはI2Cを持たないため、UIループが読んだ最新の値を
-        // 共有してもらう。未取得(None: M5Stackの起動直後やI2C失敗時)の間は「不明」と出す。
-        // 充電中・給電中(満充電で充電停止)・電池駆動の3状態を区別する。
-        // 以前は非充電時を一律「残量だけ」にしていたため、USBを挿したまま
-        // 満充電で止まった状態が電池駆動と区別できなかった(Issue #153)。
-        // 文言の組み立ては `battery` crateに寄せ、hostテストで担保する。
         let battery_line = match *lock_battery(&self.battery) {
             Some(battery) => {
                 let state = battery::classify(battery.charging, battery.powered);
@@ -931,37 +925,24 @@ impl Client {
             }
             None => "バッテリー: 不明".to_string(),
         };
-        // 操作サービス(bridge)の応答有無(Issue #183)。再起動・シャットダウンが効かない
-        // とき、原因が「PCがオフ」なのか「PCはオンだが操作サービスが落ちている」のかを
-        // 切り分けられるようにする。PCがオフなら接続しても必ず失敗するので、オンの
-        // ときだけ確認する(オフのときは行そのものを出さない)。bridgeへの接続はplain
-        // HTTPで `HttpsLock` の対象外だが、待ちは `BRIDGE_STATUS_TIMEOUT`(800ms)で
-        // 打ち切る。共有状態のロックは保持していない(バッテリー行のガードは上の
-        // `match` の式で解放済み)。
-        let bridge_line = if online {
-            let bridge_online = bridge_client::check_bridge_online(
+        let locked = self.operation_lock.is_locked();
+        // ロック中・PCがオフなら結果を使わないので、bridgeへの800msの待ちを作らない。
+        let bridge_online = !locked
+            && online
+            && bridge_client::check_bridge_online(
                 self.config.as_ref(),
                 &self.settings.pc_ip_address(),
             );
-            pc_remote_signing::bridge_status_line_ja(online, bridge_online)
-        } else {
-            None
+        let snapshot = pc_remote_signing::PcStatusSnapshot {
+            pc_online: online,
+            bridge_online,
+            locked,
         };
-        let bridge_line = bridge_line
-            .map(|line| format!("{line}\n"))
-            .unwrap_or_default();
-        // firmwareのバージョンを必ず含める。これが無いと、`/update` で更新したあとに
-        // 新版が動いているのかを利用者が確認できない。実際、初回のOTA(Issue #79)では
-        // シリアルで otadata を読むまで成否を判定できなかった。
-        format!(
-            "PC: {}\n{bridge_line}{battery_line}\n操作: {}\nM5Stack: Rust firmware {}",
+        pc_remote_signing::status_text_ja(
+            snapshot.into(),
             net::pc_online_label_ja(online),
-            if self.operation_lock.is_locked() {
-                "ロック中"
-            } else {
-                "可能"
-            },
-            FIRMWARE_VERSION
+            &battery_line,
+            FIRMWARE_VERSION,
         )
     }
 
