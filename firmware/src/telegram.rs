@@ -136,6 +136,55 @@ pub fn lock_battery(
     battery.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// PCの起動指示後の待機開始時刻。`None`=待機なし。画面ボタンからの指示はUIループ、
+/// `/wake` からの指示はpollingスレッドで入るため、両者で共有する。
+/// `SharedBattery` と同じ `Arc<Mutex<...>>` 方式で、`main.rs` で作り、
+/// UIループとpollingスレッドへ渡す形にし、global staticにはしない
+/// (`PowerLock` と同じ扱い)。
+///
+/// leaf扱い: 短時間だけ握り、`HttpsLock` や `PowerLock` とネストさせない。
+/// 握ったまま `send_message` 系を呼ばないこと(Issue #127の規律と同じ)。
+/// 期限判定の本体はhostテスト済みの `wake_check::WakeWatch` に寄せ、
+/// ここには共有と呼び出しだけを残す(Issue #182)。
+pub type SharedWakeWatch = Arc<Mutex<Option<Instant>>>;
+
+/// 共有待機状態の排他を取る。poisonしていても排他は維持する。
+/// 守るのは値型(`Option<Instant>`)だけなので `lock_battery` と同じ扱いで回復する。
+///
+/// ガードをこの関数を呼んだ文の外へ持ち出さないこと。`std::sync::Mutex` は
+/// 再入不可のため、例えば `match *lock_wake_watch(..)` の腕の中で同じMutexを
+/// 取り直すと、`match` 全体が終わるまで最初のガードが解放されず、自分自身で
+/// デッドロックする(実機で再現済み)。呼び出し側は下の `wake_watch_started` /
+/// `clear_wake_watch` / `begin_wake_watch` を使い、この関数は直接呼ばない。
+fn lock_wake_watch(
+    wake_watch: &Mutex<Option<Instant>>,
+) -> std::sync::MutexGuard<'_, Option<Instant>> {
+    wake_watch.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 起動指示後の待機の有無と開始時刻を読む。ガードはこの関数内で手放すため、
+/// 呼び出し側がガード保持中の再ロック(自己デッドロック)を起こせない。
+pub fn wake_watch_started(wake_watch: &SharedWakeWatch) -> Option<Instant> {
+    *lock_wake_watch(wake_watch)
+}
+
+/// 起動指示後の待機を終わらせる。ガードはこの関数内で手放す。
+pub fn clear_wake_watch(wake_watch: &SharedWakeWatch) {
+    *lock_wake_watch(wake_watch) = None;
+}
+
+/// 起動指示後の待機を開始・更新する。WOL送信に成功した呼び出し側だけが呼ぶ。
+///
+/// - すでにPCがオンなら待機しない(残っていた待機があれば終わらせる)。
+/// - オフなら待機を開始する。待機中の再指示は開始時刻を今に置き換える
+///   (=期限を最後の指示から数え直す)。
+pub fn begin_wake_watch(wake_watch: &SharedWakeWatch, pc_online: bool) {
+    // `begin()` の結果は `pc_online` だけで決まり直前の待機有無には依らないため、
+    // 読み取りのためのロックは取らず書き込みの1回だけにする。
+    let (next, _) = wake_check::WakeWatch::idle().begin(pc_online);
+    *lock_wake_watch(wake_watch) = next.waiting.then(Instant::now);
+}
+
 /// 操作ロック。有効な間はWAKE / REBOOT / SHUTDOWNを一切実行しない。
 /// Telegramの `/lock` `/unlock` で切り替え、本体パネル操作にも効く。
 ///
@@ -440,6 +489,8 @@ pub struct Client {
     api: Api,
     /// UIループが更新する最新のバッテリー状態(`/status` で読むだけ)。
     battery: SharedBattery,
+    /// 起動指示後の待機開始時刻(UIループと共有。`/wake` で書き、UIループで読む)。
+    wake_watch: SharedWakeWatch,
     /// 未許可アクセスの検知数と、直近でアラートを送った時刻。
     unauthorized_alerts: AlertThrottle,
 }
@@ -873,6 +924,7 @@ impl Client {
         settings: Arc<RuntimeSettings>,
         https: HttpsLock,
         battery: SharedBattery,
+        wake_watch: SharedWakeWatch,
     ) -> Self {
         Self {
             last_update_id: 0,
@@ -888,6 +940,7 @@ impl Client {
             config,
             settings,
             battery,
+            wake_watch,
             // 抑制ポリシー(閾値・間隔)はbridgeと共有する。
             unauthorized_alerts: AlertThrottle::default(),
         }
@@ -1419,14 +1472,36 @@ impl Client {
             "/wake" => {
                 let _guard = lock_power(&self.power_lock);
                 let wol_port = self.settings.wol_port();
-                let reply = match net::send_wake_on_lan(&self.config.pc_mac_address, wol_port) {
-                    Ok(()) => "WOLを送信しました。",
+                let wol_ok = match net::send_wake_on_lan(&self.config.pc_mac_address, wol_port) {
+                    Ok(()) => {
+                        println!("WOL sent");
+                        true
+                    }
                     Err(e) => {
                         println!("WOL failed: {e}");
-                        "WOL送信に失敗しました。"
+                        false
                     }
                 };
+                // 文言の正本は `wake_check::wake_request_text` /
+                // `wake_check::wake_request_failed_text`(用語集に従いWOLを使わない)。
+                let reply = if wol_ok {
+                    wake_check::wake_request_text()
+                } else {
+                    wake_check::wake_request_failed_text()
+                };
                 drop(_guard);
+                if wol_ok {
+                    // すでにオンなら待機しない。pollingスレッドはUI側の最新状態を
+                    // 持たないため、その場でSTATUS相当の疎通確認をする
+                    // (最大 `STATUS_PROBE_TIMEOUT`。`/status` と同じ)。
+                    // ロックの順序: powerは既に離し、wakeは `begin_wake_watch` 内で
+                    // 短時間だけ握り、`send_message`(`HttpsLock`取得)の前には離す。
+                    let online_now = net::check_pc_online(
+                        &self.settings.pc_status_addr(),
+                        net::STATUS_PROBE_TIMEOUT,
+                    );
+                    begin_wake_watch(&self.wake_watch, online_now);
+                }
                 self.api.send_message(chat_id, reply);
             }
             "/reboot" => self.request_confirmation(chat_id, PowerAction::Reboot),

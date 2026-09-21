@@ -83,6 +83,9 @@ fn start_online_services(
     // UIループが読んだ最新のバッテリー状態。pollingスレッドはI2Cを持たないため、
     // 読み取り結果の値だけを共有する(Issue #153。`telegram_state` と同じ方式)。
     battery: &telegram::SharedBattery,
+    // 起動指示後の待機開始時刻。画面ボタンからの指示はUIループ、`/wake` からの
+    // 指示はpollingスレッドで書き、UIループのSTATUS確認で読む(Issue #182)。
+    wake_watch: &telegram::SharedWakeWatch,
 ) {
     if sntp.is_none() {
         // m5stack-pc-bridgeはtimestampを検証するため、電源操作前に時計同期が必要になる。
@@ -113,6 +116,7 @@ fn start_online_services(
             Arc::clone(settings),
             https_lock.clone(),
             battery.clone(),
+            wake_watch.clone(),
         );
         let state_handle = Arc::clone(telegram_state);
         // long pollingでUIやSTATUS更新を止めないよう、Telegramは専用スレッドで動かす。
@@ -225,6 +229,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // I2Cドライバ自体は共有せず、読み取り結果の値だけを渡す(Issue #153)。
     // 初期値はNoneで、最初の読み取りが終わるまでの `/status` は「不明」と出す。
     let battery_shared: telegram::SharedBattery = Arc::new(Mutex::new(None));
+    // 起動指示後の待機開始時刻。画面ボタンからはUIループ、`/wake` からは
+    // pollingスレッドが書き、UIループのSTATUS確認で読む(Issue #182)。
+    // 初期値はNone(待機なし)。
+    let wake_watch_shared: telegram::SharedWakeWatch = Arc::new(Mutex::new(None));
     if !telegram::is_configured(app_config.as_ref()) {
         println!("telegram: disabled (token or user id is a placeholder)");
     }
@@ -259,6 +267,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &settings,
             &https_lock,
             &battery_shared,
+            &wake_watch_shared,
         );
     }
 
@@ -372,6 +381,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &settings,
                     &https_lock,
                     &battery_shared,
+                    &wake_watch_shared,
                 );
             }
         }
@@ -484,23 +494,76 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("PC status changed: online={}", status.pc_online);
             }
 
+            // 起動指示後の待機の更新(Issue #182)。判定はhostテスト済みの
+            // `wake_check::WakeWatch::poll` に寄せ、ここにはI/Oと呼び出しだけを残す
+            // (`battery::PowerNotify` と同じ形)。メインループはブロックせず、
+            // 開始時刻(`Instant`: 単調時計)からの経過秒で判定する(NTPに依存しない)。
+            //
+            // 成功時は下の安定通知の代わりに所要時間付きで送り、安定通知側を
+            // 既済に進める(10秒後の安定通知と二重にならない)。待機なしの観測では
+            // 何も送らない。
+            // 通知の送信は既存の `Notifier` 経由のみにする(Issue #127の直列化を
+            // 守るため、自前でTelegramへ送らない)。
+            // 共有ロックのガードは `wake_watch_started` / `clear_wake_watch` の中で
+            // 手放す。`match *lock(..)` の対象にガードを置いたまま取り直すと、
+            // `match` が終わるまで解放されず自己デッドロックする(std Mutexは再入不可)。
+            let started = telegram::wake_watch_started(&wake_watch_shared);
+            let wake_notice = match started {
+                None => None,
+                Some(started_at) => {
+                    let elapsed_secs = started_at.elapsed().as_secs();
+                    let (next, notice) = wake_check::WakeWatch { waiting: true }
+                        .poll(now_online, elapsed_secs);
+                    if !next.waiting {
+                        telegram::clear_wake_watch(&wake_watch_shared);
+                    }
+                    notice.map(|notice| (notice, elapsed_secs))
+                }
+            };
+            // 成功時は安定通知側を既済に進めたため、下の安定通知は回さない。
+            // そうしないと10秒後に同じオンが「PCが起動しました。」として
+            // もう一度飛ぶ。
+            let wake_succeeded = matches!(
+                wake_notice,
+                Some((wake_check::WakeNotice::Succeeded, _))
+            );
+            match wake_notice {
+                Some((wake_check::WakeNotice::Succeeded, elapsed_secs)) => {
+                    notified_online = Some(true);
+                    notify_streak = 0;
+                    if let Some(notifier) = notifier.as_ref() {
+                        // 文言の正本は `wake_check::wake_succeeded_text`。
+                        notifier.notify(wake_check::wake_succeeded_text(elapsed_secs));
+                    }
+                }
+                Some((wake_check::WakeNotice::TimedOut, elapsed_secs)) => {
+                    if let Some(notifier) = notifier.as_ref() {
+                        // 文言の正本は `wake_check::wake_timed_out_text`。
+                        notifier.notify(wake_check::wake_timed_out_text(elapsed_secs));
+                    }
+                }
+                None => {}
+            }
+
             // 画面表示は即座に切り替えるが、Telegram通知だけは同じ結果を
             // NOTIFY_STABLE_POLLS回連続で観測してから送る。瞬断やPCの再起動中の
             // 短い揺れで通知が連投されるのを防ぐ。
-            match notified_online {
-                None => notified_online = Some(now_online),
-                Some(prev) if prev == now_online => notify_streak = 0,
-                Some(_) => {
-                    notify_streak += 1;
-                    if notify_streak >= NOTIFY_STABLE_POLLS {
-                        notified_online = Some(now_online);
-                        notify_streak = 0;
-                        if let Some(notifier) = notifier.as_ref() {
-                            // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
-                            // 文言の正本は `net::pc_state_notification_ja`。
-                            notifier.notify(
-                                net::pc_state_notification_ja(now_online).to_string(),
-                            );
+            if !wake_succeeded {
+                match notified_online {
+                    None => notified_online = Some(now_online),
+                    Some(prev) if prev == now_online => notify_streak = 0,
+                    Some(_) => {
+                        notify_streak += 1;
+                        if notify_streak >= NOTIFY_STABLE_POLLS {
+                            notified_online = Some(now_online);
+                            notify_streak = 0;
+                            if let Some(notifier) = notifier.as_ref() {
+                                // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
+                                // 文言の正本は `net::pc_state_notification_ja`。
+                                notifier.notify(
+                                    net::pc_state_notification_ja(now_online).to_string(),
+                                );
+                            }
                         }
                     }
                 }
@@ -727,11 +790,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                             let (toast, report) = match wol_result {
                                 Ok(()) => {
                                     println!("WOL sent");
-                                    ("Magic packet sent", "WOLを送信しました。")
+                                    // 起動指示後の待機を開始する(Issue #182)。すでに
+                                    // オンなら待機しない。判定本体はhostテスト済みの
+                                    // `wake_check::WakeWatch::begin` に寄せる。
+                                    // 文言の正本は `wake_check::wake_request_text`
+                                    // (用語集に従いWOLを使わない)。画面のトーストは
+                                    // ASCIIフォントのため英語のまま変えない。
+                                    telegram::begin_wake_watch(
+                                        &wake_watch_shared,
+                                        status.pc_online,
+                                    );
+                                    ("Magic packet sent", wake_check::wake_request_text())
                                 }
                                 Err(e) => {
                                     println!("WOL failed: {e}");
-                                    ("WOL failed", "WOL送信に失敗しました。")
+                                    ("WOL failed", wake_check::wake_request_failed_text())
                                 }
                             };
                             notify_panel_action(notifier.as_ref(), report);
@@ -791,11 +864,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                             let (toast, report) = match wol_result {
                                 Ok(()) => {
                                     println!("WOL sent");
-                                    ("Magic packet sent", "WOLを送信しました。")
+                                    // 起動指示後の待機を開始する(Issue #182)。すでに
+                                    // オンなら待機しない。判定本体はhostテスト済みの
+                                    // `wake_check::WakeWatch::begin` に寄せる。
+                                    // 文言の正本は `wake_check::wake_request_text`
+                                    // (用語集に従いWOLを使わない)。画面のトーストは
+                                    // ASCIIフォントのため英語のまま変えない。
+                                    telegram::begin_wake_watch(
+                                        &wake_watch_shared,
+                                        status.pc_online,
+                                    );
+                                    ("Magic packet sent", wake_check::wake_request_text())
                                 }
                                 Err(e) => {
                                     println!("WOL failed: {e}");
-                                    ("WOL failed", "WOL送信に失敗しました。")
+                                    ("WOL failed", wake_check::wake_request_failed_text())
                                 }
                             };
                             notify_panel_action(notifier.as_ref(), report);
