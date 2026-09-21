@@ -12,6 +12,9 @@
 //! X-Signature = hmac_sha256_hex(shared_secret, canonical)
 //! ```
 
+mod firmware_notice;
+pub use firmware_notice::{firmware_available_text, FirmwareCheckSchedule, FirmwareNotice};
+
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 

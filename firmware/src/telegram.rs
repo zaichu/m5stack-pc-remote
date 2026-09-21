@@ -844,7 +844,7 @@ impl DailyReport {
 /// channelで渡す。送信スレッドが落ちていても`notify`は失敗を無視する。
 #[derive(Clone)]
 pub struct Notifier {
-    tx: mpsc::Sender<String>,
+    tx: Arc<mpsc::Sender<String>>,
 }
 
 impl Notifier {
@@ -867,11 +867,17 @@ pub fn start_notifier(
     let chat_id = allowed_chat_id(config.as_ref())?;
 
     let (tx, rx) = mpsc::channel::<String>();
+    let tx = Arc::new(tx);
+    // 通知スレッド自身が送信側を保持して、切断時の終了を妨げないようにする。
+    let weak_tx = Arc::downgrade(&tx);
     let api = Api { config, https };
     let spawned = std::thread::Builder::new()
         .stack_size(12 * 1024)
         .spawn(move || {
             let mut schedule = DailyReport::new(&api.config);
+            let started = Instant::now();
+            let mut firmware_schedule = pc_remote_signing::FirmwareCheckSchedule::default();
+            let mut firmware_notice = pc_remote_signing::FirmwareNotice::default();
             loop {
                 // 定期レポートの時刻判定のため、通知が無くても定期的に起きる。
                 let queued = match rx.recv_timeout(DAILY_REPORT_CHECK_INTERVAL) {
@@ -880,6 +886,27 @@ pub fn start_notifier(
                     // 送信側(UIスレッド)が全て落ちた場合は終了する。
                     Err(mpsc::RecvTimeoutError::Disconnected) => return,
                 };
+
+                let (next_schedule, due) = firmware_schedule.poll(started.elapsed().as_secs());
+                firmware_schedule = next_schedule;
+                if due {
+                    let pc_ip_address = settings.pc_ip_address();
+                    let manifest = crate::ota::fetch_verified_manifest(&api.config, &pc_ip_address);
+                    if manifest.is_err() {
+                        println!("ota: firmware availability check failed");
+                    }
+                    let offered = manifest.as_ref().ok().map(|value| value.version.as_str());
+                    let (next_notice, notify) = firmware_notice.observe(FIRMWARE_VERSION, offered);
+                    firmware_notice = next_notice;
+                    if notify {
+                        if let (Some(tx), Some(version)) = (weak_tx.upgrade(), offered) {
+                            Notifier { tx }.notify(pc_remote_signing::firmware_available_text(
+                                FIRMWARE_VERSION,
+                                version,
+                            ));
+                        }
+                    }
+                }
 
                 // CA storeの確認は`due_report()`より前に行う。`due_report()`は
                 // 返した時点で「その日は送信済み」と記録するため、後段で失敗すると
