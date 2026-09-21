@@ -308,11 +308,11 @@ pub fn ota_progress_text(version: &str, received: u64, total: u64) -> String {
 /// 検証・書き込み完了後に `editMessageText` で同じメッセージへ出す文言。
 ///
 /// ダウンロード完了の100%バーとは別の文字列にすること。Telegramは同一内容への
-/// 編集を400にするため、同じ文言だと再起動前の最後の通知が届かない。
+/// 編集を400にするため、同じ文言だとM5Stack再起動前の最後の通知が届かない。
 /// 呼び出し側はこの通知が戻った後に `restart()` するため、送信の完了を
-/// 待たずに再起動して通知が欠けることはない。
+/// 待たずにM5Stackを再起動して通知が欠けることはない。
 pub fn ota_applying_text(version: &str) -> String {
-    format!("firmware更新を適用します。再起動します ({version})")
+    format!("firmware更新を適用します。M5Stackを再起動します ({version})")
 }
 
 /// ダウンロードしながらSHA-256を計算するストリーミングハーシャー。
@@ -376,7 +376,7 @@ pub fn boot_self_test_passed(checks: &BootChecks) -> bool {
 pub fn ota_confirm_text(version: &str, size: u64) -> String {
     format!(
         "firmware更新があります。\nversion: {version}\nsize: {size} bytes\n\
-         更新しますか？\nボタンを押すと開始します。完了すると自動で再起動します。"
+         更新しますか？\nボタンを押すと開始します。完了すると自動でM5Stackを再起動します。"
     )
 }
 
@@ -972,6 +972,8 @@ mod ota_tests {
         let text = ota_confirm_text(VERSION, SIZE);
         assert!(text.contains(VERSION), "{text}");
         assert!(text.contains(&SIZE.to_string()), "{text}");
+        // 用語集: 再起動の対象(M5Stack)を必ず明記する。
+        assert!(text.contains("M5Stackを再起動します"), "{text}");
     }
 }
 
@@ -1073,10 +1075,12 @@ mod ota_progress_tests {
 
     #[test]
     fn applying_text_differs_from_full_bar() {
-        // 再起動前の最後の通知が直前の100%バーと同じ内容だとTelegramが400に
+        // M5Stack再起動前の最後の通知が直前の100%バーと同じ内容だとTelegramが400に
         // するため、文言が変わることを固定する。
         let full = ota_progress_text("v", 1000, 1000);
         let applying = ota_applying_text("v");
         assert_ne!(full, applying, "{full} vs {applying}");
+        // 用語集: 再起動の対象(M5Stack)を必ず明記する。
+        assert!(applying.contains("M5Stackを再起動します"), "{applying}");
     }
 }

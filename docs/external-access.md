@@ -22,7 +22,7 @@ Windows PC
 
 ## なぜ中継が必要か
 
-賃貸無料回線やCGNAT配下では、外出先スマホから自宅LAN内のM5Stackへ直接到達できないことが多いです。PCがOFFのときはWindows上のソフトウェアも動かないため、PC側にTailscaleやTunnelを入れてもWAKE用途には使えません。
+賃貸無料回線やCGNAT配下では、外出先スマホから自宅LAN内のM5Stackへ直接到達できないことが多いです。PCがオフのときはWindows上のソフトウェアも動かないため、PC側にTailscaleやTunnelを入れてもWAKE用途には使えません。
 
 この条件でWAKEを成立させるには、常時給電のM5Stackが外向きにアクセスできる無料の中継先が必要です。
 
@@ -42,8 +42,8 @@ M5Stackが `getUpdates` を定期実行またはlong pollingし、許可ユー�
 
 - `/status` — PC状態を表示
 - `/wake` — Wake-on-LANを送信
-- `/reboot` — 確認後に再起動
-- `/shutdown` — 確認後にシャットダウン
+- `/reboot` — 確認後にPCを再起動
+- `/shutdown` — 確認後にPCをシャットダウン
 - `/update` — 確認後にfirmwareを更新(OTA)
 - `/lock` — 電源操作を一時的に禁止
 - `/unlock` — `/lock` を解除
@@ -94,15 +94,17 @@ m5stack-pc-bridge側に同じbot tokenを置く条件付き許容については
 応答例:
 
 ```text
-PC: オンライン
+PC: オン
 Wi-Fi RSSI: -58 dBm
 M5Stack IP: 192.168.1.50
 最終確認: 2026-09-01 00:00:00 JST
 ```
 
+状態表示の「オン/オフ」など用語の定義は[用語集](glossary.md)を参照してください。
+
 ## WAKE
 
-`/wake` はM5Stackから既存のWake-on-LAN処理を呼びます。PCがOFFでもM5Stackが生きていれば実行できます。
+`/wake` はM5Stackから既存のWake-on-LAN処理を呼びます。PCがオフでもM5Stackが生きていれば実行できます。
 
 ## REBOOT / SHUTDOWN
 
@@ -121,9 +123,9 @@ M5Stack IP: 192.168.1.50
 
 1. M5Stackがm5stack-pc-bridgeの署名付きmanifestを取得・検証し、versionとsizeをTelegramへ提示して確認を求める(検証失敗時は更新へ進まない)。
 2. 許可ユーザーが確定ボタンをタップするか、`/confirm_update <nonce>` を送る。
-3. M5Stackがlong pollingのHTTPS接続を閉じてからOTA(非activeスロットへの書込とboot切替)を実行し、完了後に再起動する。
+3. M5Stackがlong pollingのHTTPS接続を閉じてからOTA(非activeスロットへの書込とboot切替)を実行し、完了後にM5Stackを再起動する。
 
-`/update` は `/lock` 中は拒否されます。新しいfirmwareはpending状態で起動し、起動自己診断(画面初期化とWi-Fi接続の確認)を通過したときだけ自分をvalidとマークします。診断を通らないまま再起動すると旧slotへ自動で戻ります。
+`/update` は `/lock` 中は拒否されます。新しいfirmwareはpending状態で起動し、起動自己診断(画面初期化とWi-Fi接続の確認)を通過したときだけ自分をvalidとマークします。診断を通らないままM5Stackが再起動すると旧slotへ自動で戻ります。
 
 ## poll間隔
 
@@ -147,7 +149,7 @@ M5Stack IP: 192.168.1.50
 
 ### Tailscale
 
-初期の運用必須経路としては採用しません。2026-09-01時点でPersonal planは無料ですが、外部サービスの無料プランに依存します。またPCがOFFのときはWindows上のTailscaleも動かないため、WAKE用途の主経路にはなりません。
+初期の運用必須経路としては採用しません。2026-09-01時点でPersonal planは無料ですが、外部サービスの無料プランに依存します。またPCがオフのときはWindows上のTailscaleも動かないため、WAKE用途の主経路にはなりません。
 
 ### ntfy.sh public topic
 
@@ -183,9 +185,9 @@ M5Stack IP: 192.168.1.50
 ### Phase 5D: 実機確認 (確認済み)
 
 - スマホのTelegramから `/status`。
-- PC OFF状態で `/wake`。
-- PC ON状態で `/reboot` + 確定ボタンまたは `/confirm_reboot <nonce>`。
-- PC ON状態で `/shutdown` + 確定ボタンまたは `/confirm_shutdown <nonce>`。
+- PCがオフの状態で `/wake`。
+- PCがオンの状態で `/reboot` + 確定ボタンまたは `/confirm_reboot <nonce>`。
+- PCがオンの状態で `/shutdown` + 確定ボタンまたは `/confirm_shutdown <nonce>`。
 - 結果を対応するGitHub IssueまたはPRに記録する。
 
 ### Phase 5E: インラインボタンによる確認 (実装済み / 実機確認待ち)
@@ -199,8 +201,8 @@ M5Stack IP: 192.168.1.50
 
 - `firmware/src/telegram.rs` が `getUpdates` によるlong pollingを専用スレッドで実行する。タッチUI/STATUS更新のメインループを長時間ブロックしない。
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_ALLOWED_USER_ID` が未設定(placeholderまたは空)の場合はタスクを起動せず、画面表示は `Telegram: disabled` になる。既存のタッチUI・WOL・STATUSはそのまま動作する。
-- `from.id` が `TELEGRAM_ALLOWED_USER_ID` と一致しないupdateは無視し、返信しない。`update_id` は次回 `offset` として保持し、再処理しない。起動直後の最初の1バッチは、オフライン中に来たコマンドを実行しないよう、offset調整のみ行い実行はしない。
-- `/status` はPC ONLINE/OFFLINE、Wi-Fi状態、M5Stack local IPを返す。TCP connect probeを使う。
+- `from.id` が `TELEGRAM_ALLOWED_USER_ID` と一致しないupdateは無視し、返信しない。`update_id` は次回 `offset` として保持し、再処理しない。M5Stackの起動直後の最初の1バッチは、起動前に届いたコマンドを実行しないよう、offset調整のみ行い実行はしない。
+- `/status` はPCのオン/オフ、Wi-Fi状態、M5Stack local IPを返す。TCP connect probeを使う。
 - `/wake` はWake-on-LAN送信処理を呼び、成功/失敗を返信する。
  - `/reboot` / `/shutdown` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_SECS`（秒、既定 60秒）でTTL)を発行し、確定/キャンセルのインラインキーボード付きで `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を案内する。
 - 確定ボタン・キャンセルボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、m5stack-pc-bridgeへのHMAC署名付きPOSTを呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
@@ -223,8 +225,8 @@ M5Stack IP: 192.168.1.50
 - Telegram Bot APIの仕様や制限が将来変わる可能性はある。コストが発生する変更が必要になった場合は採用しない。
 - Bot tokenが漏れると第三者がbot APIへアクセスできる。BotFatherでrevokeし、M5Stackのconfigを更新する。
 - Telegramアカウントが乗っ取られると許可ユーザーとして操作される。スマホ側のロックとTelegramの二段階認証を有効にする。
-- M5StackがOFFLINEなら外部操作はできない。
-- `/status` のPC ONLINE/OFFLINEはリクエスト時にTCP connect probeを実行して判定する。
+- M5Stackがネットワーク未接続なら外部操作はできない。
+- `/status` のPCのオン/オフはリクエスト時にTCP connect probeを実行して判定する。
 
 ## 参照
 

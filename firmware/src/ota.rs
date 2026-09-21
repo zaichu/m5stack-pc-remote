@@ -43,7 +43,7 @@
 //
 // `sdkconfig.defaults` の `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` により、
 // `complete()` でboot partitionを切り替えても新slotはpending扱いのままで、
-// 起動後に自分をvalidとマークしない限り再起動時に旧slotへ戻る。
+// 起動後に自分をvalidとマークしない限りM5Stackの再起動時に旧slotへ戻る。
 // validマークは `mark_app_valid_after_self_test` が起動自己診断の通過時にだけ行う。
 //
 // ## 純粋関数とテスト
@@ -125,7 +125,7 @@ impl OtaError {
                 "時刻同期がまだ完了していません。少し待ってからやり直してください。".to_string()
             }
             OtaError::Transport(_) => {
-                "PCへの接続に失敗しました。PCが起動しbridgeが動いているか確認してください。"
+                "PCへの接続に失敗しました。PCがオンでbridgeが動いているか確認してください。"
                     .to_string()
             }
             OtaError::UnexpectedStatus { endpoint, status } => {
@@ -184,7 +184,7 @@ impl From<OtaImageError> for OtaError {
 ///    不一致ならboot切替をせず中止する。
 /// 4. すべて成功したら `on_applying` で適用通知を出してからbootパーティションを
 ///    切り替えてrebootする。成功時はこの関数は戻らない。
-///    通知は同期POSTのため、戻った時点で送信済みであり再起動で欠けない。
+///    通知は同期POSTのため、戻った時点で送信済みでありM5Stackの再起動で欠けない。
 /// 5. 失敗時だけ `Err` で戻り、呼び出し側が結果文を送る。
 ///
 /// `on_progress` と `on_applying` はどちらも戻り値を持たない。通知の失敗で
@@ -392,7 +392,7 @@ fn download_and_flash(
     // 刻みに届かない最後の端数を残さないよう、ループ後に必ず1回通知して
     // 100%にする。Issue #143 の実機では 1,388,544B を256KB刻みで送ると
     // 最終通知が 1,310,720B = 94%で止まり、残り 77,824B が閾値に届かず
-    // 通知されないまま再起動した。割合ベースでも端数は必ず出るため、
+    // 通知されないままM5Stackが再起動した。割合ベースでも端数は必ず出るため、
     // 刻みを細かくしても解決しない。ループ内で既に100%を通知済みなら
     // 呼び出し側の同一内容ガードで送らない (Telegramの400回避)。
     // 通知は補助であり、失敗してもOTAを止めない (戻り値を持たない契約)。
@@ -410,7 +410,7 @@ fn download_and_flash(
     // この呼び出しが戻った時点で送信は終わっており、この後の `restart()` で
     // 通知が欠けることはない。文言は100%バーと変えてある
     // (`pc_remote_signing::ota_applying_text` のコメント参照)。
-    // 失敗しても再起動は止めない (戻り値を持たない契約)。
+    // 失敗してもM5Stackの再起動は止めない (戻り値を持たない契約)。
     on_applying(manifest);
     Ok(())
 }
