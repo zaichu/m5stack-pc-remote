@@ -234,6 +234,10 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
   C++版 `telegram_root_ca.h` と同じ証明書)。
   専用スレッドで動かすため、long pollingがタッチUIやSTATUS更新を止めない。
   電源操作はUIスレッドとの間を `Mutex` で直列化する(C++版のFreeRTOSミューテックス相当)。
+- **firmware更新通知**: Telegram設定時、通知スレッド起動から3分後に初回確認し、以後6時間ごとにbridgeの署名検証済みmanifestを確認する。起動直後の通信集中を避け、1日4回に抑える。60秒周期の通知ループで判定するため、送信待ちなどで確認は遅れる場合がある。
+  現在の版と通知済みの版の両方より数値比較で新しい版だけを通知し、比較不能・取得失敗・署名不一致は通知しない。通知済みの記憶は再起動で消える。
+  文面: 「新しいfirmware X が利用可能です(現在 Y)。/update で更新できます」。既存Notifierのキューへ入れた時点で通知済みとし、Telegram送信失敗時の再送はしない。
+  manifestのHTTPタイムアウトは2秒。確認中もUIとTelegramポーリングは別スレッドで動作する。
 - **実行時設定変更**(`src/settings.rs`): `/set_ip <ipv4>`
   `/set_wol_port <n>` `/set_brightness <0-100>` `/settings`(現在値表示)`/confirm_set <nonce>`(手入力フォールバック)。
   対象は `pc_ip_address` / `wol_port` / `brightness` の3値のみで、REBOOT/SHUTDOWNと
