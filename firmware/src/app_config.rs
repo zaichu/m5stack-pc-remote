@@ -17,7 +17,7 @@ pub struct AppConfig {
     pub wifi_password: String,
     pub pc_mac_address: String,
     pub wol_port: u16,
-    pub pc_status_addr: String,
+    pub pc_status_port: u16,
     pub bridge_port: u16,
     pub bridge_shared_secret: String,
     pub pc_ip_address: String,
@@ -58,7 +58,7 @@ impl AppConfig {
             wifi_password: build_config::WIFI_PASSWORD.to_string(),
             pc_mac_address: build_config::PC_MAC_ADDRESS.to_string(),
             wol_port: build_config::WOL_PORT,
-            pc_status_addr: build_config::PC_STATUS_ADDR.to_string(),
+            pc_status_port: build_config::PC_STATUS_PORT,
             bridge_port: build_config::BRIDGE_PORT,
             bridge_shared_secret: build_config::BRIDGE_SHARED_SECRET.to_string(),
             pc_ip_address: build_config::PC_IP_ADDRESS.to_string(),
@@ -97,6 +97,16 @@ impl AppConfig {
             );
             self.daily_report_hour = -1;
         }
+        // STATUS確認先port。0なら既定値へ丸める(brightness と同じ流儀)。
+        // hostは持たず、読み出し時に `pc_ip_address` から組み立てる(Issue #176)。
+        let normalized = config_validation::normalize_status_port(self.pc_status_port);
+        if normalized != self.pc_status_port {
+            println!(
+                "pc_status_port={} は範囲外(0は既定値扱い)です。{}として扱います",
+                self.pc_status_port, normalized
+            );
+            self.pc_status_port = normalized;
+        }
         // 明るさは0〜100のパーセント。u8なので101〜255が入り得る
         // (build.rsの型チェックはu8範囲までしか見ない)ため、ここで丸める。
         // Telegram経由の入力は `config_validation` が0〜100に制限する。
@@ -114,7 +124,7 @@ impl AppConfig {
         replace(nvs, &["wifi_pass"], &mut self.wifi_password);
         replace(nvs, &["pc_mac"], &mut self.pc_mac_address);
         replace(nvs, &["wol_port"], &mut self.wol_port);
-        replace(nvs, &["status_addr"], &mut self.pc_status_addr);
+        replace(nvs, &["status_port"], &mut self.pc_status_port);
         replace(nvs, &["bridge_port", "agent_port"], &mut self.bridge_port);
         replace(
             nvs,

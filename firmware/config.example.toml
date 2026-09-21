@@ -10,10 +10,12 @@ wifi_password = "your-wifi-password"
 pc_mac_address = "AA:BB:CC:DD:EE:FF"
 wol_port = 9
 
-# STATUS確認先。TCP connect probeを使う。接続成功または即時refusedなら
-# 「PCは起動して到達可能」、timeoutなら「OFFまたは到達不能」と扱う。
+# STATUS確認先のport(任意、既定80)。TCP connect probeを使う。接続成功または
+# 即時refusedなら「PCは起動して到達可能」、timeoutなら「OFFまたは到達不能」と扱う。
 # このportで何かがlistenしている必要はない。
-pc_status_addr = "192.168.1.100:80"
+# hostは持たず、`pc_ip_address` から読み出し時に `{pc_ip_address}:{pc_status_port}`
+# として組み立てる。実行時にTelegramからは変えない。
+# pc_status_port = 80
 
 # m5stack-pc-bridge。LAN内HTTP + HMAC-SHA256署名付きリクエスト。
 bridge_port = 18080

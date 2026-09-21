@@ -298,15 +298,13 @@ impl CallbackTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingKind {
     PcIp,
-    StatusAddr,
     WolPort,
     Brightness,
 }
 
 impl SettingKind {
-    const ALL: [SettingKind; 4] = [
+    const ALL: [SettingKind; 3] = [
         SettingKind::PcIp,
-        SettingKind::StatusAddr,
         SettingKind::WolPort,
         SettingKind::Brightness,
     ];
@@ -314,7 +312,6 @@ impl SettingKind {
     fn slug(self) -> &'static str {
         match self {
             SettingKind::PcIp => "pc_ip",
-            SettingKind::StatusAddr => "status_addr",
             SettingKind::WolPort => "wol_port",
             SettingKind::Brightness => "brightness",
         }
@@ -327,7 +324,6 @@ impl SettingKind {
     fn label_ja(self) -> &'static str {
         match self {
             SettingKind::PcIp => "PC IPアドレス",
-            SettingKind::StatusAddr => "STATUS確認先",
             SettingKind::WolPort => "WOLポート",
             SettingKind::Brightness => "画面の明るさ",
         }
@@ -337,7 +333,6 @@ impl SettingKind {
     fn example(self) -> &'static str {
         match self {
             SettingKind::PcIp => "192.168.1.50",
-            SettingKind::StatusAddr => "192.168.1.50:80",
             SettingKind::WolPort => "9",
             SettingKind::Brightness => "80",
         }
@@ -346,7 +341,6 @@ impl SettingKind {
     fn current(self, settings: &RuntimeSettings) -> String {
         match self {
             SettingKind::PcIp => settings.pc_ip_address(),
-            SettingKind::StatusAddr => settings.pc_status_addr(),
             SettingKind::WolPort => settings.wol_port().to_string(),
             SettingKind::Brightness => settings.brightness_percent().to_string(),
         }
@@ -357,9 +351,6 @@ impl SettingKind {
         match self {
             SettingKind::PcIp => {
                 config_validation::validate_ipv4(raw).map(ConfigChange::PcIpAddress)
-            }
-            SettingKind::StatusAddr => {
-                config_validation::validate_status_addr(raw).map(ConfigChange::PcStatusAddr)
             }
             SettingKind::WolPort => {
                 config_validation::validate_wol_port(raw).map(ConfigChange::WolPort)
@@ -382,7 +373,6 @@ struct PendingInput {
 #[derive(Clone)]
 enum ConfigChange {
     PcIpAddress(String),
-    PcStatusAddr(String),
     WolPort(u16),
     Brightness(u8),
 }
@@ -391,7 +381,6 @@ impl ConfigChange {
     fn label_ja(&self) -> &'static str {
         match self {
             ConfigChange::PcIpAddress(_) => "PC IPアドレス",
-            ConfigChange::PcStatusAddr(_) => "STATUS確認先",
             ConfigChange::WolPort(_) => "WOLポート",
             ConfigChange::Brightness(_) => "画面の明るさ",
         }
@@ -399,7 +388,7 @@ impl ConfigChange {
 
     fn display_value(&self) -> String {
         match self {
-            ConfigChange::PcIpAddress(value) | ConfigChange::PcStatusAddr(value) => value.clone(),
+            ConfigChange::PcIpAddress(value) => value.clone(),
             ConfigChange::WolPort(value) => value.to_string(),
             ConfigChange::Brightness(value) => value.to_string(),
         }
@@ -415,7 +404,6 @@ impl ConfigChange {
     fn apply(&self, settings: &RuntimeSettings) -> Result<(), esp_idf_sys::EspError> {
         match self {
             ConfigChange::PcIpAddress(value) => settings.set_pc_ip_address(value.clone()),
-            ConfigChange::PcStatusAddr(value) => settings.set_pc_status_addr(value.clone()),
             ConfigChange::WolPort(value) => settings.set_wol_port(*value),
             ConfigChange::Brightness(value) => settings.set_brightness_percent(*value),
         }
@@ -970,11 +958,10 @@ impl Client {
     /// 入口にして、ボタン→値の入力→確認、の流れで完結させる。
     fn send_settings_menu(&self, chat_id: i64) {
         let locked = self.operation_lock.is_locked();
-        let (pc_ip_address, pc_status_addr, wol_port, brightness_percent) = self.settings.snapshot();
+        let (pc_ip_address, wol_port, brightness_percent) = self.settings.snapshot();
         let text = format!(
             "現在の設定\n\
              ・PC IPアドレス: {pc_ip_address}\n\
-             ・STATUS確認先: {pc_status_addr}\n\
              ・WOLポート: {wol_port}\n\
              ・画面の明るさ: {brightness_percent}%\n\
              ・操作ロック: {}\n\
@@ -1400,7 +1387,6 @@ impl Client {
             "/update" => self.handle_update_command(chat_id),
             "/confirm_update" => self.handle_update_confirmation(chat_id, args),
             "/set_ip" => self.handle_set_command(chat_id, SettingKind::PcIp, args),
-            "/set_status_addr" => self.handle_set_command(chat_id, SettingKind::StatusAddr, args),
             "/set_wol_port" => self.handle_set_command(chat_id, SettingKind::WolPort, args),
             "/set_brightness" => self.handle_set_command(chat_id, SettingKind::Brightness, args),
             "/confirm_set" => self.handle_config_confirmation(chat_id, args),

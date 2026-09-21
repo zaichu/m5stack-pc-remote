@@ -145,7 +145,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let peripherals = Peripherals::take()?;
     let nvs_partition = EspDefaultNvsPartition::take()?;
     let app_config = Arc::new(AppConfig::load(nvs_partition.clone()));
-    // Telegramから実行時に変更できる設定値(pc_ip_address/pc_status_addr/wol_port/brightness)。
+    // Telegramから実行時に変更できる設定値(pc_ip_address/wol_port/brightness)。
     // AppConfigは起動時の読み取り専用スナップショットのまま残す。
     let settings = Arc::new(RuntimeSettings::new(&app_config, nvs_partition.clone())?);
 
