@@ -28,7 +28,7 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
 use app_config::AppConfig;
 use board::{DisplayPins, DISPLAY_HEIGHT, DISPLAY_WIDTH};
-use bridge_client::{PowerAction, PowerActionLabel};
+use bridge_client::PowerAction;
 use settings::RuntimeSettings;
 use ui::{Status, TelegramState};
 
@@ -289,7 +289,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // 瞬断による通知の連投を防ぐ。
     //
     // 起動直後の最初の観測は通知せず基準値として取り込むだけにする(Noneの間)。
-    // そうしないとM5Stackを再起動するたびに「オンラインになりました」を送って
+    // そうしないとM5Stackを再起動するたびに「PCが起動しました」を送って
     // しまう。Telegram pollerが最初のgetUpdatesを実行しないのと同じ考え方。
     let mut notified_online: Option<bool> = None;
     let mut notify_streak: u8 = 0;
@@ -451,7 +451,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
 
             // 画面表示は即座に切り替えるが、Telegram通知だけは同じ結果を
-            // NOTIFY_STABLE_POLLS回連続で観測してから送る。瞬断やPC再起動中の
+            // NOTIFY_STABLE_POLLS回連続で観測してから送る。瞬断やPCの再起動中の
             // 短い揺れで通知が連投されるのを防ぐ。
             match notified_online {
                 None => notified_online = Some(now_online),
@@ -462,10 +462,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         notified_online = Some(now_online);
                         notify_streak = 0;
                         if let Some(notifier) = notifier.as_ref() {
-                            notifier.notify(format!(
-                                "PCが{}になりました。",
-                                net::pc_online_label_ja(now_online)
-                            ));
+                            // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
+                            // 文言の正本は `net::pc_state_notification_ja`。
+                            notifier.notify(
+                                net::pc_state_notification_ja(now_online).to_string(),
+                            );
                         }
                     }
                 }
@@ -825,17 +826,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                             ) {
                                 Ok(code) if bridge_client::is_accepted(code) => (
                                     "Command accepted".to_string(),
-                                    format!("{}を受け付けました。", action.label_ja()),
+                                    bridge_client::accepted_text(action),
                                 ),
                                 Ok(code) => (
                                     format!("Command rejected ({code})"),
-                                    format!("{}が拒否されました。({code})", action.label_ja()),
+                                    bridge_client::rejected_text(action, code),
                                 ),
                                 Err(e) => {
                                     println!("bridge command failed: {e}");
                                     (
                                         "Command failed".to_string(),
-                                        format!("{}に失敗しました。", action.label_ja()),
+                                        bridge_client::failed_text(action),
                                     )
                                 }
                             };

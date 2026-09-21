@@ -23,8 +23,13 @@ pub use pc_remote_signing::PowerAction;
 
 /// 日本語の表示文言。wire protocolではないのでshared crateへは置かない。
 /// `PowerAction` は他crateの型で inherent method を足せないため拡張traitにする。
+/// 用語は `docs/glossary.md` が正本。再起動・シャットダウンは対象(PC)を必ず明記する。
 pub trait PowerActionLabel {
+    /// ボタンや「PCを{}しますか？」の確認文に入る短い動作名。
+    /// 確認文自体に「PCを」が付くため、ここでは対象を付けない。
     fn label_ja(self) -> &'static str;
+    /// 結果文に入る対象付きの操作名。「PCの再起動」「PCのシャットダウン」。
+    fn subject_label_ja(self) -> &'static str;
 }
 
 impl PowerActionLabel for PowerAction {
@@ -34,6 +39,29 @@ impl PowerActionLabel for PowerAction {
             PowerAction::Shutdown => "シャットダウン",
         }
     }
+
+    fn subject_label_ja(self) -> &'static str {
+        match self {
+            PowerAction::Reboot => "PCの再起動",
+            PowerAction::Shutdown => "PCのシャットダウン",
+        }
+    }
+}
+
+/// 電源操作の結果文。Telegram応答と本体パネル操作の通知で同じ文言を使うため、
+/// ここ1箇所で組み立てる(両箇所にコピーしない)。
+pub fn accepted_text(action: PowerAction) -> String {
+    format!("{}を受け付けました。", action.subject_label_ja())
+}
+
+/// 電源操作の結果文(bridgeが非2xxで拒否)。`accepted_text` と同じく共通化する。
+pub fn rejected_text(action: PowerAction, code: u16) -> String {
+    format!("{}が拒否されました。({code})", action.subject_label_ja())
+}
+
+/// 電源操作の結果文(送信失敗)。`accepted_text` と同じく共通化する。
+pub fn failed_text(action: PowerAction) -> String {
+    format!("{}に失敗しました。", action.subject_label_ja())
 }
 
 /// Unix時刻(秒)。NTP未同期ならエラーにする。OTAの署名付きGETでも使う。

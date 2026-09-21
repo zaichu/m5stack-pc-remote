@@ -66,7 +66,7 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 `src/config.rs` が残っていると `scripts/check-local-firmware-secrets.sh`
 (`make firmware-build` から自動実行)がbuildを止める。
 
-起動時はESP-IDF NVSの `m5remote` namespaceを先に読み、存在するkeyだけ実行時設定へ
+M5Stackの起動時はESP-IDF NVSの `m5remote` namespaceを先に読み、存在するkeyだけ実行時設定へ
 反映する。NVSが未設定ならビルド時configをそのまま使うため、既存のbuild/flash運用は
 維持される。
 
@@ -85,7 +85,7 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 | `tg_token` | `telegram_bot_token` | 必須 | Telegram bot token |
 | `tg_user_id` | `telegram_allowed_user_id` | 必須 | 許可するTelegram user id |
 | `tg_poll_secs` | `telegram_long_poll_timeout_seconds` | 必須 | Telegram long polling timeout |
-| `tg_ttl_secs` | `telegram_confirm_ttl_secs` | 必須 | 再起動/シャットダウン確認TTL |
+| `tg_ttl_secs` | `telegram_confirm_ttl_secs` | 必須 | PCの再起動/シャットダウン確認TTL |
 | `report_hour` | `daily_report_hour` | 任意（既定 -1、無効） | 定期レポートを送るローカル時刻(0-23、範囲外で無効) |
 | `tz_offset` | `timezone_offset_hours` | 任意（既定 0） | UTCからのローカル時刻のずれ(JSTなら9) |
 | `brightness` | `brightness` | 任意（既定 100） | 画面の明るさ(0〜100のパーセント) |
@@ -121,7 +121,7 @@ python3 scripts/provision-firmware-nvs.py --write --yes --port /dev/ttyUSB0
 
 デフォルトは現行partition table(`partitions.csv`)のNVS offset `0x9000`、size `0x4000`。
 partition tableを変更した場合は `--offset` と `--size` を指定する。書き込み後は
-再起動時に `NVS設定を読み込みました` と表示される。
+M5Stackの再起動時に `NVS設定を読み込みました` と表示される。
 
 ## 書き込み・モニタ
 
@@ -224,13 +224,13 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
 以下を実装済み:
 
 - **REBOOT / SHUTDOWN**(`src/bridge_client.rs`): m5stack-pc-bridgeへのHMAC-SHA256署名付きPOST（wire protocol は `shared/pc-remote-signing/src/lib.rs` を正本とする）。本文 `{"confirm":true}` 必須をC++版と揃えてある。NTP未同期のクロックでは送信前に弾く。
-  画面上はPCがONLINEのときだけボタンが出て、確認画面(CANCEL/OK)を必ず経由する。
+  画面上はPCがオンのときだけボタンが出て、確認画面(CANCEL/OK)を必ず経由する。
 - **Telegram連携**(`src/telegram.rs`): Bot APIへのアウトバウンドHTTPS long polling。
   `/status` `/wake` `/reboot` `/shutdown` `/update` `/confirm_reboot <nonce>`
   `/confirm_shutdown <nonce>` `/confirm_update <nonce>` とインラインキーボードによる確認。`from.id` が
   `TELEGRAM_ALLOWED_USER_ID` と一致しない更新は実行しない。確認nonceは単回使用・TTL付きで、
-  一致・不一致・期限切れのいずれでも消費する。起動後の最初のバッチはoffsetを進めるだけで
-  実行しない。TLSはルートCAをピン留めして検証する(`src/telegram_root_ca.rs`、
+   一致・不一致・期限切れのいずれでも消費する。M5Stackの起動後の最初のバッチはoffsetを進めるだけで
+   実行しない。TLSはルートCAをピン留めして検証する(`src/telegram_root_ca.rs`、
   C++版 `telegram_root_ca.h` と同じ証明書)。
   専用スレッドで動かすため、long pollingがタッチUIやSTATUS更新を止めない。
   電源操作はUIスレッドとの間を `Mutex` で直列化する(C++版のFreeRTOSミューテックス相当)。
@@ -238,8 +238,8 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
   `/set_wol_port <n>` `/set_brightness <0-100>` `/settings`(現在値表示)`/confirm_set <nonce>`(手入力フォールバック)。
   対象は `pc_ip_address` / `wol_port` / `brightness` の3値のみで、REBOOT/SHUTDOWNと
   同じnonce確認フローを経由する。値の検証(`config-validation` crate)は確認発行前に行い、
-  NVSへの書き込みに成功したときだけ即時反映する。明るさはNVSへ永続化し、起動時と
-  変更確定時にバックライト(DCDC3)へ反映する。`wifi_ssid` / `telegram_bot_token` などの
+   NVSへの書き込みに成功したときだけ即時反映する。明るさはNVSへ永続化し、M5Stackの起動時と
+   変更確定時にバックライト(DCDC3)へ反映する。`wifi_ssid` / `telegram_bot_token` などの
   自己断線し得る値は対象外で、これらはUSB経由のNVS provisioningのまま(#42設計)。
   `/lock`中はREBOOT/SHUTDOWNと同様に変更系コマンドを拒否する。
 
@@ -261,7 +261,7 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
 
 2026-09-01時点の実機確認: AXP192初期化、ディスプレイ初期化、タッチコントローラー
 初期化(FT6236U、firmware_id=16/panel_id=17をM5GFXの報告値と一致確認)、Wi-Fi接続、
-STATUS疎通(PCのONLINE検出)まで動作を確認済み。タッチはFT6x36のレポートレジスタを
+STATUS疎通(PCのオン検出)まで動作を確認済み。タッチはFT6x36のレポートレジスタを
 5秒ごとにダンプし、未タッチ時に `td_status=0` を正しく読めることまで確認した。
 
 タッチ座標系については、`ft6x36` の `Orientation::Portrait`(ドライバのデフォルト)が

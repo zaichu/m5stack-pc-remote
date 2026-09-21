@@ -28,11 +28,23 @@ pub fn is_ntp_synced(unix_seconds: i64) -> bool {
 pub const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// PCの死活状態の日本語表記。Telegramの応答・通知・定期レポートで共通に使う。
+/// 用語は `docs/glossary.md` が正本。「オン/オフ」は状態の言葉として使う
+/// (「オンライン/オフライン」は使わない)。
 pub fn pc_online_label_ja(online: bool) -> &'static str {
     if online {
-        "オンライン"
+        "オン"
     } else {
-        "オフライン"
+        "オフ"
+    }
+}
+
+/// PCの状態変化の通知文。状態(オン/オフ)ではなく出来事(起動/停止)で書く。
+/// `pc_online_label_ja` が状態表示用なのに対し、こちらは変化の通知用。
+pub fn pc_state_notification_ja(online: bool) -> &'static str {
+    if online {
+        "PCが起動しました。"
+    } else {
+        "PCが停止しました。"
     }
 }
 
@@ -174,7 +186,7 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
         return false;
     };
     // A/AAAAの両方を持つホスト名では、先頭1件だけ試すと到達可能な方を
-    // 取りこぼしてOFFLINEと誤判定する。順に試して1つでも通れば ONLINE とする。
+    // 取りこぼしてオフと誤判定する。順に試して1つでも通れば ONLINE とする。
     for addr in addrs {
         if probe(addr, timeout) {
             return true;
@@ -184,7 +196,7 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
 }
 
 /// TCP connectで到達性だけを見る。`ConnectionRefused` は「相手は居るが
-/// そのportで待っていない」なので、PCは起動しているとみなす。
+/// そのportで待っていない」なので、PCはオンとみなす。
 fn probe(addr: SocketAddr, timeout: Duration) -> bool {
     match TcpStream::connect_timeout(&addr, timeout) {
         Ok(_) => true,

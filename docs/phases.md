@@ -6,12 +6,12 @@
 - Wi-Fiへ接続する。
 - 設定ファイルからPCのMAC、IP、broadcast addressを読む。
 - Wake-on-LAN Magic Packetを送る。
-- TCP connect probeでONLINE/OFFLINEを判定する。
+- TCP connect probeでオン/オフを判定する。
 - 画面には最低限のSTATUSとWAKEボタンを表示する。
 
 ## Phase 2: M5Stack UI
 
-- ONLINE/OFFLINEを大きく表示する。
+- オン/オフ(画面表示はASCIIでONLINE/OFFLINE)を大きく表示する。
 - Wi-Fi接続状態、IP、RSSIを表示する。
 - WAKE、REBOOT、SHUTDOWNボタンを表示する。
 - REBOOT / SHUTDOWN は確認画面を必須にする。

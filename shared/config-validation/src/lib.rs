@@ -24,12 +24,12 @@ pub fn validate_ipv4(input: &str) -> Result<String, String> {
         .map_err(|_| format!("`{trimmed}` はIPv4アドレスとして解釈できません(例: 192.168.1.50)"))
 }
 
-/// STATUS確認(オンライン判定のTCP probe)の接続先を組み立てる。
+/// STATUS確認(オン/オフ判定のTCP probe)の接続先を組み立てる。
 ///
 /// 接続先は常に `{pc_ip_address}:{status_port}` を**読み出し時に組み立てる**。
 /// hostを別の設定値として持たない理由: 同じ情報(IP)を2箇所に持つと、PCのIPが
 /// 変わったときに2項目の直しが必要になり、片方の直し忘れで電源操作は通るのに
-/// STATUSが常にOFFLINEになる(またはその逆)。hostの正本は `pc_ip_address` の
+/// STATUSが常にオフになる(またはその逆)。hostの正本は `pc_ip_address` の
 /// 1箇所だけにし、ここでは連結だけを行う。
 /// DNS解決はしない。IPv4リテラルを連結するだけで、`check_pc_online` が
 /// IPリテラルなら `SocketAddr` として直接parseする高速経路に乗る

@@ -59,7 +59,7 @@ espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust
 ```
 
 `config.toml` はGit管理外です。秘密情報をRustソース(`src/`配下)へ直接書かないでください。
-起動時はNVSの `m5remote` namespaceを先に読み、値があればそれを使います。NVSが未設定の
+M5Stackの起動時はNVSの `m5remote` namespaceを先に読み、値があればそれを使います。NVSが未設定の
 場合は `config.toml` からビルド時生成した設定をfallbackとして使います。
 tokenやsecretをローテーションした時は、現時点では `config.toml` を更新して再build/flashする
 運用を正本にします。NVS provisioningだけで差し替える手順は、実機で安全に確認できてから
@@ -167,15 +167,15 @@ bash scripts/telegram-set-commands.sh
 
 Telegramアプリから許可したuser idのアカウントで、bot宛てに以下を送信します。
 
-- `/status`: PCのONLINE/OFFLINE、Wi-Fi RSSI、M5Stack IPを返信します。
+- `/status`: PCのオン/オフ、Wi-Fi RSSI、M5Stack IPを返信します。
 - `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
  - `/reboot` / `/shutdown`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」または「シャットダウン」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を手入力しても構いません(後方互換)。nonceは `telegram_confirm_ttl_secs`（秒）の間だけ有効（既定 60秒）で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
- - `/update`: manifestのversionとsizeを提示してから確認を求め、確定後にfirmwareを更新して自動で再起動します。新しいfirmwareは起動自己診断を通るまでvalidにならず、通らないまま再起動すると旧版へ戻ります。
+ - `/update`: manifestのversionとsizeを提示してから確認を求め、確定後にfirmwareを更新して自動でM5Stackを再起動します。新しいfirmwareは起動自己診断を通るまでvalidにならず、通らないままM5Stackが再起動すると旧版へ戻ります。
 - `/lock` / `/unlock`: 旅行中などに誤操作・不正操作を防ぐため、電源操作を一時的に禁止します。ロック中は `/wake` `/reboot` `/shutdown` `/update` と確認ボタンをすべて拒否し、**M5Stack本体のタッチ操作も同様に拒否**します(画面に `LOCKED` と表示されます)。`/lock` `/unlock` `/status` はロック中でも受け付けます。ロック状態はメモリ上だけで保持するため、M5Stackを再起動すると解除されます。
 
 なお、次の出来事はこちらから操作しなくてもTelegramへ通知されます。
 
-- PCのオンライン/オフラインが切り替わったとき(瞬断での連投を防ぐため、20秒継続した変化だけを通知)
+- PCのオン/オフが切り替わったとき(瞬断での連投を防ぐため、20秒継続した変化だけを通知)
 - 1日1回の定期レポート(`firmware/config.toml` の `daily_report_hour` に 0-23 のローカル時刻を設定したときだけ。`timezone_offset_hours` はUTCからのずれで、JSTなら9。既定では無効)
 - M5Stack本体のタッチパネルから電源操作を実行したとき(`[本体パネル操作]` のprefixが付きます)
 - 未許可ユーザーからのアクセスを検知したとき(3回たまった時点で通知。最短送信間隔1時間)
@@ -216,6 +216,7 @@ Rust firmware buildはログを一度ローカル一時ファイルへ捕捉し�
 ## ドキュメント
 
 - [Architecture](docs/architecture.md)
+- [Glossary（用語集）](docs/glossary.md)
 - [Phases](docs/phases.md)
 - [Security](docs/security.md)
 - [External Access Design](docs/external-access.md)

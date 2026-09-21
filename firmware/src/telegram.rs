@@ -5,7 +5,7 @@
 //   - `from.id` が許可ユーザーIDと一致するupdateだけ処理する
 //   - /reboot と /shutdown と /update は即実行せず、単回使用の確認nonceを発行する
 //   - 確認は成功・失敗・期限切れのいずれでも消費し、再利用させない
-//   - 起動直後の最初のgetUpdates結果はoffset更新だけにし、オフライン中の古い命令を実行しない
+//   - 起動直後の最初のgetUpdates結果はoffset更新だけにし、起動前に届いた古い命令を実行しない
 //   - bot tokenとメッセージ内容をログへ出さない
 
 use std::error::Error;
@@ -154,11 +154,12 @@ impl OperationLock {
     }
 }
 
-/// 起動通知の文面。`firmware/Cargo.toml` の `version` が正本で、
+/// M5Stackの起動通知の文面。`firmware/Cargo.toml` の `version` が正本で、
 /// `/status` のバージョン表示(`FIRMWARE_VERSION`)と同じ値を使う。
-/// OTA後に新版が動いているかの確認と、予期しない再起動の検知が目的。
+/// OTA後に新版が動いているかの確認と、M5Stackの予期しない再起動の検知が目的。
+/// 用語は `docs/glossary.md` が正本(M5Stack自身の立ち上がりは「M5Stackが起動しました」)。
 pub fn boot_notification_text() -> String {
-    format!("M5Stack起動しました ({FIRMWARE_VERSION})")
+    format!("M5Stackが起動しました ({FIRMWARE_VERSION})")
 }
 
 pub fn is_configured(config: &AppConfig) -> bool {
@@ -732,10 +733,10 @@ struct DailyReport {
 impl DailyReport {
     fn new(config: &AppConfig) -> Self {
         // 起動時点で既に送信時刻を過ぎているなら、その日の分は送信済みとして扱う。
-        // 再起動のたびに同じ日のレポートが届くのを防ぐため。
+        // M5Stackの再起動のたびに同じ日のレポートが届くのを防ぐため。
         //
         // まだ送信時刻より前なら未送信のままにする。ここで無条件に送信済みへ
-        // すると、送信時刻の前に再起動しただけでその日の分が飛んでしまう
+        // すると、送信時刻の前にM5Stackを再起動しただけでその日の分が飛んでしまう
         // (例: 8時に再起動 → 9時のレポートが翌日まで来ない)。
         let last_sent_day = Self::local_now(config)
             .and_then(|(day, hour)| (hour >= config.daily_report_hour).then_some(day));
@@ -922,7 +923,7 @@ impl Client {
         let online =
             net::check_pc_online(&self.settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
         // pollingスレッドはI2Cを持たないため、UIループが読んだ最新の値を
-        // 共有してもらう。未取得(None: 起動直後やI2C失敗時)の間は「不明」と出す。
+        // 共有してもらう。未取得(None: M5Stackの起動直後やI2C失敗時)の間は「不明」と出す。
         // 充電中・給電中(満充電で充電停止)・電池駆動の3状態を区別する。
         // 以前は非充電時を一律「残量だけ」にしていたため、USBを挿したまま
         // 満充電で止まった状態が電池駆動と区別できなかった(Issue #153)。
@@ -1116,12 +1117,12 @@ impl Client {
         let pc_ip_address = self.settings.pc_ip_address();
         match bridge_client::send_command(action, self.config.as_ref(), &pc_ip_address) {
             Ok(code) if bridge_client::is_accepted(code) => {
-                format!("{}を受け付けました。", action.label_ja())
+                bridge_client::accepted_text(action)
             }
-            Ok(code) => format!("{}に失敗しました。({code})", action.label_ja()),
+            Ok(code) => bridge_client::rejected_text(action, code),
             Err(e) => {
                 println!("bridge command failed: {e}");
-                format!("{}に失敗しました。", action.label_ja())
+                bridge_client::failed_text(action)
             }
         }
     }
@@ -1150,7 +1151,7 @@ impl Client {
                 self.run_power_action(action)
             }
             _ => format!(
-                "有効な{}確認がありません。期限切れ、使用済み、またはnonce不一致です。\nもう一度 /{} から実行してください。",
+                "有効なPCの{}確認がありません。期限切れ、使用済み、またはnonce不一致です。\nもう一度 /{} から実行してください。",
                 action.label_ja(),
                 action.slug()
             ),
@@ -1243,7 +1244,7 @@ impl Client {
         let progress_message_id = if chat_id != 0 {
             self.api.send_message_returning_id(
                 chat_id,
-                "firmware更新を開始します。完了すると自動で再起動します。",
+                "firmware更新を開始します。完了すると自動でM5Stackを再起動します。",
             )
         } else {
             None
@@ -1307,7 +1308,7 @@ impl Client {
         };
         // 検証・書き込み完了の通知。同じメッセージを書き換える。
         // `edit_message_text` は応答を待つ同期POSTのため、戻った時点で送信済みで
-        // あり、この後の `restart()` で欠けない。失敗しても再起動は止めない
+        // あり、この後の `restart()` で欠けない。失敗してもM5Stackの再起動は止めない
         // (コールバックは戻り値を持たない契約)。
         let mut on_applying = |manifest: &pc_remote_signing::OtaManifest| {
             let Some(message_id) = progress_message_id else {
@@ -1324,7 +1325,7 @@ impl Client {
             &mut on_applying,
         ) {
             // 成功時は `restart()` で戻らないため、ここへは来ない。防御的に残す。
-            Ok(()) => "更新が完了しました。再起動します。".to_string(),
+            Ok(()) => "更新が完了しました。M5Stackを再起動します。".to_string(),
             Err(e) => {
                 // 詳細(espのエラー文言を含む)はシリアルログにだけ残し、Telegramへは
                 // 接続先が混ざらない固定ラベルを返す。`user_message` のコメント参照。

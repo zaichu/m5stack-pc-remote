@@ -11,7 +11,7 @@ pc_mac_address = "AA:BB:CC:DD:EE:FF"
 wol_port = 9
 
 # STATUS確認先のport(任意、既定80)。TCP connect probeを使う。接続成功または
-# 即時refusedなら「PCは起動して到達可能」、timeoutなら「OFFまたは到達不能」と扱う。
+# 即時refusedなら「PCはオンで到達可能」、timeoutなら「オフまたは到達不能」と扱う。
 # このportで何かがlistenしている必要はない。
 # hostは持たず、`pc_ip_address` から読み出し時に `{pc_ip_address}:{pc_status_port}`
 # として組み立てる。実行時にTelegramからは変えない。

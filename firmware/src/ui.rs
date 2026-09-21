@@ -1,6 +1,6 @@
 // タッチUI。STATUS画面、WAKE / REBOOT / SHUTDOWNボタン、危険操作の確認画面を描画する。
 //
-// REBOOTとSHUTDOWNはPCがONLINEのときだけ表示し、m5stack-pc-bridgeへ送る前に確認画面を挟む。
+// REBOOTとSHUTDOWNはPCがオンのときだけ表示し、m5stack-pc-bridgeへ送る前に確認画面を挟む。
 //
 // 画面文言は全てASCIIにする。描画に使う`mono_font::ascii`のフォントはASCII範囲外を
 // 全て'?'グリフへ置き換えるため、日本語を書くと文字化けする。
@@ -612,7 +612,7 @@ pub fn draw_calendar(
     // ロック中はMainと同じく沈めた配色にする。タップ自体はmain.rs側で弾く。
     let enabled = !status.locked;
     WAKE_BUTTON.draw(display, "WAKE", palette::ACCENT, enabled)?;
-    // REBOOT / SHUTDOWNはMainと同じくPC起動中だけ表示する。
+    // REBOOT / SHUTDOWNはMainと同じくPCがオンのときだけ表示する。
     if status.pc_online {
         REBOOT_BUTTON.draw(display, "REBOOT", palette::WARN, enabled)?;
         SHUTDOWN_BUTTON.draw(display, "SHUTDOWN", palette::DANGER, enabled)?;
@@ -683,7 +683,7 @@ pub fn draw_main(
     // ロック中はボタンを沈めた配色にして、押しても動かないことを見た目でも示す。
     let enabled = !status.locked;
     WAKE_BUTTON.draw(display, "WAKE", palette::ACCENT, enabled)?;
-    // REBOOT / SHUTDOWNはPC起動中だけ表示して、誤操作の入口を減らす。
+    // REBOOT / SHUTDOWNはPCがオンのときだけ表示して、誤操作の入口を減らす。
     if status.pc_online {
         REBOOT_BUTTON.draw(display, "REBOOT", palette::WARN, enabled)?;
         SHUTDOWN_BUTTON.draw(display, "SHUTDOWN", palette::DANGER, enabled)?;
