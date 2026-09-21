@@ -293,6 +293,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // しまう。Telegram pollerが最初のgetUpdatesを実行しないのと同じ考え方。
     let mut notified_online: Option<bool> = None;
     let mut notify_streak: u8 = 0;
+    // Telegramへ通知済みの給電状態。PC状態通知と同じ考え方で、
+    // 起動直後の最初の観測は通知せず基準値として取り込み、同じ観測が
+    // `battery::POWER_NOTIFY_STABLE_POLLS` 回連続したときだけ通知する。
+    // 判定はhostテスト済みの `battery::PowerNotify::poll` に寄せる。
+    let mut power_notify = battery::PowerNotify::new();
     // 直近にDCDC3へ反映した明るさ。`init_power` で起動時の保存値を反映済みのため
     // 初期値は現在値にし、起動直後の余計なI2C書き込みをしない。
     let mut applied_brightness = settings.brightness_percent();
@@ -434,6 +439,35 @@ fn main() -> Result<(), Box<dyn Error>> {
                     // Calendarでも安全に呼べる。Calendar滞在中も電池表示が固まらない。
                     if matches!(screen, Screen::Main) || matches!(screen, Screen::Calendar) {
                         ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
+                    }
+                }
+            }
+            // 給電変化のTelegram通知。PC状態通知と同じ「連続観測で確定」方式で、
+            // 一瞬の抜き差し(接触不良など)では送らない。判定はhostテスト済みの
+            // `battery::PowerNotify::poll` に寄せ、ここにはI/Oと呼び出しだけを残す。
+            //
+            // 読み出し(`read_battery`)自体は変化時と10秒保険のときだけだが、
+            // 判定は毎秒この周期で回す。最新の既知値(`status.battery`)を毎秒
+            // 観測することで `POWER_NOTIFY_STABLE_POLLS`(5回)=約5秒の確定に
+            // なる。読み取り失敗(None)の間は前回値をそのまま観測するため、
+            // 失敗が通知を誘発することはない。
+            //
+            // Wi-Fi断中も判定は進める。送れなかった変化は基準値として取り込む
+            // (PC通知と同じ扱い)。停電ではルーターも落ちて送れないため、
+            // 復帰後に「給電が戻りました」だけが届く場合がある。
+            // 通知の送信自体は既存の `Notifier` 経由のみにする(Issue #127の
+            // 直列化を守るため、自前でTelegramへ送らない)。バッテリー駆動中は
+            // 電力が有限なため、同じ状態での重複送信は `PowerNotify` 側で抑える。
+            if let Some(known) = status.battery {
+                let (next_power, should_notify) = power_notify.poll(known.powered);
+                power_notify = next_power;
+                if should_notify {
+                    if let Some(notifier) = notifier.as_ref() {
+                        // 文言の正本は `battery::power_state_notification_ja`。
+                        notifier.notify(battery::power_state_notification_ja(
+                            known.powered,
+                            known.percent,
+                        ));
                     }
                 }
             }
