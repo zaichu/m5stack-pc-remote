@@ -30,6 +30,7 @@
 - 文言を組み立てる関数はできるだけ1箇所に寄せる。
   日本語の状態表示と通知文は `firmware/src/net.rs` の `pc_online_label_ja` /
   `pc_state_notification_ja` が正本。電源操作の結果文は
-  `firmware/src/bridge_client.rs` の `accepted_text` / `rejected_text` /
-  `failed_text` が正本。firmware更新の確認・適用文は
-  `shared/pc-remote-signing` の `ota_confirm_text` / `ota_applying_text` が正本。
+   `firmware/src/bridge_client.rs` の `accepted_text` / `rejected_text` /
+   `failed_text` が正本。firmware更新の確認・適用文は
+   `shared/pc-remote-signing` の `ota_confirm_text` / `ota_applying_text` が正本。
+   給電変化の通知文は `shared/battery` の `power_state_notification_ja` が正本。

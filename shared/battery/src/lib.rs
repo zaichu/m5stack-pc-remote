@@ -125,6 +125,102 @@ pub fn status_ja(percent: u8, state: PowerState) -> String {
     }
 }
 
+/// 給電状態の変化をTelegramへ通知するまでに必要な、同じ観測の連続回数。
+///
+/// 給電の確認周期は1秒のため、5回連続=約5秒続いた変化だけを通知する。
+/// PC状態通知(10秒周期×2回=20秒)より短くした根拠:
+/// - ケーブルの接触不良などのチャタリングは通常1〜2秒程度で収まるため、
+///   5秒あれば一瞬の抜き差しを抑えられる。
+/// - 停電・コンセント抜けは早く知りたい(放置するとバッテリーが尽きて
+///   通知も送れなくなる)ため、10秒以上は待たせない。PCの再起動(数十秒)に
+///   比べ、給電の揺れが5秒続くことは稀なので誤通知のリスクは低い。
+pub const POWER_NOTIFY_STABLE_POLLS: u8 = 5;
+
+/// 給電変化の通知状態。PC状態通知の `notified_online` + `notify_streak` と
+/// 同じ考え方(起動直後の最初の観測は通知せず基準値として取り込む、N回連続で
+/// 同じ結果のときだけ通知する)を純粋な値として切り出したもの。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PowerNotify {
+    /// 直前に通知(または基準値として取り込み)した給電状態。
+    /// 起動直後は `None` で、最初の観測は通知せず取り込むだけにする。
+    /// そうしないとM5Stackを再起動するたびに通知が飛ぶ。
+    pub notified: Option<bool>,
+    /// `notified` と異なる観測が連続した回数。同じ観測に戻れば0へ戻る。
+    pub streak: u8,
+}
+
+impl PowerNotify {
+    /// 初期状態(未観測)。最初の `poll` は通知せず基準値を取り込む。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 今回の給電観測(`powered`)を与え、次の内部状態と通知要否を返す。
+    ///
+    /// 純粋関数のため `main.rs` のループ側にはI/O(通知送信)とこの呼び出し
+    /// だけが残る。通知は1回の変化につき1回だけ(`notified` を更新するため、
+    /// 同じ状態が続いても重複送信しない)。バッテリー駆動中は電力が有限なため、
+    /// 繰り返し送らないことが重要になる。
+    pub fn poll(self, observed: bool) -> (Self, bool) {
+        match self.notified {
+            // 起動直後の最初の観測は通知せず基準値として取り込むだけ。
+            None => (
+                Self {
+                    notified: Some(observed),
+                    streak: 0,
+                },
+                false,
+            ),
+            // 変化なし: 連続カウントを捨てる(接触不良の一瞬はここで消える)。
+            Some(prev) if prev == observed => (
+                Self {
+                    notified: Some(prev),
+                    streak: 0,
+                },
+                false,
+            ),
+            // 変化あり: 連続回数を数え、確定回数に達したら通知する。
+            Some(prev) => {
+                let streak = self.streak.saturating_add(1);
+                if streak >= POWER_NOTIFY_STABLE_POLLS {
+                    (
+                        Self {
+                            notified: Some(observed),
+                            streak: 0,
+                        },
+                        true,
+                    )
+                } else {
+                    (
+                        Self {
+                            notified: Some(prev),
+                            streak,
+                        },
+                        false,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/// 給電状態の変化の通知文(日本語)。
+///
+/// 用語は `docs/glossary.md` が正本。M5Stackが対象であることを明記し、
+/// 出来事の言葉(切れました/戻りました)で書く。PC側の
+/// `net::pc_state_notification_ja`(「PCが起動しました。」/「PCが停止しました。」)
+/// と同じく文末に「。」を付ける。
+/// 給電断の通知にはその時点の残量%を添える(バッテリー駆動があとどれくらい
+/// 持つかの目安になる)。給電復帰の通知に「切れていた時間」は添えない
+/// (時計がNTP未同期のときに壊れないよう、時刻計算を持ち込まないため)。
+pub fn power_state_notification_ja(powered: bool, percent: u8) -> String {
+    if powered {
+        "M5Stackの給電が戻りました。".to_string()
+    } else {
+        format!("M5Stackの給電が切れました(バッテリー駆動に切り替わりました。残量 {percent}%)。")
+    }
+}
+
 /// 画面表示に使う値だけを抜き出したもの。
 ///
 /// `firmware` 側の `board::Battery` と1対1に対応する。残量%は5%刻みへ
@@ -395,5 +491,115 @@ mod tests {
         // 立っているだけでは給電変化として扱わない。
         assert!(!is_pending(0x80 | 0x02, 0x00));
         assert!(!is_pending(0x00, 0x03));
+    }
+
+    // --- PowerNotify (給電変化の通知判定) ---
+
+    /// 観測列を与えて最後まで回し、通知が出た回数を数える。
+    fn notify_count(observed: &[bool]) -> usize {
+        let mut state = PowerNotify::new();
+        let mut count = 0;
+        for &o in observed {
+            let (next, notify) = state.poll(o);
+            state = next;
+            if notify {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn power_notify_stable_polls_is_five_seconds() {
+        // 確定回数の変更は通知遅延の変更になるため、値を固定して検知する。
+        // 1秒周期×5回=約5秒。根拠は `POWER_NOTIFY_STABLE_POLLS` のコメント参照。
+        assert_eq!(POWER_NOTIFY_STABLE_POLLS, 5);
+    }
+
+    #[test]
+    fn first_observation_is_baseline_not_notification() {
+        // 起動直後の最初の観測は給電あり・なしのどちらでも通知しない。
+        // 再起動のたびに通知しないための抑止(PC通知の `None` と同じ扱い)。
+        let (_, notify) = PowerNotify::new().poll(true);
+        assert!(!notify);
+        let (_, notify) = PowerNotify::new().poll(false);
+        assert!(!notify);
+    }
+
+    #[test]
+    fn notifies_when_power_lost_stably() {
+        // 給電ありで起動→なしが5回連続で初めて通知(4回までは通知なし)。
+        let mut state = PowerNotify::new();
+        let (next, notify) = state.poll(true);
+        state = next;
+        assert!(!notify);
+        for i in 1..=POWER_NOTIFY_STABLE_POLLS {
+            let (next, notify) = state.poll(false);
+            state = next;
+            if i < POWER_NOTIFY_STABLE_POLLS {
+                assert!(!notify, "まだ確定前({i}回目)のため通知しない");
+            } else {
+                assert!(notify, "5回連続で確定したため通知する");
+            }
+        }
+        assert_eq!(state.notified, Some(false));
+        assert_eq!(state.streak, 0);
+    }
+
+    #[test]
+    fn notifies_when_power_restored_stably() {
+        // 給電なしで起動→ありが5回連続で初めて通知する。
+        assert_eq!(notify_count(&[false, true, true, true, true]), 0);
+        assert_eq!(notify_count(&[false, true, true, true, true, true]), 1);
+    }
+
+    #[test]
+    fn momentary_disconnect_does_not_notify() {
+        // 接触不良の一瞬(確定前に元へ戻る)は通知しない。
+        // 3回連続で切れても4回目で戻れば、その後の5連続カウントも最初から。
+        assert_eq!(notify_count(&[true, false, false, false, true]), 0);
+        assert_eq!(
+            notify_count(&[true, false, false, false, true, false, false]),
+            0
+        );
+        // 1回だけの瞬断も通知しない。
+        assert_eq!(notify_count(&[true, false, true]), 0);
+    }
+
+    #[test]
+    fn flapping_never_notifies_and_never_duplicates() {
+        // 切れる/戻るを交互に繰り返しても確定しない(連続カウントが育たない)。
+        assert_eq!(
+            notify_count(&[true, false, true, false, true, false, true]),
+            0
+        );
+        // 一度通知した後は同じ状態が続いても重複通知しない
+        // (バッテリー駆動中は電力が有限のため繰り返し送らない)。
+        assert_eq!(
+            notify_count(&[true, false, false, false, false, false, false, false]),
+            1
+        );
+        // 切れる→戻るの往復で通知は各1回ずつ。
+        assert_eq!(
+            notify_count(&[
+                true, false, false, false, false, false, //
+                true, true, true, true, true, true,
+            ]),
+            2
+        );
+    }
+
+    #[test]
+    fn power_notification_text_mentions_m5stack_and_percent() {
+        // 実際の文面を固定する。用語は `docs/glossary.md` が正本
+        // (M5Stackは対象を明記、出来事の言葉で書く)。
+        assert_eq!(
+            power_state_notification_ja(false, 62),
+            "M5Stackの給電が切れました(バッテリー駆動に切り替わりました。残量 62%)。"
+        );
+        assert_eq!(
+            power_state_notification_ja(true, 62),
+            "M5Stackの給電が戻りました。"
+        );
     }
 }
