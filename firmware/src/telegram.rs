@@ -247,6 +247,16 @@ enum Callback {
     EditSetting(SettingKind),
     /// `lock:on` / `lock:off`。操作ロックの切り替え。
     SetLock(bool),
+    /// `/status` のボタン(`status:*`)。
+    Status(StatusAction),
+}
+
+#[derive(Clone, Copy)]
+enum StatusAction {
+    Refresh,
+    Wake,
+    Reboot,
+    Shutdown,
 }
 
 impl Callback {
@@ -258,6 +268,10 @@ impl Callback {
             Callback::EditSetting(_) => "setedit",
             Callback::SetLock(true) => "lock:on",
             Callback::SetLock(false) => "lock:off",
+            Callback::Status(StatusAction::Refresh) => "status:refresh",
+            Callback::Status(StatusAction::Wake) => "status:wake",
+            Callback::Status(StatusAction::Reboot) => "status:reboot",
+            Callback::Status(StatusAction::Shutdown) => "status:shutdown",
         }
     }
 }
@@ -582,6 +596,39 @@ impl Api {
             }),
         ) {
             println!("telegram: sendMessage(keyboard) failed: {e}");
+        }
+    }
+
+    /// `/status` 専用。`parse_mode=HTML` と操作ボタンを付けて送る。
+    /// 既存の送信経路へは `parse_mode` を付けない(本文に `<` を含む通知が壊れるため)。
+    fn send_status(&self, chat_id: i64, text: &str, rows: Value) {
+        if let Err(e) = self.post_json(
+            "sendMessage",
+            &json!({
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": { "inline_keyboard": rows }
+            }),
+        ) {
+            println!("telegram: sendMessage(status) failed: {e}");
+        }
+    }
+
+    /// 「更新」ボタンの書き換え。内容が同じとき Telegram は 400 を返すので、
+    /// 失敗しても呼び出し側は続ける。
+    fn edit_status(&self, chat_id: i64, message_id: i64, text: &str, rows: Value) {
+        if let Err(e) = self.post_json(
+            "editMessageText",
+            &json!({
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": { "inline_keyboard": rows }
+            }),
+        ) {
+            println!("telegram: editMessageText(status) failed: {e}");
         }
     }
 
@@ -915,7 +962,8 @@ impl Client {
             .collect()
     }
 
-    fn status_text(&self) -> String {
+    /// `/status` の本文(HTML)と操作ボタン。
+    fn status_message(&self) -> (String, Value) {
         let online =
             net::check_pc_online(&self.settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
         let battery_line = match *lock_battery(&self.battery) {
@@ -923,7 +971,7 @@ impl Client {
                 let state = battery::classify(battery.charging, battery.powered);
                 battery::status_ja(battery.percent, state)
             }
-            None => "バッテリー: 不明".to_string(),
+            None => "不明".to_string(),
         };
         let locked = self.operation_lock.is_locked();
         // ロック中・PCがオフなら結果を使わないので、bridgeへの800msの待ちを作らない。
@@ -938,12 +986,23 @@ impl Client {
             bridge_online,
             locked,
         };
-        pc_remote_signing::status_text_ja(
-            snapshot.into(),
+        let status: pc_remote_signing::PcControlStatus = snapshot.into();
+        let text = pc_remote_signing::status_message_html(
+            status,
             net::pc_online_label_ja(online),
             &battery_line,
             FIRMWARE_VERSION,
-        )
+        );
+        let rows: Vec<Value> = pc_remote_signing::status_buttons(status)
+            .into_iter()
+            .map(|row| {
+                row.iter()
+                    .map(|b| json!({ "text": b.label, "callback_data": b.data }))
+                    .collect::<Vec<Value>>()
+                    .into()
+            })
+            .collect();
+        (text, rows.into())
     }
 
     /// `/settings` の応答。現在値と、そこから実行できる操作をボタンで出す。
@@ -989,8 +1048,7 @@ impl Client {
     fn start_setting_input(&mut self, chat_id: i64, kind: SettingKind) {
         self.pending_input = Some(PendingInput {
             kind,
-            expires_at: Instant::now()
-                + Duration::from_secs(self.config.telegram_confirm_ttl_secs),
+            expires_at: Instant::now() + Duration::from_secs(self.config.telegram_confirm_ttl_secs),
         });
         let text = format!(
             "{}の新しい値を送信してください。\n現在: {}\n例: {}",
@@ -1045,6 +1103,41 @@ impl Client {
         }
     }
 
+    /// `/wake` と `/status` の起動ボタンの共通処理。
+    fn do_wake(&mut self, chat_id: i64) {
+        let _guard = lock_power(&self.power_lock);
+        let wol_port = self.settings.wol_port();
+        let wol_ok = match net::send_wake_on_lan(&self.config.pc_mac_address, wol_port) {
+            Ok(()) => {
+                println!("WOL sent");
+                true
+            }
+            Err(e) => {
+                println!("WOL failed: {e}");
+                false
+            }
+        };
+        // 文言の正本は `wake_check::wake_request_text` /
+        // `wake_check::wake_request_failed_text`(用語集に従いWOLを使わない)。
+        let reply = if wol_ok {
+            wake_check::wake_request_text()
+        } else {
+            wake_check::wake_request_failed_text()
+        };
+        drop(_guard);
+        if wol_ok {
+            // すでにオンなら待機しない。pollingスレッドはUI側の最新状態を
+            // 持たないため、その場でSTATUS相当の疎通確認をする
+            // (最大 `STATUS_PROBE_TIMEOUT`。`/status` と同じ)。
+            // ロックの順序: powerは既に離し、wakeは `begin_wake_watch` 内で
+            // 短時間だけ握り、`send_message`(`HttpsLock`取得)の前には離す。
+            let online_now =
+                net::check_pc_online(&self.settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
+            begin_wake_watch(&self.wake_watch, online_now);
+        }
+        self.api.send_message(chat_id, reply);
+    }
+
     fn request_confirmation(&mut self, chat_id: i64, action: PowerAction) {
         let nonce = Self::generate_nonce();
         self.pending = Some(Pending {
@@ -1074,7 +1167,12 @@ impl Client {
 
     /// 検証済みの設定変更に対して確認を発行する。`current_value` は変更前の値
     /// (確認メッセージの「現在」欄に出すだけで、検証や書き込みには使わない)。
-    fn request_config_confirmation(&mut self, chat_id: i64, change: ConfigChange, current_value: String) {
+    fn request_config_confirmation(
+        &mut self,
+        chat_id: i64,
+        change: ConfigChange,
+        current_value: String,
+    ) {
         let nonce = Self::generate_nonce();
         let label = change.label_ja();
         let new_value = change.display_value();
@@ -1093,15 +1191,21 @@ impl Client {
         // ボタンのラベルは動作にする。電源操作は「再起動」「シャットダウン」が
         // そのまま動作として読めるが、設定変更で項目名(「PC IPアドレス」)を
         // 出すと「キャンセル」と並んだときに何が起きるか読めない。
-        self.api
-            .send_message_with_confirm_buttons(chat_id, &text, "登録", &confirm_data, &cancel_data);
+        self.api.send_message_with_confirm_buttons(
+            chat_id,
+            &text,
+            "登録",
+            &confirm_data,
+            &cancel_data,
+        );
     }
 
     /// 確認nonceを検証し、結果に関わらず消費する(再利用させないため)。
     /// 有効ならどの操作に対する確認だったかを返す。
     fn consume_pending(&mut self, supplied: &str) -> Option<PendingKind> {
         let pending = self.pending.take()?;
-        if !supplied.is_empty() && pending.nonce == supplied && Instant::now() < pending.expires_at {
+        if !supplied.is_empty() && pending.nonce == supplied && Instant::now() < pending.expires_at
+        {
             Some(pending.kind)
         } else {
             None
@@ -1112,9 +1216,7 @@ impl Client {
         let _guard = lock_power(&self.power_lock);
         let pc_ip_address = self.settings.pc_ip_address();
         match bridge_client::send_command(action, self.config.as_ref(), &pc_ip_address) {
-            Ok(code) if bridge_client::is_accepted(code) => {
-                bridge_client::accepted_text(action)
-            }
+            Ok(code) if bridge_client::is_accepted(code) => bridge_client::accepted_text(action),
             Ok(code) => bridge_client::rejected_text(action, code),
             Err(e) => {
                 println!("bridge command failed: {e}");
@@ -1326,11 +1428,8 @@ impl Client {
             let Some(message_id) = progress_message_id else {
                 return;
             };
-            let text = pc_remote_signing::ota_progress_text(
-                &manifest.version,
-                received,
-                manifest.size,
-            );
+            let text =
+                pc_remote_signing::ota_progress_text(&manifest.version, received, manifest.size);
             self.edit_progress_message(chat_id, message_id, &mut last_progress_text, text);
         };
         // 検証・書き込み完了の通知。同じメッセージを書き換える。
@@ -1375,7 +1474,8 @@ impl Client {
 
         match command {
             "/status" => {
-                self.api.send_message(chat_id, &self.status_text());
+                let (text, rows) = self.status_message();
+                self.api.send_status(chat_id, &text, rows);
             }
             "/settings" => self.send_settings_menu(chat_id),
             "/lock" => {
@@ -1388,41 +1488,7 @@ impl Client {
                 self.api
                     .send_message(chat_id, "操作のロックを解除しました。");
             }
-            "/wake" => {
-                let _guard = lock_power(&self.power_lock);
-                let wol_port = self.settings.wol_port();
-                let wol_ok = match net::send_wake_on_lan(&self.config.pc_mac_address, wol_port) {
-                    Ok(()) => {
-                        println!("WOL sent");
-                        true
-                    }
-                    Err(e) => {
-                        println!("WOL failed: {e}");
-                        false
-                    }
-                };
-                // 文言の正本は `wake_check::wake_request_text` /
-                // `wake_check::wake_request_failed_text`(用語集に従いWOLを使わない)。
-                let reply = if wol_ok {
-                    wake_check::wake_request_text()
-                } else {
-                    wake_check::wake_request_failed_text()
-                };
-                drop(_guard);
-                if wol_ok {
-                    // すでにオンなら待機しない。pollingスレッドはUI側の最新状態を
-                    // 持たないため、その場でSTATUS相当の疎通確認をする
-                    // (最大 `STATUS_PROBE_TIMEOUT`。`/status` と同じ)。
-                    // ロックの順序: powerは既に離し、wakeは `begin_wake_watch` 内で
-                    // 短時間だけ握り、`send_message`(`HttpsLock`取得)の前には離す。
-                    let online_now = net::check_pc_online(
-                        &self.settings.pc_status_addr(),
-                        net::STATUS_PROBE_TIMEOUT,
-                    );
-                    begin_wake_watch(&self.wake_watch, online_now);
-                }
-                self.api.send_message(chat_id, reply);
-            }
+            "/wake" => self.do_wake(chat_id),
             "/reboot" => self.request_confirmation(chat_id, PowerAction::Reboot),
             "/shutdown" => self.request_confirmation(chat_id, PowerAction::Shutdown),
             "/confirm_reboot" => self.handle_confirmation(chat_id, PowerAction::Reboot, args),
@@ -1462,6 +1528,10 @@ impl Client {
             ["setedit", slug] => Some(Callback::EditSetting(SettingKind::from_slug(slug)?)),
             ["lock", "on"] => Some(Callback::SetLock(true)),
             ["lock", "off"] => Some(Callback::SetLock(false)),
+            ["status", "refresh"] => Some(Callback::Status(StatusAction::Refresh)),
+            ["status", "wake"] => Some(Callback::Status(StatusAction::Wake)),
+            ["status", "reboot"] => Some(Callback::Status(StatusAction::Reboot)),
+            ["status", "shutdown"] => Some(Callback::Status(StatusAction::Shutdown)),
             _ => None,
         }
     }
@@ -1514,6 +1584,40 @@ impl Client {
                 }
                 return;
             }
+            Callback::Status(action) => {
+                // ロック中の拒否は上の共通判定で済んでいる。ここでは
+                // 既存のコマンドと同じ入口へ渡すだけにして、経路を二重に持たない。
+                match action {
+                    StatusAction::Refresh => {
+                        let message_id = callback["message"]["message_id"]
+                            .as_i64()
+                            .unwrap_or_default();
+                        let (text, rows) = self.status_message();
+                        if chat_id != 0 && message_id != 0 {
+                            self.api.edit_status(chat_id, message_id, &text, rows);
+                        }
+                        self.api.answer_callback_query(&id, "最新の状態にしました");
+                    }
+                    StatusAction::Wake => {
+                        self.api.answer_callback_query(&id, "PCの起動を指示します");
+                        if chat_id != 0 {
+                            self.do_wake(chat_id);
+                        }
+                    }
+                    StatusAction::Reboot | StatusAction::Shutdown => {
+                        let power = if matches!(action, StatusAction::Reboot) {
+                            PowerAction::Reboot
+                        } else {
+                            PowerAction::Shutdown
+                        };
+                        self.api.answer_callback_query(&id, power.label_ja());
+                        if chat_id != 0 {
+                            self.request_confirmation(chat_id, power);
+                        }
+                    }
+                }
+                return;
+            }
             Callback::SetLock(locked) => {
                 self.set_operation_lock(locked);
                 let reply = if locked {
@@ -1532,7 +1636,9 @@ impl Client {
 
         // nonceが一致しても、ボタンが指す対象(target)とpendingの中身が一致しない
         // 限り有効扱いにしない(古いボタンや別種類の保留との取り違えを防ぐ)。
-        let valid = self.consume_pending(&nonce).filter(|kind| target.matches(kind));
+        let valid = self
+            .consume_pending(&nonce)
+            .filter(|kind| target.matches(kind));
         let is_confirm = confirm;
 
         if !is_confirm {
