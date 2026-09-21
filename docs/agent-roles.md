@@ -28,12 +28,15 @@
 
 | 役割 | 担当 |
 |---|---|
-| 実装エージェント | OpenCode (`opencode/muse-spark-1.3-contributor-free`) |
+| 実装エージェント | OpenCode (`opencode/muse-spark-1.3-contributor-free`)、Codex CLI |
 | 設計エージェント | Claude Code |
 | 統合エージェント | Claude Code |
 
-Codex CLI は現在いずれの役割にも就いていません。セカンドオピニオンとして
-随時呼び出す分には制限しません。
+実装エージェントは2人で、**提供元が別なのでレート制限を共有しません**。片方が使えないときは
+もう片方へ振り、作業ディレクトリ(worktree)とファイルの担当を分ければ並行もできます。
+
+Codex CLI のsandbox(`workspace-write`)は既定でネットワークが使えないため、Codex は
+**実装とテストまで**を担当し、`git push`・PR作成・マージは統合エージェントが行います。
 
 ## 起動コマンド
 
@@ -97,6 +100,15 @@ Codex CLI:
 ```bash
 codex exec -s read-only --skip-git-repo-check -o <file> "<request>" < /dev/null
 ```
+
+Codex CLI(実装を任せるとき。作業はworktreeで行い、`-C` で指定する):
+
+```bash
+codex exec -s workspace-write --skip-git-repo-check -C <worktree> \
+  -o <最終報告の出力先> "$(cat <prompt-file>)" < /dev/null
+```
+
+疎通確認は `-s read-only` で1行だけ投げて、返るかを見る(OpenCodeと同じ)。
 
 Claude Code:
 
