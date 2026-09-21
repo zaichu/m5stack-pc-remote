@@ -11,12 +11,8 @@ pub mod windows_service;
 
 /// 実行ファイルと同じディレクトリにある`name`のパスを返す。
 ///
-/// Windows ServiceはSCMから起動されるとカレントディレクトリが`%SystemRoot%\System32`
-/// になるため、CWD相対パスに依存すると設定やログの場所を見失う。`install.ps1` は
-/// 実行ファイルと関連ファイルを同じディレクトリへ配置するため、実行ファイルの場所を
-/// 基準にすることでService/対話実行のどちらでも同じ挙動にする。
-///
-/// 実行ファイルの場所が取れない場合はCWD相対へフォールバックする。
+/// Windows ServiceはSCMから起動されるとCWDがSystem32になるため、CWD相対だと
+/// 設定やログの場所を見失う。実行ファイル基準にして挙動をそろえる。
 pub fn exe_dir_file(name: &str) -> std::path::PathBuf {
     if let Some(path) = std::env::current_exe()
         .ok()

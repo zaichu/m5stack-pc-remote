@@ -19,11 +19,8 @@ const BODY: &str = r#"{"confirm":true}"#;
 
 /// bridgeの `GET /status` 確認の受信タイムアウト(Issue #183)。
 ///
-/// `net::STATUS_PROBE_TIMEOUT`(800ms)と同じ値にそろえる。LAN内の固定値応答は
-/// 数msで返るため十分に余裕があり、bridgeが落ちているときの待ちも800msで
-/// 打ち切れる。`/status` 全体の最悪はPC probe 800ms + bridge 800ms = 1.6秒
-/// (+Telegram往復)。電源操作の `REQUEST_TIMEOUT`(3秒)より短くする。あちらは
-/// 電源操作ロック保持中の確定操作で、こちらは参照系の表示のための確認のため。
+/// `net::STATUS_PROBE_TIMEOUT` と同じ800ms。`/status` 全体の最悪は
+/// PC probe 800ms + bridge 800ms = 1.6秒。参照系なので電源操作の3秒より短くする。
 pub const BRIDGE_STATUS_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// bridgeの `GET /status` 応答の受け入れ上限。固定値の小さなJSON(100B未満)の
@@ -155,15 +152,8 @@ pub fn is_accepted(status: u16) -> bool {
 
 /// bridgeの `GET /status` に接続し、操作サービスが応答しているかを返す(Issue #183)。
 ///
-/// 無認証の固定値応答なので署名は付けない(bridge側も無認証のまま。稼働時間などの
-/// 環境情報は返さない)。次のどれでも `false`(応答あり扱いにしない):
-/// 接続失敗・タイムアウト・2xx以外・応答本文が上限超過・本文を解釈できない。
-/// 解釈は `pc_remote_signing::bridge_status_online` が正本(hostでテスト済み)。
-///
-/// 呼び出し側(`/status` の処理)はPCがオンのときだけ呼ぶこと。PCがオフなら
-/// 接続は必ず失敗し、`BRIDGE_STATUS_TIMEOUT` ぶん無駄に待つだけになる。
-/// 共有状態のロックは取らない(呼び出し中にロックを保持しないため、自己デッドロックの
-/// 余地が無い)。
+/// 接続失敗・タイムアウト・2xx以外・上限超過・解釈不能のいずれでも `false`
+/// (応答あり扱いにしない)。**PCがオンのときだけ呼ぶこと**(オフなら必ず失敗し待つだけ)。
 pub fn check_bridge_online(config: &AppConfig, pc_ip_address: &str) -> bool {
     let url = format!(
         "http://{pc_ip_address}:{}{}",

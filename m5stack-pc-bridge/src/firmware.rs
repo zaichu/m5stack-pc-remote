@@ -1,11 +1,8 @@
 //! M5Stack向けfirmware配信(`GET /firmware`, `GET /firmware/manifest`)の本体。
 //!
-//! Issue #41の設計判断: bridgeは「配布場所」であって「信頼の根」ではない。
-//! manifestへHMAC-SHA256署名を付け、M5Stack側(Phase 3のOTAクライアント)が
-//! 公開値(version/size/sha256)だけを信じずに検証できるようにする。
-//! 署名のcanonical文字列・鍵・方式の正本は `pc-remote-signing` の
-//! `manifest_canonical_string` / `sign_manifest` に置き、ここでは順序を
-//! 組み立てない(両側で同一でなければ壊れるものは共有crateへ置く方針)。
+//! bridgeは「配布場所」であって「信頼の根」ではないため、manifestへ署名を付け、
+//! M5Stack側が公開値だけを信じずに検証できるようにする(Issue #41)。
+//! 署名の正本は `pc-remote-signing`。**ここでcanonical文字列の順序を組み立てない。**
 
 use std::path::PathBuf;
 
