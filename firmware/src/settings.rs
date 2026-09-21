@@ -1,10 +1,13 @@
-// Telegramから実行時に変更できる設定値(pc_ip_address / pc_status_addr / wol_port /
-// brightness)。
+// Telegramから実行時に変更できる設定値(pc_ip_address / wol_port /
+// brightness)。STATUS確認先のhostは `pc_ip_address` から読み出し時に導くため
+// 別に持たず、port(`pc_status_port`)だけを読み取り専用で保持する(Issue #176)。
+// portは実行時にTelegramからは変えない(設定ファイルとNVSでのみ持つ)。
 //
-// `AppConfig` は起動時に読んで以後変更しない値の集まりだが、この4値だけは
+// `AppConfig` は起動時に読んで以後変更しない値の集まりだが、この3値だけは
 // Telegram経由で書き換わる。`AppConfig` 全体をMutex化すると、読み取りしかしない
-// 他フィールド(bot token等)まで毎回ロックを取ることになるため、この4値だけを
-// 独立したMutexで持つ(読み取り多数・書き込みほぼゼロというアクセス形態に合わせる)。
+// 他フィールド(bot token等)まで毎回ロックを取ることになるため、この3値(+読み取り
+// 専用のport)だけを独立したMutexで持つ(読み取り多数・書き込みほぼゼロという
+// アクセス形態に合わせる)。
 //
 // 値の検証は `config-validation` crate(host側でテストできる)側で行う。ここは
 // NVSへの永続化と「書き込みに成功した後だけメモリ上の値も更新する」順序を
@@ -20,7 +23,6 @@ use crate::app_config::{AppConfig, NAMESPACE};
 /// `app_config.rs::apply_nvs` が読む短縮キーと同じものを使う。ここで書いた値は
 /// 次回起動時、`AppConfig::load` がビルド時configより優先して読み直す。
 const NVS_KEY_PC_IP: &str = "pc_ip";
-const NVS_KEY_STATUS_ADDR: &str = "status_addr";
 const NVS_KEY_WOL_PORT: &str = "wol_port";
 // 明るさの既定値(100、現状のDCDC3 2800mVと同じ明るさ)は `firmware/build.rs` の
 // `Key::int("brightness", ...).default(100)` が正本。NVSにもビルド時configにも
@@ -30,7 +32,8 @@ const NVS_KEY_BRIGHTNESS: &str = "brightness";
 
 struct State {
     pc_ip_address: String,
-    pc_status_addr: String,
+    /// STATUS確認先のport。読み取り専用で、Telegramからは変更しない。
+    pc_status_port: u16,
     wol_port: u16,
     brightness_percent: u8,
     /// 書き込み用に読み書きモードで開いたハンドル。`AppConfig::load` が起動時に
@@ -49,7 +52,7 @@ impl RuntimeSettings {
         Ok(Self {
             state: Mutex::new(State {
                 pc_ip_address: app_config.pc_ip_address.clone(),
-                pc_status_addr: app_config.pc_status_addr.clone(),
+                pc_status_port: app_config.pc_status_port,
                 wol_port: app_config.wol_port,
                 brightness_percent: app_config.brightness,
                 nvs,
@@ -67,8 +70,12 @@ impl RuntimeSettings {
         self.lock().pc_ip_address.clone()
     }
 
+    /// STATUS確認先 `{pc_ip_address}:{pc_status_port}` を**読み出しのたびに組み立てる**。
+    /// 値をキャッシュしないため、`pc_ip_address` を変更したら次の呼び出しから
+    /// 新IPが使われる(Issue #176)。
     pub fn pc_status_addr(&self) -> String {
-        self.lock().pc_status_addr.clone()
+        let state = self.lock();
+        config_validation::compose_status_addr(&state.pc_ip_address, state.pc_status_port)
     }
 
     pub fn wol_port(&self) -> u16 {
@@ -79,12 +86,11 @@ impl RuntimeSettings {
         self.lock().brightness_percent
     }
 
-    /// `/settings` 表示用の一括取得。4回ロックを取るより一貫した値が見える。
-    pub fn snapshot(&self) -> (String, String, u16, u8) {
+    /// `/settings` 表示用の一括取得。3回ロックを取るより一貫した値が見える。
+    pub fn snapshot(&self) -> (String, u16, u8) {
         let state = self.lock();
         (
             state.pc_ip_address.clone(),
-            state.pc_status_addr.clone(),
             state.wol_port,
             state.brightness_percent,
         )
@@ -94,13 +100,6 @@ impl RuntimeSettings {
         let mut state = self.lock();
         state.nvs.set_str(NVS_KEY_PC_IP, &value)?;
         state.pc_ip_address = value;
-        Ok(())
-    }
-
-    pub fn set_pc_status_addr(&self, value: String) -> Result<(), EspError> {
-        let mut state = self.lock();
-        state.nvs.set_str(NVS_KEY_STATUS_ADDR, &value)?;
-        state.pc_status_addr = value;
         Ok(())
     }
 

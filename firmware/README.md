@@ -78,7 +78,7 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 | `wifi_pass` | `wifi_password` | 必須 | Wi-Fi password |
 | `pc_mac` | `pc_mac_address` | 必須 | Wake-on-LAN送信先MACアドレス |
 | `wol_port` | `wol_port` | 必須 | Wake-on-LAN送信先port |
-| `status_addr` | `pc_status_addr` | 必須 | STATUS確認先TCP address |
+| `status_port` | `pc_status_port` | 任意（既定 80） | STATUS確認先port（hostは `pc_ip_address` から導く） |
 | `bridge_port` | `bridge_port` | 必須 | m5stack-pc-bridge port |
 | `bridge_secret` | `bridge_shared_secret` | 必須 | m5stack-pc-bridge HMAC secret |
 | `pc_ip` | `pc_ip_address` | 必須 | m5stack-pc-bridge接続先IP |
@@ -94,7 +94,7 @@ unused警告がソース行としてbot token等をビルドログへ出す事�
 導出する対応と機械的に突合される(`make config-key-check`、`make check`に含まれる)。
 源码と表のどちらか片方にkeyを足しただけではCIが通らない。
 
-NVS上では全keyを文字列として保存する。`wol_port`、`bridge_port`、
+NVS上では全keyを文字列として保存する。`wol_port`、`status_port`、`bridge_port`、
 `telegram_long_poll_timeout_seconds`、`telegram_confirm_ttl_secs`、
 `daily_report_hour`、`timezone_offset_hours`、`brightness` は起動時に数値へ変換する。
 既存NVSに残る `agent_port` / `agent_secret` は移行互換として読み込む。
@@ -234,9 +234,9 @@ Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の�
   C++版 `telegram_root_ca.h` と同じ証明書)。
   専用スレッドで動かすため、long pollingがタッチUIやSTATUS更新を止めない。
   電源操作はUIスレッドとの間を `Mutex` で直列化する(C++版のFreeRTOSミューテックス相当)。
-- **実行時設定変更**(`src/settings.rs`): `/set_ip <ipv4>` `/set_status_addr <host:port>`
+- **実行時設定変更**(`src/settings.rs`): `/set_ip <ipv4>`
   `/set_wol_port <n>` `/set_brightness <0-100>` `/settings`(現在値表示)`/confirm_set <nonce>`(手入力フォールバック)。
-  対象は `pc_ip_address` / `pc_status_addr` / `wol_port` / `brightness` の4値のみで、REBOOT/SHUTDOWNと
+  対象は `pc_ip_address` / `wol_port` / `brightness` の3値のみで、REBOOT/SHUTDOWNと
   同じnonce確認フローを経由する。値の検証(`config-validation` crate)は確認発行前に行い、
   NVSへの書き込みに成功したときだけ即時反映する。明るさはNVSへ永続化し、起動時と
   変更確定時にバックライト(DCDC3)へ反映する。`wifi_ssid` / `telegram_bot_token` などの

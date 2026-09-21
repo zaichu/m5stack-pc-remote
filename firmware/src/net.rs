@@ -158,10 +158,11 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
     // 名前解決を伴い、UIループから10秒ごとに呼ばれるここでブロックする。
     // DNSが遅い・落ちている環境では、そのぶん画面もタッチ処理も止まる。
     //
-    // Issue #130-3の方針: 新規の入力は `validate_status_addr` でIPv4リテラル
-    // 限定にしたため、通常はこのfast pathだけが使われる。`to_socket_addrs()` の
-    // fallbackは、制限前にNVSへ書かれたホスト名が残っている場合の互換のため
-    // 残す(その場合は従来どおり解決待ちで止まり得る。設定を入れ直せば解消する)。
+    // Issue #130-3の方針: STATUS確認先は `compose_status_addr` で組み立てた
+    // IPv4リテラル:`pc_status_port` のため、通常はこのfast pathだけが使われる。
+    // `to_socket_addrs()` の fallbackは、制限前にNVSへ書かれたホスト名が残っている
+    // 場合の互換のため残す(その場合は従来どおり解決待ちで止まり得る。
+    // 設定を入れ直せば解消する)。
     // 別スレッド化は見送った。STATUS確認はUIループとTelegram応答生成の直列経路で
     // 結果をその場で要し、非同期化は同期・生存管理・NVS書換との競合を増やす。
     // 家庭LAN内のPC相手に入力をIP限定できるなら、複雑さを足す理由がない。

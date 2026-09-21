@@ -20,7 +20,9 @@ const KEYS: &[Key] = &[
     Key::text("wifi_password", "WIFI_PASSWORD"),
     Key::text("pc_mac_address", "PC_MAC_ADDRESS"),
     Key::int("wol_port", "WOL_PORT", IntTy::U16),
-    Key::text("pc_status_addr", "PC_STATUS_ADDR"),
+    // STATUS確認先のport。hostは持たず、`pc_ip_address` から読み出し時に導く
+    // (Issue #176)。既定は `config_validation::DEFAULT_STATUS_PORT` と同じ80。
+    Key::int("pc_status_port", "PC_STATUS_PORT", IntTy::U16).default(80),
     Key::int("bridge_port", "BRIDGE_PORT", IntTy::U16).alias("agent_port"),
     Key::text("bridge_shared_secret", "BRIDGE_SHARED_SECRET").alias("agent_shared_secret"),
     Key::text("pc_ip_address", "PC_IP_ADDRESS"),
@@ -183,6 +185,17 @@ fn generate_config() {
              内容とエラー詳細は表示しません。config.example.toml と見比べてください"
         );
     };
+
+    // 旧key `pc_status_addr` が残っていてもビルドは通す(未知のkeyは読まない)。
+    // ただし黙って無視すると「効いている」と誤解するため、存在だけを知らせる。
+    // 値はネットワーク情報のため、警告にも値自体は絶対に出力しない。
+    if table.contains_key("pc_status_addr") {
+        println!(
+            "cargo:warning=`pc_status_addr` は廃止され無視されます。\
+             STATUS確認先のhostは `pc_ip_address` から導かれます。\
+             portを変えたい場合は `pc_status_port` を設定してください"
+        );
+    }
 
     let mut out = String::new();
     for spec in KEYS {

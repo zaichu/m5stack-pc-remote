@@ -24,36 +24,31 @@ pub fn validate_ipv4(input: &str) -> Result<String, String> {
         .map_err(|_| format!("`{trimmed}` はIPv4アドレスとして解釈できません(例: 192.168.1.50)"))
 }
 
-/// `pc_status_addr` として妥当な `host:port` 形式か検証する。
+/// STATUS確認(オンライン判定のTCP probe)の接続先を組み立てる。
 ///
-/// DNS解決はしない。確認nonce発行のたびに名前解決すると、遅い・失敗する
-/// DNSでUI・Telegram応答が止まるため。
-///
-/// 方針(Issue #130-3): host部分はIPv4リテラル限定とし、ホスト名は受け付けない。
-/// 「IPリテラル限定」と「解決の別スレッド化」の二択で前者を選んだ。理由:
-/// - STATUS確認はUIループ(10秒毎)とTelegram応答生成の直列経路で呼ばれ、
-///   別スレッド化は結果待ちの同期・スレッド生存管理・NVS書換との競合を増やす。
-///   家庭LAN内のPC相手にそこまでの複雑さは要らない。
-/// - `pc_ip_address` 側は既にIPv4限定で実績があり、扱いをそろえられる。
-/// - このcrateの契約自体が「DNS解決はしない」であり、ホスト名を許すのは
-///   契約違反だった(以前はテストでホスト名許容を明示していた)。
-/// ホスト名が本当に必要になったら別スレッド化を検討する(要設計レビュー)。
-pub fn validate_status_addr(input: &str) -> Result<String, String> {
-    let trimmed = input.trim();
-    let Some((host, port)) = trimmed.rsplit_once(':') else {
-        return Err(format!(
-            "`{trimmed}` は host:port 形式で指定してください(例: 192.168.1.50:80)"
-        ));
-    };
-    if host.parse::<Ipv4Addr>().is_err() {
-        return Err(format!(
-            "`{trimmed}` のhostはIPv4アドレスで指定してください(例: 192.168.1.50:80)"
-        ));
+/// 接続先は常に `{pc_ip_address}:{status_port}` を**読み出し時に組み立てる**。
+/// hostを別の設定値として持たない理由: 同じ情報(IP)を2箇所に持つと、PCのIPが
+/// 変わったときに2項目の直しが必要になり、片方の直し忘れで電源操作は通るのに
+/// STATUSが常にOFFLINEになる(またはその逆)。hostの正本は `pc_ip_address` の
+/// 1箇所だけにし、ここでは連結だけを行う。
+/// DNS解決はしない。IPv4リテラルを連結するだけで、`check_pc_online` が
+/// IPリテラルなら `SocketAddr` として直接parseする高速経路に乗る
+/// (Issue #130-3の方針を維持)。
+pub fn compose_status_addr(pc_ip_address: &str, status_port: u16) -> String {
+    format!("{}:{status_port}", pc_ip_address.trim())
+}
+
+/// STATUS確認先portの既定値。`firmware/build.rs` の
+/// `Key::int("pc_status_port", ...).default(80)` と同じ値にすること。
+pub const DEFAULT_STATUS_PORT: u16 = 80;
+
+/// STATUS確認先portを正規化する。0なら既定値、それ以外はそのまま返す。
+pub fn normalize_status_port(port: u16) -> u16 {
+    if port == 0 {
+        DEFAULT_STATUS_PORT
+    } else {
+        port
     }
-    if validate_port(port).is_err() {
-        return Err(format!("`{trimmed}` のport部分が不正です(1-65535)"));
-    }
-    Ok(trimmed.to_string())
 }
 
 /// `wol_port` として妥当なport番号か検証する。
@@ -176,45 +171,35 @@ mod tests {
     }
 
     #[test]
-    fn accepts_valid_status_addr() {
-        assert_eq!(
-            validate_status_addr("192.168.1.50:80").unwrap(),
-            "192.168.1.50:80"
-        );
-        // 前後の空白は許容してtrimする(Telegramのコピペ経由の値を想定)。
-        assert_eq!(
-            validate_status_addr("  192.168.1.50:8080 \n").unwrap(),
-            "192.168.1.50:8080"
-        );
+    fn composes_status_addr() {
+        assert_eq!(compose_status_addr("192.168.1.50", 80), "192.168.1.50:80");
+        assert_eq!(compose_status_addr("192.168.1.50", 8080), "192.168.1.50:8080");
+        assert_eq!(compose_status_addr("10.0.0.1", 65535), "10.0.0.1:65535");
+        // 前後の空白はtrimする(Telegramのコピペ経由の値を想定)。
+        assert_eq!(compose_status_addr("  192.168.1.50 \n", 80), "192.168.1.50:80");
     }
 
     #[test]
-    fn rejects_hostname_status_addr() {
-        // Issue #130-3: IPv4リテラル限定。ホスト名はUIループ上のDNS解決に
-        // 繋がるため受け付けない(以前は許容していたが、方針変更で拒否へ)。
-        assert!(
-            validate_status_addr("my-pc.local:8080").is_err(),
-            "ホスト名は拒否する"
-        );
+    fn composed_status_addr_parses_as_socket_addr() {
+        // Issue #130-3の方針: IPリテラル連結のため、`check_pc_online` の
+        // `SocketAddr` 高速経路(DNSを引かない)に乗ること。
+        use std::net::SocketAddr;
+        for (ip, port) in [("192.168.1.50", 80), ("10.0.0.1", 8080), ("172.16.0.2", 65535)] {
+            let addr = compose_status_addr(ip, port);
+            assert!(
+                addr.parse::<SocketAddr>().is_ok(),
+                "{addr} は SocketAddr としてparseできること"
+            );
+        }
     }
 
     #[test]
-    fn rejects_malformed_status_addr() {
-        assert!(validate_status_addr("192.168.1.50").is_err(), "portが無い");
-        assert!(validate_status_addr(":80").is_err(), "hostが無い");
-        assert!(validate_status_addr("192.168.1.50:0").is_err(), "port 0");
-        assert!(
-            validate_status_addr("192.168.1.50:70000").is_err(),
-            "port範囲外"
-        );
-        assert!(
-            validate_status_addr("192.168.1.50:abc").is_err(),
-            "portが数値でない"
-        );
-        assert!(
-            validate_status_addr("bad host:80").is_err(),
-            "hostに空白を含む"
-        );
+    fn normalizes_status_port() {
+        assert_eq!(DEFAULT_STATUS_PORT, 80);
+        assert_eq!(normalize_status_port(0), 80);
+        assert_eq!(normalize_status_port(80), 80);
+        assert_eq!(normalize_status_port(8080), 8080);
+        assert_eq!(normalize_status_port(65535), 65535);
     }
 
     #[test]
