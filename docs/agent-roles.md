@@ -116,6 +116,23 @@ Claude Code:
 claude -p "<request>" --permission-mode acceptEdits --allowedTools Bash Edit Write Read Glob Grep
 ```
 
+## Issueの振り分けの補助(Jev)
+
+`scripts/triage-issue.sh <issue番号>` が、Issueの規模・リスク・担当候補・実機確認の要否を
+Jev(TypeSafe AIのSystem One Model)で判定する。**結果は提案で、決定ではない。**
+
+```bash
+export TYPESAFE_API_KEY=<TypeSafe AIのAPIキー>   # ~/.bashrc などに置く。Gitへ入れない
+bash scripts/triage-issue.sh 196
+```
+
+- 確信度が0.5未満の項目があるときは警告が出る。**モデルが迷っている合図**なので人間が判断する。
+- `TYPESAFE_API_KEY` 未設定・API障害・想定外の応答では終了コード2で終わり、**他の作業には影響しない**。
+- 送るのはIssueのタイトルと本文だけ。secretや家庭内の情報は送らない。
+- **firmware / m5stack-pc-bridge には組み込まない**(Issue #196)。ESP32はTLSを同時1本しか張れず
+  (Issue #127)、ハンドシェイクだけで3.1秒かかる(Issue #163)。電源操作を外部クラウドに依存させない。
+- 外部依存のため `make check` には入れない。
+
 ## 依頼するときのチェックリスト
 
 役割によらず共通です。
