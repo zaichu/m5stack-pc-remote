@@ -111,6 +111,11 @@ fn lighten(color: Rgb565) -> Rgb565 {
 }
 
 /// メイン画面のボタン。Core2は画面下の物理ボタン帯もタッチ座標として報告する。
+/// 描画エラーの変換。同じ `map_err` を各描画呼び出しで繰り返さないため。
+fn draw_failed<E: std::fmt::Debug>(e: E) -> String {
+    format!("draw failed: {e:?}")
+}
+
 pub const WAKE_BUTTON: Button = Button {
     x: 10,
     y: 180,
@@ -214,7 +219,7 @@ fn draw_lamp(
         MonoTextStyle::new(&FONT_6X10, palette::TEXT),
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     Ok(dot_x - 10)
 }
@@ -234,7 +239,7 @@ fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<()
         MonoTextStyle::new(&FONT_8X13_BOLD, palette::TEXT),
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     // 右端から左へ順に積む。
     let next = draw_lamp(
@@ -312,7 +317,7 @@ fn draw_status_card(
         Alignment::Center,
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     Text::with_alignment(
         crate::net::pc_online_label_ascii(status.pc_online),
@@ -321,7 +326,7 @@ fn draw_status_card(
         Alignment::Center,
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     Ok(())
 }
@@ -415,7 +420,7 @@ pub fn redraw_clock(
         Alignment::Center,
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     Text::with_alignment(
         clock.date.as_str(),
@@ -424,7 +429,7 @@ pub fn redraw_clock(
         Alignment::Center,
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     Ok(())
 }
@@ -552,7 +557,7 @@ pub fn draw_calendar(
         Alignment::Center,
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     if !view.synced {
         // 未同期時はグリッドを出さず、誤った1970年カレンダーを見せない。
@@ -563,7 +568,7 @@ pub fn draw_calendar(
             Alignment::Center,
         )
         .draw(display)
-        .map_err(|e| format!("draw failed: {e:?}"))?;
+        .map_err(draw_failed)?;
     } else {
         for (col, name) in CAL_WEEKDAY_NAMES.iter().enumerate() {
             Text::with_alignment(
@@ -573,7 +578,7 @@ pub fn draw_calendar(
                 Alignment::Center,
             )
             .draw(display)
-            .map_err(|e| format!("draw failed: {e:?}"))?;
+            .map_err(draw_failed)?;
         }
         for (row, week) in view.weeks.iter().enumerate() {
             for (col, cell) in week.iter().enumerate() {
@@ -599,7 +604,7 @@ pub fn draw_calendar(
                         Alignment::Center,
                     )
                     .draw(display)
-                    .map_err(|e| format!("draw failed: {e:?}"))?;
+                    .map_err(draw_failed)?;
                 }
             }
         }
@@ -651,7 +656,7 @@ fn draw_banner(
         Alignment::Center,
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
     Ok(())
 }
 
@@ -723,7 +728,7 @@ pub fn draw_confirm(
         Alignment::Center,
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     let title = match action {
         PowerAction::Reboot => "REBOOT?",
@@ -736,7 +741,7 @@ pub fn draw_confirm(
         Alignment::Center,
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     Text::with_alignment(
         "OK sends a signed command",
@@ -745,7 +750,7 @@ pub fn draw_confirm(
         Alignment::Center,
     )
     .draw(display)
-    .map_err(|e| format!("draw failed: {e:?}"))?;
+    .map_err(draw_failed)?;
 
     CANCEL_BUTTON.draw(display, "CANCEL", palette::NEUTRAL, true)?;
     OK_BUTTON.draw(display, "OK", palette::DANGER, true)?;
