@@ -14,6 +14,8 @@
 |---|---|---|
 | PCの状態 | **オン / オフ**(「オンライン/オフライン」は使わない) | `PC: オン` |
 | PCを立ち上げる操作 | **PCの起動** | Botコマンド説明: `PCの起動` |
+| PCの起動指示の結果 | **PCの起動を指示しました**(WOLは内部の手段のため文言に使わない) | `PCの起動を指示しました。` |
+| PCの起動指示の失敗 | **PCの起動の指示に失敗しました** | `PCの起動の指示に失敗しました。` |
 | PCが立ち上がった結果の通知 | **PCが起動しました** | 状態変化の通知 |
 | PCが停止した結果の通知 | **PCが停止しました** | 状態変化の通知 |
 | M5Stack自身の立ち上がり | **M5Stackが起動しました**(助詞を補う) | 起動通知 |
@@ -29,8 +31,12 @@
   `callback_data`、NVSキー、設定キー、シリアルログの英語メッセージは変えない。
 - 文言を組み立てる関数はできるだけ1箇所に寄せる。
   日本語の状態表示と通知文は `firmware/src/net.rs` の `pc_online_label_ja` /
-  `pc_state_notification_ja` が正本。電源操作の結果文は
+  `pc_state_notification_ja` が正本。起動指示の応答・待機の通知文は
+  `shared/wake-check` の `wake_request_text` / `wake_request_failed_text` /
+  `wake_succeeded_text` / `wake_timed_out_text` が正本。電源操作の結果文は
    `firmware/src/bridge_client.rs` の `accepted_text` / `rejected_text` /
    `failed_text` が正本。firmware更新の確認・適用文は
    `shared/pc-remote-signing` の `ota_confirm_text` / `ota_applying_text` が正本。
    給電変化の通知文は `shared/battery` の `power_state_notification_ja` が正本。
+- 設定名の「WOLポート」は変えない。設定キー(`wol_port`)・設定メニューのラベルで、
+  技術的な設定項目のため。ユーザー向けの操作・結果の文言だけを「PCの起動」に揃える。

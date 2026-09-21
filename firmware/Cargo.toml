@@ -25,6 +25,8 @@ pc-remote-signing = { path = "../shared/pc-remote-signing" }
 config-validation = { path = "../shared/config-validation" }
 # バッテリー残量推定・給電状態表示の純粋ロジック。host側でテストできるよう分離してある。
 battery = { path = "../shared/battery" }
+# PCの起動指示後の待機状態と期限判定の純粋ロジック。host側でテストできるよう分離してある。
+wake-check = { path = "../shared/wake-check" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
