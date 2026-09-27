@@ -1,6 +1,5 @@
 // 実行時設定。NVSの `m5remote` namespace に値があれば優先し、無ければ
 // build.rs が生成したconfigを使う。
-//
 // 秘密値を含むため Debug は実装しない。ログへ値を出さないこと。
 
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
@@ -29,8 +28,7 @@ pub struct AppConfig {
     pub daily_report_hour: i64,
     /// UTCからのローカル時刻のずれ(時間)。JSTなら9。
     pub timezone_offset_hours: i64,
-    /// 画面の明るさ(0〜100のパーセント、Issue #167)。DCDC3電圧への変換は
-    /// `board::brightness_percent_to_dcdc3_mv` が担当する。
+    /// 画面の明るさ(0〜100、Issue #167)。DCDC3変換は `board::brightness_percent_to_dcdc3_mv`。
     pub brightness: u8,
 }
 
@@ -72,14 +70,9 @@ impl AppConfig {
         }
     }
 
-    /// NVSに値があれば上書きする。keyを複数渡した場合は先に見つかったものを使う
-    /// (2つ目以降は旧key)。NVSのkeyは15文字までなので短縮名になっている。
-    /// 範囲を持つ値が明らかに不正なら既定値へ戻す。
-    ///
-    /// NVSはビルド時configを迂回して値を差し込めるため、build.rs側の検証だけでは
-    /// 素通りする。`timezone_offset_hours` に極端な値が入ると
-    /// `telegram.rs` の `unix + offset * 3600` で日付が大きくずれ、定期レポートが
-    /// 意図しない時刻に出る。
+    /// NVS由来の値はbuild.rs側の検証を迂回するため、明らかに不正な範囲外の値を
+    /// 既定値へ戻す(`timezone_offset_hours` が極端だと `unix + offset * 3600` で
+    /// 日付がずれ、定期レポートが意図しない時刻に出る)。
     fn clamp_ranges(&mut self) {
         // 実在するUTCオフセットの範囲(UTC-12〜UTC+14)。
         if !(-12..=14).contains(&self.timezone_offset_hours) {
@@ -97,8 +90,7 @@ impl AppConfig {
             );
             self.daily_report_hour = -1;
         }
-        // STATUS確認先port。0なら既定値へ丸める(brightness と同じ流儀)。
-        // hostは持たず、読み出し時に `pc_ip_address` から組み立てる(Issue #176)。
+        // 0なら既定値へ丸める。hostは持たず `pc_ip_address` から組み立てる(Issue #176)。
         let normalized = config_validation::normalize_status_port(self.pc_status_port);
         if normalized != self.pc_status_port {
             println!(
@@ -107,8 +99,7 @@ impl AppConfig {
             );
             self.pc_status_port = normalized;
         }
-        // 明るさは0〜100のパーセント。u8なので101〜255が入り得る
-        // (build.rsの型チェックはu8範囲までしか見ない)ため、ここで丸める。
+        // u8なので101〜255が入り得る(build.rsのチェックはu8範囲まで)ため丸める。
         // Telegram経由の入力は `config_validation` が0〜100に制限する。
         if self.brightness > 100 {
             println!(
@@ -119,6 +110,8 @@ impl AppConfig {
         }
     }
 
+    /// keyを複数渡した場合は先に見つかったものを使う(2つ目以降は旧key名)。
+    /// NVSのkeyは15文字までなので短縮名になっている。
     fn apply_nvs(&mut self, nvs: &EspNvs<NvsDefault>) {
         replace(nvs, &["wifi_ssid"], &mut self.wifi_ssid);
         replace(nvs, &["wifi_pass"], &mut self.wifi_password);
@@ -146,12 +139,10 @@ impl AppConfig {
     }
 }
 
-/// NVSから読めて、かつ目的の型へparseできたときだけ上書きする。
-/// `String` も `FromStr` を実装しているため、文字列と数値を同じ関数で扱える。
-/// 壊れた値が入っていてもビルド時configへフォールバックする。
+/// NVSから読めて型へparseできたときだけ上書きする。壊れた値はビルド時configへ
+/// フォールバックする。
 ///
-/// ログにはkey名だけを出し、値は出さない。ここを通る値にはWi-Fiパスワードや
-/// bot tokenが含まれる。
+/// ログにはkey名だけを出し値は出さない(ここを通る値にはWi-Fiパスワードやbot tokenが含まれる)。
 fn replace<T>(nvs: &EspNvs<NvsDefault>, keys: &[&str], target: &mut T)
 where
     T: std::str::FromStr,
@@ -164,8 +155,7 @@ where
     };
     match raw.parse() {
         Ok(value) => *target = value,
-        // 無言でfallbackすると、NVSへ壊れた値(" 80" や "abc")が入っていても
-        // 気づけない。設定したはずの値が効かない理由が分かるようにする。
+        // 無言でfallbackすると壊れたNVS値(" 80" 等)に気づけないためログを出す。
         Err(_) => println!(
             "NVS `{key}` の値を解釈できませんでした。ビルド時configを使います"
         ),

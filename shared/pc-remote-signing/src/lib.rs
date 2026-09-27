@@ -75,11 +75,8 @@ pub fn verify_signature(
 }
 
 /// m5stack-pc-bridgeが配信するfirmware manifestの署名。
-///
-/// bridgeは「配布場所」であって「信頼の根」ではないため、manifestへ署名を付ける。
-///
-/// 先頭の `FIRMWARE-MANIFEST-v1` はドメイン分離。これが無いとmanifest署名が
-/// リクエスト署名と一致し得て、署名の使い回し(クロスプロトコル confusion)を許す。
+/// 先頭の `FIRMWARE-MANIFEST-v1` はドメイン分離(無いとmanifest署名がリクエスト署名と
+/// 一致し得て、署名の使い回し=クロスプロトコルconfusionを許す)。
 ///
 /// ```text
 /// "FIRMWARE-MANIFEST-v1" + "\n" + VERSION + "\n" + SIZE + "\n" + SHA256_HEX + "\n" + CREATED_AT
@@ -112,7 +109,7 @@ pub fn sign_manifest(
     hex::encode(mac.finalize().into_bytes())
 }
 
-/// M5Stack firmware側(検証する側)が使う。Phase 3のOTAクライアントが呼ぶ。
+/// M5Stack firmware側(検証する側)が使う。
 pub fn verify_manifest_signature(
     secret: &[u8],
     version: &str,
@@ -132,12 +129,9 @@ pub fn verify_manifest_signature(
     mac.verify_slice(&expected).is_ok()
 }
 
-/// OTA配信のmanifest(`GET /firmware/manifest` の応答)。
-///
-/// JSONの形の正本はm5stack-pc-bridgeの `firmware::FirmwareManifest` とここで
-/// 共有する。片方だけfieldを増減すると署名の検証以前にparseで壊れるため、
-/// 構造体は1箇所に置く。未知fieldは許容する(bridge側が将来fieldを足しても、
-/// 古いfirmwareのOTAがparse失敗で止まらないようにするため)。
+/// OTA配信のmanifest(`GET /firmware/manifest` の応答)。構造体は1箇所に置く
+/// (片方だけfieldを増減すると署名検証以前にparseで壊れる)。
+/// 未知fieldは許容する(将来fieldを足しても古いfirmwareのOTAが止まらないように)。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 pub struct OtaManifest {
     pub version: String,
@@ -148,9 +142,7 @@ pub struct OtaManifest {
 }
 
 /// manifestのparse・検証・突き合わせの失敗。
-///
-/// エラー文言にはmanifest本文もsecretも含めない。本文は署名検証前の
-/// 未検証データであり、ログへ出すのはfield名と理由だけに留める。
+/// エラー文言にmanifest本文やsecretを含めない(本文は署名検証前の未検証データ)。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OtaManifestError {
     /// JSONとして読めない、fieldが欠けている、型が違う。
@@ -251,41 +243,27 @@ pub fn verify_ota_image(
     Ok(())
 }
 
-/// OTAの進捗率(0-100)。表示専用なので、異常な入力でもpanicせず丸める。
-///
-/// `total` が0のとき0除算になるため、進捗不明として0を返す。manifestのsizeは
-/// 検証前の値を表示に使うことがあり、0や実際より小さい値が来ても落とさない
-/// (不一致は `verify_ota_image` が書き込み後に弾く。表示はそれより手前で動く)。
+/// OTAの進捗率(0-100)。表示専用でpanicしない。`total` が0なら0を返す
+/// (manifestのsizeは検証前の値であり得るため落とさない)。
 pub fn ota_progress_percent(received: u64, total: u64) -> u8 {
     if total == 0 {
         return 0;
     }
-    // u64同士の乗算はオーバーフローし得る。`saturating_mul` だと巨大な値で
-    // 飽和して比率が壊れる(received == total でも100にならない)ため、
-    // u128へ広げてから計算する。
+    // u64乗算はオーバーフローし得るためu128へ広げる(`saturating_mul` だと
+    // received == total でも100にならない)。
     let received = received.min(total);
     ((received as u128 * 100) / total as u128) as u8
 }
 
-/// 進捗を通知する刻み(パーセント)。
-///
-/// バイト数ではなく割合で刻む。バイト数固定だとファイルサイズによって
-/// 更新回数が変わり、小さいイメージでは数回しか動かない(実測: 256KB刻みだと
-/// 1.4MBのイメージで5回しか更新されず、1回で18%飛んだ)。
-///
-/// 細かくしすぎないこと。1回の通知ごとにTLSハンドシェイクが入り、その間
-/// ダウンロードが止まる。5%ならバーが20回動き、追加コストは20回分で済む。
+/// 進捗を通知する刻み(パーセント)。バイト数固定だとサイズにより更新回数が
+/// 変わるため割合で刻む。細かくしすぎない(通知ごとにTLSハンドシェイクが入り
+/// ダウンロードが止まる)。
 pub const OTA_PROGRESS_STEP_PERCENT: u8 = 5;
 
-/// Telegramへ出す進捗テキスト。1行のバーとパーセント、受信量を返す。
-///
-/// `editMessageText` で同じメッセージを書き換え続ける前提。Telegramは同一内容への
-/// 編集をエラー(400)にするため、呼び出し側は内容が変わるときだけ送ること。
+/// Telegramへ出す進捗テキスト。`editMessageText` で書き換え続ける前提で、
+/// Telegramは同一内容への編集を400にするため内容が変わるときだけ送ること。
 pub fn ota_progress_text(version: &str, received: u64, total: u64) -> String {
-    // セル数は刻みと合わせる。刻みより粗いとバーが動かない回が出て、
-    // 細かいとバーだけ動いて数字が変わらない回が出る。
-    // `OTA_PROGRESS_STEP_PERCENT` から計算することで、定数だけ変えて
-    // バーを古いままにする事故を防ぐ (テストでもセル数を固定している)。
+    // セル数は刻みから計算する(刻みだけ変えてバーを古いままにする事故を防ぐ)。
     const CELLS: usize = (100 / OTA_PROGRESS_STEP_PERCENT) as usize;
     let percent = ota_progress_percent(received, total);
     let filled = (percent as usize * CELLS).div_ceil(100).min(CELLS);
@@ -297,23 +275,15 @@ pub fn ota_progress_text(version: &str, received: u64, total: u64) -> String {
     )
 }
 
-/// 検証・書き込み完了後に `editMessageText` で同じメッセージへ出す文言。
-///
-/// ダウンロード完了の100%バーとは別の文字列にすること。Telegramは同一内容への
-/// 編集を400にするため、同じ文言だとM5Stack再起動前の最後の通知が届かない。
-/// 呼び出し側はこの通知が戻った後に `restart()` するため、送信の完了を
-/// 待たずにM5Stackを再起動して通知が欠けることはない。
+/// 検証・書き込み完了後に `editMessageText` で出す文言。
+/// 100%バーとは別の文字列にすること(同一内容の編集は400になるため、同じ文言だと
+/// 再起動前の最後の通知が届かない)。
 pub fn ota_applying_text(version: &str) -> String {
     format!("firmware更新を適用します。M5Stackを再起動します ({version})")
 }
 
-/// ダウンロードしながらSHA-256を計算するストリーミングハーシャー。
-///
-/// 背景: firmware(2MB級)を `Vec` へ全部読んでから `body_sha256_hex` すると
-/// ESP32のヒープが足りない。OTAクライアントはチャンク単位で `update` し、
-/// 書き終わったら `finish_hex` して [`verify_ota_image`] へ渡す。
-/// `sha2` crateはこの共有crateが既に持つため、firmware側へ新しい依存を
-/// 足さずに使える。ハードウェアに依存しないのでhostでテストできる。
+/// ダウンロードしながらSHA-256を計算する。2MB級のimageを `Vec` へ全部読むと
+/// ESP32のヒープが足りないため、チャンク単位で `update` して `finish_hex` へ渡す。
 pub struct StreamingSha256(Sha256);
 
 impl StreamingSha256 {
@@ -337,47 +307,36 @@ impl Default for StreamingSha256 {
     }
 }
 
-/// 起動自己診断で観測する信号。ハードウェアの読み取り自体はfirmware側で行い、
-/// 合否の判定式だけをここに置くことでhostの `cargo test` で検証できる。
+/// 起動自己診断で観測する信号(読み取りはfirmware側、判定式だけここに置きhostでテスト)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BootChecks {
-    /// 画面の初期化と最初の描画が成功した。
     pub display_ok: bool,
-    /// Wi-Fiに接続できた。
     pub wifi_connected: bool,
 }
 
 /// 起動自己診断の合否。通ったときだけfirmwareは自分をvalidとマークする
 /// (`esp_ota_mark_app_valid_cancel_rollback` 相当)。
 ///
-/// 判定はあえて甘め(この2条件だけ)に倒している。理由:
-/// - 主目的は「起動できない・すぐ落ちるfirmwareを旧slotへ戻す」ことであり、
-///   その検出には「main loopへ到達し、画面とWi-Fiが動いた」で十分。
-/// - bridge到達性やNTP同期はfirmwareの健全性信号ではない。PC OFFはこの端末に
-///   とって正常状態であり、bridge到達を要求すると正常なfirmwareが戻ってしまう。
-///   署名付きで叩けるbridgeの `/status` 相当API自体、いまは存在しない。
-/// - 起動するが一部不調のfirmwareが残るリスクはあるが、次回OTAで修復できるため
-///   brickではなく、厳しすぎて正常firmwareを戻す実害の方が大きい。
+/// あえて甘めに倒す: 目的は「起動不能・即落ちのfirmwareを旧slotへ戻す」ことであり、
+/// 「main loop到達+画面+Wi-Fi」で十分。bridge到達性は健全性信号ではない(PC OFFは
+/// 正常状態であり、要求すると正常firmwareが戻ってしまう)。一部不調が残るリスクは
+/// 次回OTAで修復できるため、厳しすぎて正常firmwareを戻す実害の方が大きい。
 pub fn boot_self_test_passed(checks: &BootChecks) -> bool {
     checks.display_ok && checks.wifi_connected
 }
 
-/// firmwareの版の新旧比較の結果。`/update` の確認画面の出し分けに使う。
-///
-/// 呼び出し側は戻り値を網羅的に `match` すること。`Unknown` を握り潰して
-/// 「新しい」扱いにしない(根拠なく更新を促さない)し、「同じ/古い」扱いにも
-/// しない(警告や確認なしに黙って適用させない)。
+/// firmwareの版の新旧比較の結果(`/update` 確認画面の出し分け用)。
+/// 呼び出し側は網羅的に `match` すること。`Unknown` を「新しい」にも「同じ/古い」にも
+/// 倒さない(根拠なく更新を促さず、確認なしに適用もさせない)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VersionOrder {
-    /// 提示された版が現在の版より新しい。通常の更新として提示する。
+    /// 提示版が新しい。通常の更新として提示する。
     Newer,
-    /// 提示された版が現在の版と同じ。確認ボタンを出さない。
+    /// 提示版と同じ。確認ボタンを出さない。
     Same,
-    /// 提示された版が現在の版より古い。巻き戻しになるため明示して確認する
-    /// (誤操作の防止。意図的な巻き戻しは許す)。
+    /// 提示版が古い。巻き戻しのため明示して確認する(誤操作防止。意図的な巻き戻しは許す)。
     Older,
-    /// 版の文字列を解釈できず、新旧を判定できない。確認画面には両方の版を
-    /// そのまま出し、比較できないことを明示する。
+    /// 新旧を判定できない。両方の版をそのまま出し比較不可を明示する。
     Unknown,
 }
 
@@ -390,13 +349,9 @@ impl VersionOrder {
     }
 }
 
-/// 版文字列を数値の三つ組と接尾辞に分ける。
-///
-/// - `0.7.0-diag2` のように、最初の `-` / `+` 以降は接尾辞として切り分ける。
-/// - 数値部はちょうど3要素で、各要素は空でないASCII数字でなければならない。
-/// - 前後の空白などの正規化はしない。bridgeが送る版と `CARGO_PKG_VERSION` は
-///   どちらも正規化済みの想定であり、余計な正規化は別物の版の取り違えになる。
-/// - `u64` へ収まらない桁数は解釈不能として扱う(panicさせない)。
+/// 版文字列を数値の三つ組と接尾辞に分ける(最初の `-`/`+` 以降が接尾辞)。
+/// 数値部はちょうど3要素のASCII数字。正規化はしない(別物の版の取り違えになる)。
+/// `u64` に収まらない桁数は解釈不能(None)。panicしない。
 fn split_version(version: &str) -> Option<([u64; 3], &str)> {
     let numeric_len = version.find(['-', '+']).unwrap_or(version.len());
     let (numeric, suffix) = version.split_at(numeric_len);
@@ -415,20 +370,15 @@ fn split_version(version: &str) -> Option<([u64; 3], &str)> {
     Some((parts, suffix))
 }
 
-/// 現在の版(`FIRMWARE_VERSION`)とbridgeが提示した版(manifestの `version`)を
-/// 数値で比較する。**文字列比較にしない**: 文字列比較だと `"0.8.0" > "0.11.0"`
-/// になり、古い版を「更新」として提示する事故(Issue #180)になる。
+/// 現在の版(`FIRMWARE_VERSION`)と提示版(manifestの `version`)を数値で比較する。
+/// **文字列比較にしない**: `"0.8.0" > "0.11.0"` となり古い版を「更新」と提示する
+/// 事故(Issue #180)になる。
 ///
-/// 仕様:
-/// - 数値部が異なればその大小で決める(接尾辞の有無は問わない)。
-/// - 数値部が同じ場合、接尾辞まで完全一致のときだけ `Same` とする。
-///   `0.7.0` と `0.7.0-diag2` は数値が同じでも別物として扱う(=同じ扱いにしない)。
-///   接尾辞の順序(`-diag2` が新しいのか古いのか)は定義できないため `Unknown` とし、
-///   「新しい」とも「古い」とも断定しない。確認画面では比較できない旨を明示する。
-/// - どちらか一方が解釈できない(空文字、`unknown`、`1.2` のような要素不足、
-///   非数値、4要素以上など)場合も `Unknown` とする。bridgeは版が無いときに
-///   `"unknown"` を入れる仕様(`check_manifest_fields` のコメント参照)。
-/// - panicしない。
+/// - 数値部が異なればその大小で決める。
+/// - 数値部が同じでも接尾辞まで完全一致のときだけ `Same`。`0.7.0` と `0.7.0-diag2`
+///   は別物扱い(接尾辞の新旧順序は定義できないため `Unknown`)。
+/// - どちらかが解釈不能(`unknown`・要素不足・非数値など)でも `Unknown`。
+///   bridgeは版が無いとき `"unknown"` を入れる。panicしない。
 pub fn compare_versions(current: &str, offered: &str) -> VersionOrder {
     match (split_version(current), split_version(offered)) {
         (Some((cur, cur_suffix)), Some((off, off_suffix))) => match cur.cmp(&off) {
@@ -442,17 +392,9 @@ pub fn compare_versions(current: &str, offered: &str) -> VersionOrder {
 }
 
 /// `/update` 実行前にmanifestのversionとsizeを提示する確認文。
-/// version/sizeは公開情報でありsecretではない。sha256や署名は載せない
-/// (Telegramへの送信文に不要な情報を増やさない)。
-///
-/// `current` は実行中の版(`FIRMWARE_VERSION`)、`offered` はmanifestの版。
-/// 新旧の判定は [`compare_versions`] が正本で、この関数は文面の出し分けだけを行う。
-/// - 新しい版: 従来どおり更新を提示し、現在の版も併記する。
-/// - 同じ版: 「すでに最新です」とだけ返す。呼び出し側は確認ボタンを出さず、
-///   nonceも発行しないこと。
-/// - 古い版: 巻き戻しであることを明示し、意図的な場合のみ進める旨を添える。
-/// - 比較不能: 両方の版をそのまま出し、判定できない旨を明示する。
-///   新しいとも古いとも断定できないため、版の確認を利用者に委ねる。
+/// sha256や署名は載せない(送信文に不要な情報を増やさない)。
+/// 新旧の判定は [`compare_versions`] が正本。`Same` のとき呼び出し側は確認ボタンを
+/// 出さずnonceも発行しないこと。
 pub fn ota_confirm_text(current: &str, offered: &str, size: u64) -> String {
     match compare_versions(current, offered) {
         VersionOrder::Newer => format!(
@@ -473,11 +415,8 @@ pub fn ota_confirm_text(current: &str, offered: &str, size: u64) -> String {
 }
 
 /// manifestの各fieldが配信物としてあり得る値か。
-///
-/// bridge側は `version` が無いときに `"unknown"` を入れるため空にはならない。
-/// `size == 0` のimageはESP-IDFのapp imageとして成立しないため拒否する。
-/// `sha256` は署名対象の文字列そのままを使うので、ここでは「64文字のhex」
-/// だけを見て、大小文字の正規化はしない(署名検証が exact match で担保する)。
+/// `size == 0` はapp imageとして成立しないため拒否。`sha256` は署名対象の文字列
+/// そのままを使うため「64文字のhex」だけを見て大小文字の正規化はしない。
 fn check_manifest_fields(manifest: &OtaManifest) -> Result<(), OtaManifestError> {
     if manifest.version.is_empty() {
         return Err(OtaManifestError::InvalidField("version"));
@@ -503,11 +442,8 @@ fn short_json_error(e: &serde_json::Error) -> String {
     format!("line {} column {}", e.line(), e.column())
 }
 
-/// firmware(署名側)とm5stack-pc-bridge(検証側)で共有する電源操作の識別子。
-///
-/// HTTPパスとslugの対応をここ1箇所で決める。canonical文字列にはPATHが入るため、
-/// 片方だけを変えると署名が一致しなくなる。表示文言はwire protocolの一部では
-/// ないので、ここには置かない。
+/// 両側で共有する電源操作の識別子。パスとslugの対応をここ1箇所で決める
+/// (canonical文字列にPATHが入るため片方だけ変えると署名が一致しない)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PowerAction {
     Reboot,
@@ -517,8 +453,7 @@ pub enum PowerAction {
 impl PowerAction {
     pub const ALL: [PowerAction; 2] = [PowerAction::Reboot, PowerAction::Shutdown];
 
-    /// Telegram callback_dataや監査ログで使う識別子。`:` 区切りで解析するため
-    /// 小文字の単語にする。
+    /// callback_dataや監査ログで使う識別子(`:` 区切りで解析するため小文字)。
     pub fn slug(self) -> &'static str {
         match self {
             PowerAction::Reboot => "reboot",
@@ -538,27 +473,19 @@ impl PowerAction {
         Self::ALL.into_iter().find(|action| action.slug() == slug)
     }
 
-    /// HTTPパスからの逆引き。bridge側のrouting確認に使える。
     pub fn from_path(path: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|action| action.path() == path)
     }
 }
 
-/// bridgeの `GET /status` 応答の解釈と、Telegram `/status` に出す操作サービス行
-/// (Issue #183)。
-///
-/// 応答の形(`agent_online`)は両側で同一でなければ壊れるwire protocolなのでここが正本。
-///
-/// `GET /status` は無認証のまま使う(返すのは固定値だけ)。**稼働時間などの環境情報を
-/// 載せないこと。** 載せるなら認証付きの別エンドポイントが要る。
+/// bridgeの `GET /status` 応答の解釈(Issue #183)。`agent_online` の形は
+/// wire protocolのためここが正本。
+/// `GET /status` は無認証で返すのは固定値だけ。**稼働時間などの環境情報を載せるなら
+/// 認証付きの別エンドポイントが要る。**
 pub const BRIDGE_STATUS_PATH: &str = "/status";
 
-/// bridgeの `GET /status` 応答本文から「操作サービスが応答しているか」を返す。
-///
-/// `agent_online` がJSONの真偽値 `true` のときだけtrueを返す。不正なJSON・
-/// キー欠落・想定外の型(文字列 `"true"`・数値 `1`・`null` 等)・空本文はすべて
-/// falseにする。応答を解釈できないときに「応答あり」へは倒さない。
-/// 余分なキー(`agent`・`status` 等)があっても判定には使わない。
+/// `agent_online` がJSONの `true` のときだけtrueを返す。不正JSON・キー欠落・
+/// 想定外の型・空本文はすべてfalse(解釈不能を「応答あり」へ倒さない)。
 pub fn bridge_status_online(body: &[u8]) -> bool {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
         return false;
@@ -663,7 +590,6 @@ pub fn escape_html(value: &str) -> String {
     out
 }
 
-/// `/status` の本文(`parse_mode=HTML`)。
 pub fn status_message_html(
     status: PcControlStatus,
     pc_label: &str,
@@ -688,13 +614,9 @@ pub fn status_message_html(
     )
 }
 
-/// 認証・認可の失敗が続いたときに通知を出すかどうかを決める抑制ロジック。
-///
-/// firmware(Telegramの未許可ユーザー)とbridge(HTTP認証失敗)で同じポリシーを使う。
-/// 「閾値回たまったら発火し、発火後は一定時間鳴らさない」。1回目から鳴らすと、
-/// 無関係なbot巡回や時計ずれによる単発の失敗でも通知が飛んでしまう。
-///
-/// 現在時刻を引数で受け取るため、待たずにテストできる。
+/// 認証・認可の失敗が続いたときに通知するか決める抑制ロジック
+/// (firmwareの未許可ユーザーとbridgeのHTTP認証失敗で同じポリシー)。
+/// 閾値回たまったら発火し、以後は一定時間鳴らさない(単発の失敗で通知しないため)。
 pub struct AlertThrottle {
     threshold: u32,
     interval: std::time::Duration,
@@ -703,10 +625,8 @@ pub struct AlertThrottle {
 }
 
 impl AlertThrottle {
-    /// 何回たまったら発火するか。
     pub const DEFAULT_THRESHOLD: u32 = 3;
-    /// 発火後、次に鳴らせるようになるまでの時間。スキャンや連投で通知が
-    /// 埋まらないようにする。
+    /// 発火後、次に鳴らせるまでの時間(スキャンや連投で通知が埋まらないようにする)。
     pub const DEFAULT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
 
     pub fn new(threshold: u32, interval: std::time::Duration) -> Self {
