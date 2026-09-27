@@ -1,17 +1,11 @@
-// Telegramから実行時に変更できる設定値(pc_ip_address / wol_port /
-// brightness)。STATUS確認先のhostは `pc_ip_address` から読み出し時に導くため
-// 別に持たず、port(`pc_status_port`)だけを読み取り専用で保持する(Issue #176)。
-// portは実行時にTelegramからは変えない(設定ファイルとNVSでのみ持つ)。
+// Telegramから実行時に変更できる設定値(pc_ip_address / wol_port / brightness)。
+// STATUS確認先のhostは `pc_ip_address` から読み出し時に導くため別に持たず、
+// port(`pc_status_port`)だけを読み取り専用で保持する(Issue #176)。
 //
-// `AppConfig` は起動時に読んで以後変更しない値の集まりだが、この3値だけは
-// Telegram経由で書き換わる。`AppConfig` 全体をMutex化すると、読み取りしかしない
-// 他フィールド(bot token等)まで毎回ロックを取ることになるため、この3値(+読み取り
-// 専用のport)だけを独立したMutexで持つ(読み取り多数・書き込みほぼゼロという
-// アクセス形態に合わせる)。
-//
-// 値の検証は `config-validation` crate(host側でテストできる)側で行う。ここは
-// NVSへの永続化と「書き込みに成功した後だけメモリ上の値も更新する」順序を
-// 守るだけに徹する。
+// `AppConfig` 全体をMutex化するとbot token等の読み取り専用フィールドまで毎回
+// ロックを取ることになるため、この3値(+port)だけを独立したMutexで持つ。
+// 値の検証は `config-validation` crate側で行い、ここはNVSへの永続化と
+// 「書き込み成功後だけメモリ上の値を更新する」順序を守るだけに徹する。
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -20,14 +14,12 @@ use esp_idf_sys::EspError;
 
 use crate::app_config::{AppConfig, NAMESPACE};
 
-/// `app_config.rs::apply_nvs` が読む短縮キーと同じものを使う。ここで書いた値は
-/// 次回起動時、`AppConfig::load` がビルド時configより優先して読み直す。
+// `app_config.rs::apply_nvs` が読む短縮キーと同じものを使う。ここで書いた値は
+// 次回起動時 `AppConfig::load` がビルド時configより優先して読み直す。
 const NVS_KEY_PC_IP: &str = "pc_ip";
 const NVS_KEY_WOL_PORT: &str = "wol_port";
-// 明るさの既定値(100、現状のDCDC3 2800mVと同じ明るさ)は `firmware/build.rs` の
-// `Key::int("brightness", ...).default(100)` が正本。NVSにもビルド時configにも
-// 値が無いときはそこへフォールバックするため、既存ユーザーのNVSにkeyが無い場合の
-// 後方互換は `wol_port` と同じ扱い(未設定なら現状維持)になる。
+// 既定値100(現状のDCDC3 2800mV相当)は `firmware/build.rs` が正本。NVSにも
+// ビルド時configにも無いときはそこへフォールバックする(既存ユーザーの後方互換)。
 const NVS_KEY_BRIGHTNESS: &str = "brightness";
 
 struct State {
@@ -36,9 +28,8 @@ struct State {
     pc_status_port: u16,
     wol_port: u16,
     brightness_percent: u8,
-    /// 書き込み用に読み書きモードで開いたハンドル。`AppConfig::load` が起動時に
-    /// 読み取り専用で開くハンドルとは別物で、両者は同時に生存しない
-    /// (`load()` はhandleを関数内で使い切って返す前に手放す)。
+    /// 読み書きモードで開いた書き込み用ハンドル。起動時に `AppConfig::load` が
+    /// 開く読み取り専用ハンドルとは別物で、両者は同時に生存しない。
     nvs: EspNvs<NvsDefault>,
 }
 
@@ -61,8 +52,8 @@ impl RuntimeSettings {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        // 排他が守るのはNVSへの書き込み1回とメモリ上の値の同期だけなので、
-        // poisonしても排他を維持したまま使い続ける(telegram::lock_powerと同じ考え方)。
+        // poisonしても排他を維持したまま使い続ける(守るのはNVS書き込みと値の
+        // 同期だけ。telegram::lock_powerと同じ考え方)。
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -70,9 +61,8 @@ impl RuntimeSettings {
         self.lock().pc_ip_address.clone()
     }
 
-    /// STATUS確認先 `{pc_ip_address}:{pc_status_port}` を**読み出しのたびに組み立てる**。
-    /// 値をキャッシュしないため、`pc_ip_address` を変更したら次の呼び出しから
-    /// 新IPが使われる(Issue #176)。
+    /// STATUS確認先を読み出しのたびに組み立てる(キャッシュしないため、IP変更は
+    /// 次の呼び出しから効く。Issue #176)。
     pub fn pc_status_addr(&self) -> String {
         let state = self.lock();
         config_validation::compose_status_addr(&state.pc_ip_address, state.pc_status_port)
@@ -86,7 +76,7 @@ impl RuntimeSettings {
         self.lock().brightness_percent
     }
 
-    /// `/settings` 表示用の一括取得。3回ロックを取るより一貫した値が見える。
+    /// `/settings` 表示用の一括取得(3回ロックを取るより一貫した値が見える)。
     pub fn snapshot(&self) -> (String, u16, u8) {
         let state = self.lock();
         (

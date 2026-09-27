@@ -1,27 +1,19 @@
 //! M5Stack向けfirmware配信(`GET /firmware`, `GET /firmware/manifest`)の本体。
-//!
-//! bridgeは「配布場所」であって「信頼の根」ではないため、manifestへ署名を付け、
-//! M5Stack側が公開値だけを信じずに検証できるようにする(Issue #41)。
-//! 署名の正本は `pc-remote-signing`。**ここでcanonical文字列の順序を組み立てない。**
+//! bridgeは「配布場所」であって「信頼の根」ではないため、manifestへ署名を付ける
+//! (Issue #41)。署名の正本は `pc-remote-signing`。**ここでcanonical文字列の順序を組み立てない。**
 
 use std::path::PathBuf;
 
 use serde::Serialize;
 use time::format_description::well_known::Rfc3339;
 
-/// `firmware.version` が無いときにmanifestの `version` へ入れる値。
-///
-/// `firmware.bin` だけの配置でも配信を壊さないためのフォールバック。
-/// 運用では `firmware.version` を一緒に置いて人間可読な版を指定する。
-/// Phase 3で版比較の意味が決まるまでは、この値は表示用に留める。
+/// `firmware.version` が無いときにmanifestの `version` へ入れるフォールバック値
+/// (`firmware.bin` だけの配置でも配信を壊さないため)。表示用。
 pub const UNKNOWN_VERSION: &str = "unknown";
 
 /// 配信ファイルの配置。既定は実行ファイルと同じディレクトリ。
-///
-/// `version` は `firmware.bin` だけでは決まらない(バイナリ内に版を持たない
-/// ため)ので、運用者が配置する `firmware.version`(1行のテキスト)を別に読む。
-/// 無い・空の場合は [`UNKNOWN_VERSION`] になる。sha256は常に実バイナリから
-/// 計算するため、内容の同一性はversionの有無に依存しない。
+/// `version` はバイナリ内に版を持たないため、運用者が置く `firmware.version`
+/// (1行テキスト)を別に読む。無い・空なら [`UNKNOWN_VERSION`]。sha256は実バイナリから計算する。
 #[derive(Clone, Debug)]
 pub struct FirmwarePaths {
     pub bin: PathBuf,
@@ -62,10 +54,8 @@ pub struct FirmwareManifest {
     pub signature: String,
 }
 
-/// 配信ファイルを読み込む。同期I/Oなので呼び出し側でblockingスレッドへ逃がす。
-///
-/// `firmware.bin` が無いときは `ErrorKind::NotFound` の `io::Error` を返す。
-/// 呼び出し側はこれを404に写像し、他の読み込み失敗は500に写像する。
+/// 配信ファイルを読み込む(同期I/Oなので呼び出し側でblockingスレッドへ逃がす)。
+/// `firmware.bin` が無いときは `ErrorKind::NotFound` を返す(呼び出し側は404へ写像)。
 /// 応答本文・エラーメッセージにファイルパスは含めない。
 pub fn load(paths: &FirmwarePaths) -> std::io::Result<FirmwareImage> {
     let bytes = std::fs::read(&paths.bin)?;
@@ -78,12 +68,9 @@ pub fn load(paths: &FirmwarePaths) -> std::io::Result<FirmwareImage> {
     })
 }
 
-/// manifestを組み立て、HMAC-SHA256署名を付ける。
-///
-/// 署名対象は「version・size・sha256・created_at を含む、順序が一意に決まる
-/// 文字列」で、組み立ては `pc-remote-signing::manifest_canonical_string` が
-/// 行う(`"FIRMWARE-MANIFEST-v1\n{version}\n{size}\n{sha256}\n{created_at}"`)。
-/// ここで自前の結合順序を発明しないこと(Phase 3の検証側とずれるため)。
+/// manifestを組み立ててHMAC-SHA256署名を付ける。
+/// canonical文字列の組み立ては `pc-remote-signing::manifest_canonical_string` に任せ、
+/// ここで自前の順序を発明しない(検証側とずれるため)。
 pub fn build_manifest(
     image: &FirmwareImage,
     secret: &[u8],
@@ -105,9 +92,8 @@ pub fn build_manifest(
     })
 }
 
-/// `firmware.version` の1行目を使う。無い・空・読めない場合は
-/// [`UNKNOWN_VERSION`]。運用者の配置ミスで配信全体を500にしないための
-/// 判断(内容の同一性はsha256で担保される)。
+/// `firmware.version` の1行目を使う。無い・空・読めない場合は [`UNKNOWN_VERSION`]
+/// (配置ミスで配信全体を500にしない。同一性はsha256で担保)。
 fn read_version(path: &std::path::Path) -> String {
     std::fs::read_to_string(path)
         .ok()

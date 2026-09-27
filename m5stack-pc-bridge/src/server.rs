@@ -71,16 +71,10 @@ pub fn router_with_firmware_paths(config: AgentConfig, firmware: FirmwarePaths) 
 
     let mut router = Router::new()
         .route("/status", get(status))
-        // firmware配信は読み取り専用(GETのみ・副作用なし)だが、既存の
-        // HMACリクエスト認証を要求する。選んだ理由:
-        // (1) AGENTS.mdが「LAN内だからという理由で無認証APIを追加しない」と
-        //     定めており、読み取り専用でも例外にしない。
-        // (2) versionの列挙やbinaryの取得をLAN内の任意端末に許すと、
-        //     firmwareの脆弱性探査の材料になる。
-        // (3) shared_secretの保持者(対になるM5Stack)だけが取得者になる方が、
-        //     配布範囲の見通しが良い。
+        // firmware配信は読み取り専用(GETのみ)だがHMAC認証を要求する。
+        // AGENTS.md「LAN内だからという理由で無認証APIを追加しない」に従う。
+        // version列挙やバイナリ取得をLAN内任意端末へ開くと脆弱性探査の材料になる。
         // 電源操作の権限は渡さない(confirm不要・電源操作を実行しない)。
-        // LAN内限定の前提は変えない(管理ポートの直接公開はしない)。
         .route("/firmware/manifest", get(firmware_manifest))
         .route("/firmware", get(firmware_binary));
     for action in SharedPowerAction::ALL {
@@ -263,10 +257,9 @@ async fn command(
                 return (StatusCode::BAD_REQUEST, "confirm must be true").into_response();
             }
 
-            // 監査ログ(open+writeln+sync_all)も電源操作(shutdown.exeの起動)も
-            // blocking I/O。asyncワーカースレッドを塞がないよう、まとめて
-            // blockingスレッドへ逃がす。fail-closed(監査ログを残せないなら
-            // 電源操作を実行しない)の順序はこのクロージャ内で維持している。
+            // 監査ログも電源操作(shutdown.exeの起動)もblocking I/Oのため、
+            // asyncワーカーを塞がないようblockingスレッドへ逃がす。fail-closed
+            // (監査ログを残せないなら電源操作しない)の順序はこのクロージャ内で維持する。
             let dry_run = state.dry_run;
             let outcome =
                 tokio::task::spawn_blocking(move || -> Result<PowerResult, CommandFailure> {
@@ -298,8 +291,8 @@ async fn command(
                 )
                     .into_response(),
                 Err(join_err) => {
-                    // blockingタスク自体が落ちた場合、電源操作まで到達したか
-                    // 判別できない。監査ログを見て判断する。
+                    // blockingタスクが落ちた場合は電源操作へ到達したか判別できない
+                    // (監査ログを見て判断する)。
                     tracing::error!("power command task failed: {join_err}");
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,

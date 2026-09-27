@@ -1,15 +1,13 @@
 //! firmwareの実行時設定値(Telegramから変更可能なもの)のvalidation。
-//!
-//! `firmware` はESP32専用でhostビルドできないため、入力検証だけをここへ分離して
-//! hostでテストする(`shared/*` 共通の方針)。**DNS解決やネットワーク接続はしない。**
+//! `firmware` はESP32専用でhostビルドできないため、入力検証だけを分離してhostで
+//! テストする(`shared/*` 共通の方針)。**DNS解決やネットワーク接続はしない。**
 
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 
 /// `pc_ip_address` として妥当なIPv4アドレスか検証する。
-///
-/// ホスト名は受け付けない。m5stack-pc-bridgeへのHTTP接続先を直接組み立てる
-/// ため、ここでDNS解決の失敗経路を増やしたくない。
+/// ホスト名は受け付けない(bridgeへの接続先を直接組み立てるため、DNS解決の
+/// 失敗経路を増やさない)。
 pub fn validate_ipv4(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
     Ipv4Addr::from_str(trimmed)
@@ -17,11 +15,11 @@ pub fn validate_ipv4(input: &str) -> Result<String, String> {
         .map_err(|_| format!("`{trimmed}` はIPv4アドレスとして解釈できません(例: 192.168.1.50)"))
 }
 
-/// STATUS確認(オン/オフ判定のTCP probe)の接続先を組み立てる。
+/// STATUS確認(TCP probe)の接続先を組み立てる。
 ///
-/// **読み出し時に組み立てる。** hostを別の設定値として持つと、PCのIPが変わったとき
-/// 2箇所を直す必要があり、片方の直し忘れで電源操作は通るのにSTATUSが常にオフになる
-/// (Issue #176)。DNS解決はしない(`check_pc_online` の高速経路に乗せる。Issue #130-3)。
+/// hostを別の設定値として持つと直し忘れで「電源操作は通るのにSTATUSが常にオフ」に
+/// なるため、**読み出し時に組み立てる**(Issue #176)。DNS解決はしない
+/// (`check_pc_online` の高速経路に乗せる。Issue #130-3)。
 pub fn compose_status_addr(pc_ip_address: &str, status_port: u16) -> String {
     format!("{}:{status_port}", pc_ip_address.trim())
 }
@@ -30,7 +28,6 @@ pub fn compose_status_addr(pc_ip_address: &str, status_port: u16) -> String {
 /// `Key::int("pc_status_port", ...).default(80)` と同じ値にすること。
 pub const DEFAULT_STATUS_PORT: u16 = 80;
 
-/// STATUS確認先portを正規化する。0なら既定値、それ以外はそのまま返す。
 pub fn normalize_status_port(port: u16) -> u16 {
     if port == 0 {
         DEFAULT_STATUS_PORT
@@ -39,16 +36,13 @@ pub fn normalize_status_port(port: u16) -> u16 {
     }
 }
 
-/// `wol_port` として妥当なport番号か検証する。
 pub fn validate_wol_port(input: &str) -> Result<u16, String> {
     validate_port(input.trim())
 }
 
-/// 画面の明るさとして妥当なパーセント(0〜100)か検証する(Issue #167)。
-///
-/// 0%を「消灯」の意味にはしない(消灯は別Issue #168のスリープ機能の役割)。
-/// ここでは0〜100の範囲だけを見て、下限電圧への丸めは
-/// `brightness_percent_to_dcdc3_mv` が担当する。
+/// 画面の明るさ(0〜100)を検証する(Issue #167)。
+/// 0%は「消灯」の意味にしない(消灯はIssue #168のスリープ機能の役割)。
+/// 範囲だけを見て、電圧への丸めは `brightness_percent_to_dcdc3_mv` が担当。
 pub fn validate_brightness_percent(input: &str) -> Result<u8, String> {
     let trimmed = input.trim();
     let percent: u8 = trimmed
@@ -66,21 +60,15 @@ pub fn validate_brightness_percent(input: &str) -> Result<u8, String> {
 pub const BRIGHTNESS_DCDC3_MAX_MV: u16 = 2800;
 /// 明るさ0%に対応するDCDC3電圧(mV)。
 ///
-/// 実機で未検証の暫定値であり、後日実機で見ながら追い込む前提(Issue #167)。
-/// AXP192自体のDCDC3範囲は700〜3500mV/25mVステップだが、それはICの仕様上の
-/// 範囲であり、Core2のバックライトLEDが実際に安全かつ点灯する範囲ではない
-/// ため、ユーザーに公開する範囲は保守的に絞る。0%でも「暗いが点いている」
-/// 状態に留め、消灯にはしない(消灯は別Issue #168のスリープ機能の役割)。
-/// LDO2(LCD+タッチ電源、3300mV固定)は絶対に変更しないこと。
+/// 実機未検証の暫定値(後日実機で追い込む前提。Issue #167)。AXP192のDCDC3範囲
+/// (700〜3500mV/25mVステップ)はIC仕様上の値で、バックライトLEDが安全に点灯する
+/// 範囲ではないため保守的に絞る。0%でも「暗いが点いている」状態に留める
+/// (消灯はIssue #168の役割)。LDO2(LCD+タッチ電源、3300mV固定)は変更しないこと。
 pub const BRIGHTNESS_DCDC3_MIN_MV: u16 = 2500;
 
-/// 明るさパーセント(0〜100)をAXP192 DCDC3電圧(mV)へ線形に変換する純粋関数。
-///
-/// `BRIGHTNESS_DCDC3_MIN_MV`〜`BRIGHTNESS_DCDC3_MAX_MV` へ線形に割り付け、
-/// AXP192の25mVステップへ切り捨てる(`axp192` crateの `set_dcdc3_voltage` も
-/// 同じ切り捨てを行うため、ここで丸めて実電圧と一致させる)。
-/// 101以上が来ても `validate_brightness_percent` を素通りした不正値として
-/// 上限へ丸める(消灯側へは倒さない)。
+/// 明るさ(0〜100)をDCDC3電圧(mV)へ線形変換する。MIN〜MAXへ割り付けて
+/// AXP192の25mVステップへ切り捨てる(`set_dcdc3_voltage` と同じ丸めで実電圧と一致させる)。
+/// 101以上の不正値は上限へ丸める(消灯側へは倒さない)。
 pub fn brightness_percent_to_dcdc3_mv(percent: u8) -> u16 {
     let clamped = percent.min(100);
     let range = BRIGHTNESS_DCDC3_MAX_MV - BRIGHTNESS_DCDC3_MIN_MV;
@@ -90,19 +78,15 @@ pub fn brightness_percent_to_dcdc3_mv(percent: u8) -> u16 {
 
 /// Telegram許可ユーザーIDの前後空白を取り除く。
 ///
-/// firmware側の `is_configured` は `trim()` して判定するのに、chat_id化と
-/// ID照合がtrimしていなかったため、値の前後空白混入で正規ユーザーが
-/// 「権限がありません」で全拒否される事故があった(Issue #130-1)。
-/// 3箇所が別々に `trim` すると将来またずれるため、正規化はこの関数に
+/// 判定側だけがtrimして照合側がしていなかったため、空白混入で正規ユーザーが
+/// 全拒否される事故があった(Issue #130-1)。再発防止のため正規化はこの関数に
 /// 一本化し、呼び出し側は生文字列を直接触らないこと。
 pub fn normalize_telegram_user_id(input: &str) -> &str {
     input.trim()
 }
 
 /// 正規化してから `from.id` と一致するかを判定する。
-///
-/// 既存の照合が文字列比較だったため、数値化せず文字列比較にそろえる
-/// (挙動を変えないため。`+123` のような表記ゆれは設定ミスとして拒否側に倒す)。
+/// 文字列比較のままにする(数値化すると `+123` 等の表記ゆれまで通ってしまう)。
 pub fn telegram_user_id_matches(config_value: &str, from_id: i64) -> bool {
     from_id.to_string() == normalize_telegram_user_id(config_value)
 }
@@ -113,15 +97,11 @@ pub fn parse_telegram_user_id(config_value: &str) -> Option<i64> {
     normalize_telegram_user_id(config_value).parse::<i64>().ok()
 }
 
-/// OTAバイナリの受信サイズがmanifestの申告サイズを超えたかの判定。
+/// OTA受信サイズがmanifestの申告サイズを超えたかの判定。
 ///
-/// 超えた時点でこれ以上読んでも正規imageにならないため、呼び出し側は
-/// flashへ書かず即座に打ち切ること(Issue #130-2)。終端まで書いてから
-/// 突き合わせで落とすと、slot上限まで無駄な消去・書き込みが続く。
-/// 早期return時はOTAハンドルのDropがabortするため、boot切替は起きない。
-///
-/// firmware crateはESP-IDF専用でhostテストできないため、hostで検証できる
-/// ようこのcrateへ置く(境界値のテストは下の `mod tests` を参照)。
+/// 超えた時点で正規imageになり得ないため、呼び出し側はflashへ書かず即座に打ち切る
+/// (Issue #130-2。最後まで書いてから落とすと無駄な消去・書き込みが続く)。
+/// 早期return時はOTAハンドルのDropがabortするためboot切替は起きない。
 pub fn ota_received_too_large(received: u64, manifest_size: u64) -> bool {
     received > manifest_size
 }

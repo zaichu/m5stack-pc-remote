@@ -10,9 +10,8 @@ pub mod server;
 pub mod windows_service;
 
 /// 実行ファイルと同じディレクトリにある`name`のパスを返す。
-///
 /// Windows ServiceはSCMから起動されるとCWDがSystem32になるため、CWD相対だと
-/// 設定やログの場所を見失う。実行ファイル基準にして挙動をそろえる。
+/// 設定やログの場所を見失う。
 pub fn exe_dir_file(name: &str) -> std::path::PathBuf {
     if let Some(path) = std::env::current_exe()
         .ok()
@@ -28,34 +27,27 @@ pub fn exe_dir_file(name: &str) -> std::path::PathBuf {
     }
 }
 
-/// `--config` に対応する環境変数名。Linux側の `main` の clap 定義
-/// (`#[arg(long, env = ...)]`) と同じ文字列を使う。Windows foreground 経路も
-/// この定数経由で読むため、両OSで名前がずれない。
+/// `--config` に対応する環境変数名。Linux側 `main` の clap 定義と同じ文字列を
+/// 使う(Windows foreground 経路もこの定数経由で読むため、両OSで名前がずれない)。
 pub const CONFIG_ENV_VAR: &str = "M5STACK_PC_BRIDGE_CONFIG";
 
-/// 設定ファイルの既定パス。`--config` 省略時に使う。
+/// 設定ファイルの既定パス。
 pub fn default_config_path() -> std::path::PathBuf {
     exe_dir_file("config.toml")
 }
 
-/// 既定パスから設定を読み込む。パス解決とエラー整形を一元化する。
-///
-/// `windows_service` の foreground/service 両経路と、通常の `main` で同じ
-/// 挙動にするためここに置く。エラー文に secret は含まれない
-///（`AgentConfig::validate` が汎化したメッセージを返す）。
+/// 既定パスから設定を読み込む。foreground/service/`main` の各経路で同じ挙動にするため
+/// ここへ置く。エラー文に secret は含まれない(`AgentConfig::validate` が汎化して返す)。
 pub fn load_default_config() -> anyhow::Result<app_config::AgentConfig> {
     let path = default_config_path();
     app_config::AgentConfig::from_path(&path)
         .map_err(|e| anyhow::anyhow!("failed to load {}: {e}", path.display()))
 }
 
-/// foreground 実行時の設定パス解決。純粋関数なので host でテストできる。
-///
-/// 優先度は `cli > env > 既定パス` で、Linux 側 `main` の clap 定義
-/// (`#[arg(long, env = "M5STACK_PC_BRIDGE_CONFIG")]`) と同じ順序にする。
-/// Windows Service(SCM 経由)では呼ばない。SCM が渡す `_arguments` と
-/// foreground 実行時の引数を混同しないため、service 経路は従来どおり
-/// `load_default_config()` を使う。
+/// foreground 実行時の設定パス解決。優先度は `cli > env > 既定パス`
+/// (Linux側 `main` の clap 定義と同じ順序)。
+/// SCM経由のservice起動では呼ばないこと(`_arguments` とforeground引数の混同を避けるため、
+/// service経路は `load_default_config()` を使う)。
 pub fn resolve_config_path(
     cli_config: Option<std::path::PathBuf>,
     env_config: Option<std::path::PathBuf>,
@@ -69,8 +61,7 @@ pub fn resolve_config_path(
     default_config_path()
 }
 
-/// 環境変数 `M5STACK_PC_BRIDGE_CONFIG` の値の解釈。空文字は未設定扱いにする。
-/// `std::env::var_os(CONFIG_ENV_VAR)` の結果をそのまま渡す。
+/// 環境変数の値の解釈。空文字は未設定扱いにする。
 pub fn env_config_path(value: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
     match value {
         Some(value) if !value.is_empty() => Some(std::path::PathBuf::from(value)),
@@ -78,12 +69,10 @@ pub fn env_config_path(value: Option<std::ffi::OsString>) -> Option<std::path::P
     }
 }
 
-/// コマンドライン引数から `--config` の値だけを抜き出す。
-///
-/// SCM 経由の service 起動では呼ばないこと。`service_main` が受け取る引数とは
-/// 関係なく、foreground 実行時の `std::env::args_os()` を渡すための関数。
+/// foreground 実行時の `std::env::args_os()` から `--config` の値だけを抜き出す
+/// (SCM経由のservice起動では呼ばないこと)。
 /// `--config <path>` と `--config=<path>` の両形式を受け付け、複数回指定時は
-/// 最後を優先する(clap の上書きに近づけるため)。値なしの `--config` は無視する。
+/// 最後を優先する。値なしの `--config` は無視する。
 pub fn parse_config_arg(
     args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
 ) -> Option<std::path::PathBuf> {
@@ -112,8 +101,7 @@ pub fn parse_config_arg(
     result
 }
 
-/// foreground 実行時の設定読み込み。`--config` と環境変数を解決してから読む。
-/// エラー文の形式は `load_default_config` と同じにする。
+/// foreground 実行時の設定読み込み。エラー文の形式は `load_default_config` と同じ。
 pub fn load_foreground_config(
     cli_config: Option<std::path::PathBuf>,
     env_config: Option<std::path::PathBuf>,

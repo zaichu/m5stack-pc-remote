@@ -1,8 +1,5 @@
-//! Windows Service(SCM)としての起動。`cfg(windows)`専用で、Linux上のビルド/テストには
-//! 一切影響しない(Cargo.tomlで`windows-service` crateをcfg(windows)依存にしているため)。
-//!
-//! `install.ps1` が `New-Service` で登録するサービス名(`SERVICE_NAME`)と一致している
-//! 必要がある。
+//! Windows Service(SCM)としての起動。`cfg(windows)`専用。
+//! `install.ps1` の `New-Service` 登録名と `SERVICE_NAME` は一致している必要がある。
 
 use std::ffi::OsString;
 use std::sync::mpsc;
@@ -19,9 +16,8 @@ use crate::server;
 pub const SERVICE_NAME: &str = "M5StackPcBridge";
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 
-/// SCMがサービスを起動していないプロセスから`StartServiceCtrlDispatcher`を呼んだ場合の
-/// Win32エラーコード(`ERROR_FAILED_SERVICE_CONTROLLER_CONNECT`)。値はWindows APIの
-/// 固定値で、`windows`/`windows-sys` crateへの直接依存を増やすほどではないためハードコードする。
+/// SCM経由でないプロセスから `StartServiceCtrlDispatcher` を呼んだときのWin32エラー。
+/// Windows API固定値のため直接依存を増やさずハードコードする。
 const ERROR_FAILED_SERVICE_CONTROLLER_CONNECT: i32 = 1063;
 
 /// SCM経由なら`service_main`を、開発時にexeを直接実行した場合はforegroundで動かす。
@@ -41,9 +37,8 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 fn run_foreground() -> anyhow::Result<()> {
-    // 動作確認用の foreground 実行では `--config` と `M5STACK_PC_BRIDGE_CONFIG` を
-    // 解釈する。`std::env::args()` はこのプロセスの起動引数であり、SCM が
-    // `service_main` へ渡す引数とは別物なので混同しないこと。
+    // foreground 実行では `--config` / `M5STACK_PC_BRIDGE_CONFIG` を解釈する。
+    // `std::env::args()` はSCMが `service_main` へ渡す引数とは別物なので混同しないこと。
     let cli_config = crate::parse_config_arg(std::env::args_os().skip(1));
     let env_config = crate::env_config_path(std::env::var_os(crate::CONFIG_ENV_VAR));
     let config = crate::load_foreground_config(cli_config, env_config)?;
@@ -54,15 +49,13 @@ fn run_foreground() -> anyhow::Result<()> {
 define_windows_service!(ffi_service_main, service_main);
 
 fn service_main(_arguments: Vec<OsString>) {
-    // service_mainはWindows側の規約でResultを返せない。失敗はプロセスの異常終了として
-    // SCMへ伝わり、install.ps1が設定するrecovery(自動再起動)に任せる。
-    // SCM が渡す `_arguments` は service の登録引数であり、foreground 実行時の
-    // `--config` とは別物なので意図的に無視する。service 起動時の設定パスは
-    // 変えず、常に実行ファイル横の config.toml を読む。
+    // Windows側の規約でResultを返せない。失敗は異常終了としてSCMへ伝わり、
+    // install.ps1のrecovery(自動再起動)に任せる。
+    // `_arguments` はservice登録引数でforeground時の `--config` とは別物なので無視する。
+    // 設定パスは常に実行ファイル横のconfig.toml。
     if let Err(e) = run_service() {
-        // Windows Serviceにはコンソールが無く、eprintln!はどこにも表示されない。
-        // 実行ファイルと同じディレクトリのログファイルへ書き、起動失敗の原因を
-        // 追えるようにする(secretは書かない: エラーメッセージにconfig.tomlの値は含まれない)。
+        // Windows Serviceにはコンソールが無いため、実行ファイル横のログファイルへ
+        // 書いて起動失敗の原因を追えるようにする(secretは書かない)。
         log_startup_error(&e);
     }
 }
@@ -103,12 +96,9 @@ fn run_service() -> anyhow::Result<()> {
 
     let result = run_and_report_status(&status_handle, stop_rx);
 
-    // 成功・失敗どちらの経路でも、SCMへ必ずStoppedを報告する。ここを怠ると、
-    // 起動処理中のエラーなどでSCMへの応答が途絶え、「応答なし」という原因の
-    // 分かりにくい汎用エラーになる。exit_codeは成功時のみ0とし、起動失敗や
-    // server::serve_with_shutdownのErrはinstall.ps1のfailure action(自動再起動)を
-    // 発動させるため非0で報告する。STOP/SHUTDOWN要求による通常停止はOk(())になるため
-    // ここでは0のまま。
+    // 成功・失敗どちらでもSCMへ必ずStoppedを報告する。怠ると応答が途絶えて
+    // 「応答なし」の分かりにくい汎用エラーになる。exit_codeは失敗時のみ非0とし、
+    // install.ps1のfailure action(自動再起動)を発動させる。
     let exit_code = if result.is_ok() {
         ServiceExitCode::Win32(0)
     } else {
@@ -129,8 +119,7 @@ fn run_and_report_status(
         ServiceExitCode::Win32(0),
     )?;
 
-    // service 起動時の設定は実行ファイル横に固定する。foreground 実行用の
-    // `--config` / 環境変数の解決はここでは行わない(挙動を変えないため)。
+    // service起動時の設定は実行ファイル横に固定する(`--config`/環境変数の解決はしない)。
     let config = crate::load_default_config()?;
 
     let runtime = tokio::runtime::Runtime::new()?;
@@ -140,8 +129,7 @@ fn run_and_report_status(
     let status_handle_for_stop = status_handle.clone();
     std::thread::spawn(move || {
         let _ = stop_rx.recv();
-        // graceful shutdown中もRunningのまま報告し続けると、SCMが規定時間内に
-        // 応答がないと判断することがあるため、停止処理に入ったことを即座に伝える。
+        // RunningのままだとSCMが「応答なし」と判断し得るため、停止処理に入ったことを即伝える。
         let _ = set_status(
             &status_handle_for_stop,
             ServiceState::StopPending,

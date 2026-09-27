@@ -1,28 +1,21 @@
 //! PCの起動指示後の待機状態と期限判定の純粋ロジック。
-//!
-//! `firmware` はESP32専用でhostビルドできないため、判定だけをここへ分離して
-//! hostでテストする(`shared/*` 共通の方針)。
-//!
-//! 時刻は扱わず、単調時計で測った経過秒だけを受け取る(NTP未同期でも壊れない)。
+//! `firmware` はESP32専用でhostビルドできないため、判定だけを分離してhostで
+//! テストする(`shared/*` 共通の方針)。時刻は扱わず単調時計の経過秒だけを受け取る
+//! (NTP未同期でも壊れない)。
 
 /// 起動指示後にPCがオンになるのを待つ期限(秒)。
-///
-/// 3分の根拠: Windowsの起動1〜2分 + STATUS確認の安定判定20秒 + bridge起動のばらつき。
-/// **実機では測っていない。** ずれる場合はこの定数だけを変える(判定式は変えない)。
+/// Windows起動1〜2分 + STATUS安定判定20秒 + bridge起動のばらつきを見込んだ3分。
+/// **実機未測定。** ずれる場合はこの定数だけを変える(判定式は変えない)。
 pub const WAKE_WATCH_TIMEOUT_SECS: u64 = 180;
 
-/// 起動指示後の待機状態。
-///
-/// `firmware` 側は開始時刻(`Instant`)を `SharedWakeWatch`(`Option<Instant>`、
-/// `None`=待機なし)として持ち、この値とは `waiting=is_some()` で対応する。
-/// 時刻自体はここに持たず、経過秒だけを `poll` へ渡す。
+/// 起動指示後の待機状態。`firmware` 側は開始時刻を `Option<Instant>`
+/// (`None`=待機なし)として持ち、`waiting=is_some()` と対応する。
+/// 時刻自体は持たず、経過秒だけを `poll` へ渡す。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WakeWatch {
-    /// 待機中かどうか。
     pub waiting: bool,
 }
 
-/// 待機の更新で送る通知の種別。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WakeNotice {
     /// 待機中にPCがオンになった。既存の「PCが起動しました。」に所要時間を添えて送る。
@@ -32,17 +25,13 @@ pub enum WakeNotice {
 }
 
 impl WakeWatch {
-    /// 待機なしの初期状態。
     pub fn idle() -> Self {
         Self { waiting: false }
     }
 
-    /// 起動を指示したときの更新。WOL送信に成功した呼び出し側だけが呼ぶ。
-    ///
-    /// - すでにPCがオンなら待機を始めない(意味が無い)。残っていた待機があれば
-    ///   終わらせる。
-    /// - オフなら待機を開始する。待機中の再指示はここへもう一度来るため、
-    ///   開始時刻の置き換え(=期限の更新)は呼び出し側で行い、ここでは待機継続を返す。
+    /// 起動指示時の更新。WOL送信に成功した呼び出し側だけが呼ぶ。
+    /// オンなら待機しない(残っていた待機は終わらせる)。オフなら待機開始。
+    /// 再指示時の期限更新(開始時刻の置き換え)は呼び出し側が行うため、ここでは待機継続を返す。
     /// 戻り値は(次の状態, 待機を開始したか)。
     pub fn begin(self, pc_online: bool) -> (Self, bool) {
         if pc_online {
@@ -53,13 +42,9 @@ impl WakeWatch {
     }
 
     /// STATUS確認周期ごとの更新。`elapsed_secs` は指示からの経過秒(単調時計由来)。
-    ///
     /// 戻り値は(次の状態, 通知の要否と種別)。
-    /// - 待機なしなら何も送らない。既存の状態変化通知とは別経路のため、
-    ///   ここで送ると二重通知になる。
-    /// - 待機中のオンで成功を送り、待機を終わらせる。
-    /// - 待機中の期限到達で失敗を送り、待機を終わらせる(1回だけ。以降は
-    ///   待機なしのため重複送信しない)。
+    /// 待機なしでは何も送らない(既存の状態変化通知と二重になるため)。
+    /// 成功・期限到達のどちらでも待機を終わらせる(期限通知は1回だけ)。
     pub fn poll(self, pc_online: bool, elapsed_secs: u64) -> (Self, Option<WakeNotice>) {
         if !self.waiting {
             return (self, None);
@@ -74,33 +59,25 @@ impl WakeWatch {
     }
 }
 
-/// 起動指示を受け付けたときの応答文(日本語)。
-///
-/// 用語は `docs/glossary.md` が正本。利用者は「PCの起動を指示した」と考えており、
-/// WOLは内部の手段のため文言に使わない(旧「WOLを送信しました。」)。
+/// 起動指示を受け付けたときの応答文(日本語)。用語は `docs/glossary.md` が正本。
+/// WOLは内部手段のため文言に使わない。
 pub fn wake_request_text() -> &'static str {
     "PCの起動を指示しました。"
 }
 
-/// 起動指示自体に失敗したときの応答文(日本語)。
-///
-/// 成功文と対になるよう「PCの起動の指示」で始める(旧「WOL送信に失敗しました。」)。
+/// 起動指示自体に失敗したときの応答文(日本語)。成功文と対になる書き出しにする。
 pub fn wake_request_failed_text() -> &'static str {
     "PCの起動の指示に失敗しました。"
 }
 
 /// 待機中にPCがオンになったときの通知文(日本語)。
-///
-/// 既存の `net::pc_state_notification_ja(true)`(「PCが起動しました。」)に
-/// 指示からの所要時間を添えたもの。`elapsed_secs` は単調時計由来の経過秒。
+/// 「PCが起動しました。」へ所要時間を添えたもの。
 pub fn wake_succeeded_text(elapsed_secs: u64) -> String {
     format!("PCが起動しました(所要時間 {})。", format_elapsed_ja(elapsed_secs))
 }
 
-/// 期限までにPCがオンにならなかったときの通知文(日本語)。
-///
-/// Issue #182の指定どおり「指示から N 分経過」を含める。分未満は切り捨てる
-/// (期限が分単位のため。180秒→「3分」、185秒→「3分」)。
+/// 期限到達時の通知文(日本語)。Issue #182指定の「指示から N 分経過」を含める。
+/// 分未満は切り捨てる(180秒→「3分」)。
 pub fn wake_timed_out_text(elapsed_secs: u64) -> String {
     format!(
         "PCが起動しませんでした(指示から {}分経過)。",
@@ -108,8 +85,7 @@ pub fn wake_timed_out_text(elapsed_secs: u64) -> String {
     )
 }
 
-/// 経過秒の日本語表記。「45秒」「1分5秒」「3分」のように、分が0なら秒だけ、
-/// 秒が0なら分だけ出す(「3分0秒」のような読みにくい表記を避ける)。
+/// 経過秒の日本語表記。分が0なら秒だけ、秒が0なら分だけ出す(「3分0秒」を避ける)。
 fn format_elapsed_ja(elapsed_secs: u64) -> String {
     let minutes = elapsed_secs / 60;
     let seconds = elapsed_secs % 60;

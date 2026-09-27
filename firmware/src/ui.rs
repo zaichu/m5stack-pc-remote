@@ -1,9 +1,6 @@
-// タッチUI。STATUS画面、WAKE / REBOOT / SHUTDOWNボタン、危険操作の確認画面を描画する。
-//
-// REBOOTとSHUTDOWNはPCがオンのときだけ表示し、m5stack-pc-bridgeへ送る前に確認画面を挟む。
-//
-// 画面文言は全てASCIIにする。描画に使う`mono_font::ascii`のフォントはASCII範囲外を
-// 全て'?'グリフへ置き換えるため、日本語を書くと文字化けする。
+// タッチUI。STATUS画面、電源ボタン、危険操作の確認画面を描画する。
+// REBOOTとSHUTDOWNはPCがオンのときだけ表示し、確認画面を挟む。
+// 画面文言はASCIIのみ(`mono_font::ascii` は非ASCIIを'?'へ置き換えるため)。
 
 use std::error::Error;
 
@@ -52,16 +49,12 @@ pub struct Button {
 }
 
 impl Button {
-    /// 当たり判定。右端・下端は含めない。
-    ///
-    /// `draw` が使う embedded-graphics の `Rectangle::new(point, size)` は
-    /// 上限が排他(x..x+w)なので、判定だけ `<=` にすると描画より1px広くなり、
-    /// ボタン間の隙間の設計とずれる。
+    /// 当たり判定。右端・下端は含めない(`Rectangle::new` と同じ上限排他。
+    /// `<=` にすると描画より1px広くなる)。
     pub fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.x && x < self.x + self.w as i32 && y >= self.y && y < self.y + self.h as i32
     }
 
-    /// 面 + 明るい縁取りで立体感を出す。`enabled`がfalseなら沈んだ配色にする。
     fn draw(
         &self,
         display: &mut Core2Display<'_>,
@@ -101,7 +94,6 @@ impl Button {
     }
 }
 
-/// 縁取り用に少しだけ明るい色を作る。RGB565の各チャネル上限で飽和させる。
 fn lighten(color: Rgb565) -> Rgb565 {
     Rgb565::new(
         (color.r() + 6).min(31),
@@ -110,12 +102,11 @@ fn lighten(color: Rgb565) -> Rgb565 {
     )
 }
 
-/// メイン画面のボタン。Core2は画面下の物理ボタン帯もタッチ座標として報告する。
-/// 描画エラーの変換。同じ `map_err` を各描画呼び出しで繰り返さないため。
 fn draw_failed<E: std::fmt::Debug>(e: E) -> String {
     format!("draw failed: {e:?}")
 }
 
+// メイン画面のボタン。画面下の物理ボタン帯もタッチ座標として報告される。
 pub const WAKE_BUTTON: Button = Button {
     x: 10,
     y: 180,
@@ -135,9 +126,8 @@ pub const SHUTDOWN_BUTTON: Button = Button {
     h: 48,
 };
 
-/// Main画面の時計帯タップでCalendar画面へ遷移する領域(Issue #173)。
-/// 時計帯(y=134..180)の内側へ絞る。電源ボタン行(y=180..)との間に
-/// 10px以上の不感帯(y=170..180)を確保する。
+/// 時計帯タップでCalendar画面へ遷移する領域(Issue #173)。電源ボタン行(y=180..)
+/// との間に不感帯(y=170..180)を確保する。
 pub const CLOCK_TAP_ZONE: Button = Button {
     x: 24,
     y: 138,
@@ -145,9 +135,8 @@ pub const CLOCK_TAP_ZONE: Button = Button {
     h: 32,
 };
 
-/// Calendar画面のBACKボタン。電源ボタン行(y=180..228)と重ならないよう、
-/// CANCEL_BUTTON(Confirm専用、y=150..210)とは別に小さく取る。
-/// グリッド下端(148)とも重ならない。
+/// Calendar画面のBACKボタン。電源ボタン行(y=180..)とグリッド下端(148)に
+/// 重ならないよう小さく取る(CANCEL_BUTTONはConfirm専用)。
 pub const CALENDAR_BACK_BUTTON: Button = Button {
     x: 20,
     y: 150,
@@ -155,7 +144,6 @@ pub const CALENDAR_BACK_BUTTON: Button = Button {
     h: 26,
 };
 
-/// 確認画面のボタン。
 pub const CANCEL_BUTTON: Button = Button {
     x: 20,
     y: 150,
@@ -197,8 +185,7 @@ impl TelegramState {
     }
 }
 
-/// ヘッダー右側の状態ランプ。色付きの点 + 短いラベルで、行を消費せずに状態を出す。
-/// 次のランプを置ける左端のx座標を返す。
+/// ヘッダー右側の状態ランプ(色付きの点+短いラベル)。次のランプの左端xを返す。
 fn draw_lamp(
     display: &mut Core2Display<'_>,
     right_edge: i32,
@@ -260,11 +247,8 @@ fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<()
     )?;
 
     if let Some(battery) = status.battery {
-        // 充電中・給電中(満充電で充電停止)・電池駆動の3状態を区別し、
-        // どの状態でも残量%を出す。以前は充電中に%を隠して「CHG」だけ
-        // 出していたため充電中の残量を確認できず、満充電で充電停止すると
-        // %表示に戻って「挿したのにCHGが出ない」と見えた(Issue #153)。
-        // ランプ文言の組み立ては `battery` crateに寄せ、hostテストで担保する。
+        // 3状態を区別し、どの状態でも残量%を出す(Issue #153)。
+        // 文言の組み立ては `battery` crateに寄せてhostテストで担保する。
         let state = battery::classify(battery.charging, battery.powered);
         let label = battery::lamp_label(battery.percent, state);
         let color = match state {
@@ -285,7 +269,7 @@ fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<()
     Ok(())
 }
 
-/// PC状態を中央のカードで大きく見せる。枠線の色で状態が一目で分かるようにする。
+/// PC状態を中央カードで大きく見せ、枠線の色で状態を示す。
 fn draw_status_card(
     display: &mut Core2Display<'_>,
     status: &Status<'_>,
@@ -338,28 +322,22 @@ pub struct ClockStrings {
     pub date: String,
 }
 
-/// 時計帯の上端。状態カードは y=52..134、ボタンは y=180 からなので、
-/// y=134..180 の帯を使う。
+/// 状態カード(y=52..134)とボタン行(y=180..)の間の帯を時計に使う。
 const CLOCK_TOP: i32 = 134;
 const CLOCK_HEIGHT: u32 = 46;
-/// `CLOCK_TOP` から見た各行のベースライン。時刻は大きいフォント、
-/// 日付は小さいフォントで中央寄せにする。
+/// `CLOCK_TOP` から見た各行のベースライン。
 const CLOCK_TIME_BASELINE: i32 = CLOCK_TOP + 24;
 const CLOCK_DATE_BASELINE: i32 = CLOCK_TOP + 40;
 
-/// 日付行に出す短い曜日名。0が日曜日。
+/// 0が日曜日。
 const WEEKDAY_NAMES: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
-/// 時刻が信頼できない(SNTP未同期)間に出す表示。
-/// 1970年などの不正な値を現在時刻として出さない。
+/// SNTP未同期の間に出す表示(1970年などの不正な値を出さない)。
 pub const CLOCK_TIME_UNSYNCED: &str = "--:--";
 pub const CLOCK_DATE_UNSYNCED: &str = "--/-- ---";
 
-/// UNIX時刻とUTCオフセット(時間)から、時計の2行を作る。
-///
-/// `unix_secs` がNTP同期前に見える場合は未同期表示を返す。判定は電源操作経路と
-/// 同じ `net::is_ntp_synced` を使う。実行中の時計には依存しない純粋な計算なので、
-/// ハードウェア無しでも整形規則を追える。
+/// UNIX時刻とUTCオフセット(時間)から時計の2行を作る。
+/// NTP未同期なら未同期表示を返す(判定は `net::is_ntp_synced` と共有)。
 pub fn clock_strings(unix_secs: i64, tz_offset_hours: i64) -> ClockStrings {
     if !crate::net::is_ntp_synced(unix_secs) {
         return ClockStrings {
@@ -380,11 +358,8 @@ pub fn clock_strings(unix_secs: i64, tz_offset_hours: i64) -> ClockStrings {
     }
 }
 
-/// UNIX epochからの日数を(year, month, day)へ変換する。
-///
-/// Howard Hinnant の `civil_from_days` を整数演算だけで使う。端末側にtz databaseは
-/// 無いため、UTCオフセットは呼び出し側で適用済みとする。年も返すが、時計帯には
-/// `MM/DD` だけを表示する。
+/// UNIX epochからの日数を(year, month, day)へ変換する(Howard Hinnantの
+/// `civil_from_days`)。UTCオフセットは呼び出し側で適用済みとする。
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
@@ -398,9 +373,8 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// 時計帯だけを描き直す。
-/// 前の分の文字が残らないよう帯全体を塗ってから描く。全画面clearより軽く、
-/// 10秒周期の全画面再描画で増えるちらつきも避けられる。
+/// 時計帯だけを描き直す。前の分の文字が残らないよう帯全体を塗ってから描く
+/// (全画面clearより軽く、ちらつきも少ない)。
 pub fn redraw_clock(
     display: &mut Core2Display<'_>,
     clock: &ClockStrings,
@@ -434,7 +408,7 @@ pub fn redraw_clock(
     Ok(())
 }
 
-/// 月間カレンダーの1日分の日付。年月日すべて含めて持ち、日付変化の検出にも使う。
+/// 月間カレンダーの1日分の日付(日付変化の検出にも使う)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CalendarDay {
     pub year: i64,
@@ -442,9 +416,7 @@ pub struct CalendarDay {
     pub day: u32,
 }
 
-/// UNIX時刻とUTCオフセット(時間)から当日の日付を求める。
-/// SNTP未同期時はNoneを返し、1970年などの誤った日付を作らない。
-/// 判定は時計帯と同じ `net::is_ntp_synced` を使う。
+/// 当日の日付を求める。SNTP未同期時はNone(1970年などの誤った日付を作らない)。
 pub fn calendar_date(unix_secs: i64, tz_offset_hours: i64) -> Option<CalendarDay> {
     if !crate::net::is_ntp_synced(unix_secs) {
         return None;
@@ -455,7 +427,7 @@ pub fn calendar_date(unix_secs: i64, tz_offset_hours: i64) -> Option<CalendarDay
     Some(CalendarDay { year, month, day })
 }
 
-/// うるう年判定。`civil_from_days` と同じグレゴリオ暦(先発)を前提にする。
+/// うるう年判定。`civil_from_days` と同じグレゴリオ暦を前提にする。
 fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
@@ -465,7 +437,6 @@ fn days_in_month(year: i64, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        // うるう年2月だけ29日。
         2 if is_leap_year(year) => 29,
         2 => 28,
         // `civil_from_days` からは来ない経路の保険。panicより安全側の30日。
@@ -474,7 +445,6 @@ fn days_in_month(year: i64, month: u32) -> u32 {
 }
 
 /// Calendar画面に渡す当月分の表示データ。日曜始まり固定、前月/次月なし。
-/// 計算は実行中の時計に依存しない純粋な組み立てにする。
 pub struct CalendarView {
     /// ヘッダータイトル。`YYYY-MM`、未同期時は`----/--`。
     pub title: String,
@@ -486,9 +456,8 @@ pub struct CalendarView {
     pub today: Option<u32>,
 }
 
-/// 当月の月間カレンダーを組み立てる。
-/// 月初の曜日は、当日の通日からの差分で求める。`days_from_civil` のような
-/// 逆変換を増やさず、既存 `civil_from_days` と曜日計算を整合させる。
+/// 当月の月間カレンダーを組み立てる。月初の曜日は当日の通日からの差分で求める
+/// (`days_from_civil` のような逆変換を増やさない)。
 pub fn calendar_view(unix_secs: i64, tz_offset_hours: i64) -> CalendarView {
     let Some(today) = calendar_date(unix_secs, tz_offset_hours) else {
         return CalendarView {
@@ -517,9 +486,7 @@ pub fn calendar_view(unix_secs: i64, tz_offset_hours: i64) -> CalendarView {
     }
 }
 
-/// Calendar画面の配置。ヘッダー(0..26)と電源ボタン行(180..228)は維持し、
-/// 中央にタイトル・曜日行・6行グリッドを置く。グリッド下端(148)は
-/// BACKボタン(y=150..176)や電源ボタンと重ならないようにする。
+/// Calendar画面の配置。グリッド下端(148)はBACKボタン・電源ボタン行と重ならない。
 const CAL_TITLE_BASELINE: i32 = 48;
 const CAL_WEEKDAY_BASELINE: i32 = 64;
 const CAL_GRID_TOP: i32 = 70;
@@ -527,18 +494,14 @@ const CAL_GRID_LEFT: i32 = 27;
 const CAL_COL_W: i32 = 38;
 const CAL_ROW_H: i32 = 13;
 const CAL_NO_CLOCK_BASELINE: i32 = 112;
-/// 曜日行。日曜始まり固定。
 const CAL_WEEKDAY_NAMES: [&str; 7] = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
 
-/// グリッド列の中央x座標。
 fn calendar_cell_center_x(col: usize) -> i32 {
     CAL_GRID_LEFT + col as i32 * CAL_COL_W + CAL_COL_W / 2
 }
 
-/// Calendar画面の描画。ヘッダーと電源ボタン行はMainと同じ座標・条件で描き、
-/// 中央領域にだけ月間カレンダーを出す。トーストとロック表示もMainと同じ扱い。
-/// BACKボタンは `CALENDAR_BACK_BUTTON` を使う。`CANCEL_BUTTON` はConfirm専用で、
-/// 電源ボタン行と重なるためCalendarでは使わない。
+/// Calendar画面の描画。ヘッダー・電源ボタン行・トースト・ロック表示はMainと同じ扱い。
+/// BACKは `CALENDAR_BACK_BUTTON`(`CANCEL_BUTTON` は電源ボタン行と重なるため使わない)。
 pub fn draw_calendar(
     display: &mut Core2Display<'_>,
     status: &Status<'_>,
@@ -587,8 +550,7 @@ pub fn draw_calendar(
                     let row_top = CAL_GRID_TOP + row as i32 * CAL_ROW_H;
                     let is_today = view.today == Some(*day);
                     if is_today {
-                        // 今日のセルだけ背景を塗る。セル単位の矩形なので
-                        // フォントのベースライン位置に依存しない。
+                        // セル単位の矩形で塗るためフォントのベースライン位置に依存しない。
                         Rectangle::new(
                             Point::new(center_x - 12, row_top),
                             Size::new(24, CAL_ROW_H as u32),
@@ -610,11 +572,9 @@ pub fn draw_calendar(
         }
     }
 
-    // BACKボタン。電源ボタン行(y=180..)ともグリッド(下端148)とも重ならない。
-    // `Button::draw` のラベルはボタン中央(y=167付近)に出て、隠れずに見える。
     CALENDAR_BACK_BUTTON.draw(display, "BACK", palette::NEUTRAL, true)?;
 
-    // ロック中はMainと同じく沈めた配色にする。タップ自体はmain.rs側で弾く。
+    // 配色はMainと同じく沈める。タップはmain.rs側で弾く。
     let enabled = !status.locked;
     WAKE_BUTTON.draw(display, "WAKE", palette::ACCENT, enabled)?;
     // REBOOT / SHUTDOWNはMainと同じくPCがオンのときだけ表示する。
@@ -623,8 +583,7 @@ pub fn draw_calendar(
         SHUTDOWN_BUTTON.draw(display, "SHUTDOWN", palette::DANGER, enabled)?;
     }
 
-    // トーストは一時的な結果表示なので、常時表示のロックより優先する。
-    // Main画面とあえて同じ文言・同じ優先順位にする。
+    // トーストは一時的な結果表示なので常時表示のロックより優先する(Mainと同じ優先順位)。
     if let Some(text) = status.toast {
         draw_banner(display, text, palette::ACCENT)?;
     } else if status.locked {
@@ -634,7 +593,6 @@ pub fn draw_calendar(
     Ok(())
 }
 
-/// 画面下部のバナー。トーストとロック表示で共用する。
 fn draw_banner(
     display: &mut Core2Display<'_>,
     text: &str,
@@ -660,11 +618,8 @@ fn draw_banner(
     Ok(())
 }
 
-/// ヘッダー帯(高さ26px)だけを描き直す。バッテリー残量の変化など、
-/// ヘッダー内のランプだけが変わったときに使う。
-/// `draw_header` は帯全体を先に塗りつぶすため、古いランプ文言の長さが
-/// 変わってもゴーストは残らない。全画面clearはしないので、ちらつきと
-/// 転送量(帯分16,640B、全画面の約1/9)が少ない。
+/// ヘッダー帯だけを描き直す。帯全体を塗りつぶすため古いランプ文言のゴーストは残らず、
+/// 全画面clearよりちらつきと転送量(約1/9)が少ない。
 pub fn redraw_header(
     display: &mut Core2Display<'_>,
     status: &Status<'_>,
@@ -685,7 +640,7 @@ pub fn draw_main(
     draw_status_card(display, status)?;
     redraw_clock(display, clock)?;
 
-    // ロック中はボタンを沈めた配色にして、押しても動かないことを見た目でも示す。
+    // ロック中はボタンを沈めた配色にし、押しても動かないことを見た目で示す。
     let enabled = !status.locked;
     WAKE_BUTTON.draw(display, "WAKE", palette::ACCENT, enabled)?;
     // REBOOT / SHUTDOWNはPCがオンのときだけ表示して、誤操作の入口を減らす。

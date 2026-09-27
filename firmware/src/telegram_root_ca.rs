@@ -1,10 +1,7 @@
 // https://api.telegram.org 用にピン留めするルートCA。
-//
-// リーフ証明書や中間証明書ではなく、有効期間が長いルートCAを固定する。
-// Telegramのリーフ証明書が通常更新されても、このファイルの更新は不要にするため。
-//
-// 末尾NULは必要。esp_tls_set_global_ca_store() はNUL終端PEMとして受け取り、
-// 長さにも終端文字を含める。
+// リーフ・中間ではなく有効期間が長いルートCAを固定し、リーフの通常更新では
+// このファイルを更新しなくて済むようにする。
+// 末尾NULは必須(esp_tls_set_global_ca_store() はNUL終端PEMとして受け取る)。
 
 pub const TELEGRAM_ROOT_CA_PEM: &str = concat!(
     "-----BEGIN CERTIFICATE-----\n",

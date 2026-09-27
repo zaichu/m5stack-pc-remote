@@ -1,12 +1,9 @@
 //! HTTP認証失敗が続いたときに、Telegramへアラートを送る。
 //!
-//! bot tokenをWindows側にも置くことになるが、
-//! - このconfig.tomlには既に`shared_secret`(電源操作を直接authorizeする、より強い鍵)がある
-//! - ファイルを読める攻撃者は既にそのPC上におり、`shutdown.exe`を直接実行できる
-//! - 同じtokenはM5Stack側のflash(暗号化なし)に平文で載っており、そちらの方が保護が弱い
-//!
-//! ため、全体のリスクはほとんど変わらないと判断して許容している。詳細は
-//! `docs/security.md` と Issue #43 を参照。
+//! bot tokenをWindows側にも置くが、config.tomlには既により強い `shared_secret`
+//! があり、ファイルを読める攻撃者は既にそのPC上で `shutdown.exe` を直接実行できる。
+//! 同じtokenはM5Stackのflash(暗号化なし)にも平文で載るため、全体のリスクは
+//! ほとんど変わらないと判断して許容している(`docs/security.md`、Issue #43)。
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -15,7 +12,7 @@ use pc_remote_signing::AlertThrottle;
 
 use crate::app_config::AgentConfig;
 
-/// Telegram APIへの接続・応答待ちの上限。電源操作の応答を巻き込まないよう短くする。
+/// Telegram APIへの接続・応答待ちの上限(電源操作の応答を巻き込まないよう短くする)。
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct AlertNotifier {
@@ -47,9 +44,7 @@ impl AlertNotifier {
     }
 
     /// 認証失敗を記録し、必要ならバックグラウンドでアラートを送る。
-    ///
     /// 送信はHTTPSで数秒かかり得るため、リクエスト処理スレッドでは待たない。
-    /// 送信タスクへ渡すため`Arc<Self>`のメソッドにしている。
     pub fn record_auth_failure(self: &Arc<Self>) {
         let Some(count) = self.record() else {
             return;
@@ -67,10 +62,8 @@ impl AlertNotifier {
         });
     }
 
-    /// エラー文字列からbot tokenを伏せる。
-    ///
-    /// `ureq::Error`は変種によってURIをそのまま含む(`BadUri`など)。URLには
-    /// bot tokenが入るため、ログへ出す前に必ず通す。
+    /// エラー文字列からbot tokenを伏せる。`ureq::Error`は変種によってURIを
+    /// そのまま含み、URLにはbot tokenが入るため、ログへ出す前に必ず通す。
     fn redact(&self, message: &str) -> String {
         message.replace(&self.bot_token, "[REDACTED]")
     }
@@ -85,8 +78,8 @@ impl AlertNotifier {
     }
 
     fn send_alert(&self, count: u32) -> Result<(), ureq::Error> {
-        // 通知本文には送信元IPやヘッダー値を含めない。攻撃者が自由に決められる
-        // 文字列を自分のチャットへ流すと、なりすましや誘導の材料になるため。
+        // 本文には送信元IPやヘッダー値を含めない(攻撃者が決められる文字列を
+        // 自分のチャットへ流すとなりすまし・誘導の材料になる)。
         let text = format!(
             "m5stack-pc-bridge: 認証に失敗したリクエストを{count}件検知しました。\n電源操作は実行されていません。"
         );

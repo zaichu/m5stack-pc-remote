@@ -10,26 +10,21 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
-/// これより古いUNIX時刻はNTP未同期とみなす(2023-11-14相当)。
-/// 判定は `is_ntp_synced` に集約しているので、直接比較せずそちらを使う。
+/// これより古いUNIX時刻(2023-11-14より前)はNTP未同期とみなす。
+/// 直接比較せず `is_ntp_synced` を使うこと。
 const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
 
-/// 与えたUNIX時刻がNTP同期済みとみなせるか。
-///
-/// 以前は定数を公開して呼び出し側がそれぞれ比較しており、u64・i64・`<`・`>=` が
-/// 混在していた。判定式が分散すると、閾値を変えたときの更新漏れや符号違いの
-/// 取り違えが起きるため、1関数に寄せる。
+/// NTP同期済みとみなせる時刻か。判定式を1関数へ寄せる(分散すると閾値変更の
+/// 更新漏れや `<`/`>=`・符号の取り違えが起きる)。
 pub fn is_ntp_synced(unix_seconds: i64) -> bool {
     unix_seconds >= MIN_VALID_UNIX_TIME as i64
 }
 
-/// PCの死活確認に使うTCP接続タイムアウト。UI更新ループとTelegramの応答生成で
-/// 同じ値を使う。長くすると画面の更新周期とTelegramの応答が遅くなる。
+/// PC死活確認のTCP接続タイムアウト。長くすると画面更新とTelegram応答が遅くなる。
 pub const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 
-/// PCの死活状態の日本語表記。Telegramの応答・通知・定期レポートで共通に使う。
-/// 用語は `docs/glossary.md` が正本。「オン/オフ」は状態の言葉として使う
-/// (「オンライン/オフライン」は使わない)。
+/// PCの死活状態の日本語表記。用語は `docs/glossary.md` が正本
+/// (状態は「オン/オフ」と書き、「オンライン/オフライン」は使わない)。
 pub fn pc_online_label_ja(online: bool) -> &'static str {
     if online {
         "オン"
@@ -38,8 +33,7 @@ pub fn pc_online_label_ja(online: bool) -> &'static str {
     }
 }
 
-/// PCの状態変化の通知文。状態(オン/オフ)ではなく出来事(起動/停止)で書く。
-/// `pc_online_label_ja` が状態表示用なのに対し、こちらは変化の通知用。
+/// PCの状態変化の通知文。出来事(起動/停止)で書く(状態表示は `pc_online_label_ja`)。
 pub fn pc_state_notification_ja(online: bool) -> &'static str {
     if online {
         "PCが起動しました。"
@@ -48,8 +42,7 @@ pub fn pc_state_notification_ja(online: bool) -> &'static str {
     }
 }
 
-/// PCの死活状態のASCII表記。M5Stackの画面で使うmono_font::asciiは非ASCIIを
-/// `?` に落とすため、画面表示は日本語ではなくこちらを使う。
+/// 画面表示用のASCII表記(`mono_font::ascii` は非ASCIIを `?` へ落とすため)。
 pub fn pc_online_label_ascii(online: bool) -> &'static str {
     if online {
         "ONLINE"
@@ -64,7 +57,6 @@ pub struct Wifi {
 }
 
 impl Wifi {
-    /// station interfaceを設定して起動し、ネットワークが上がるまで待つ。
     /// 初回接続専用。失敗時はModemが破棄されるため、再試行は `connect_retry()` を使う。
     pub fn connect(
         modem: Modem,
@@ -75,11 +67,11 @@ impl Wifi {
         Self::connect_with_modem(modem, nvs, ssid, password)
     }
 
-    /// 前回の接続失敗でModemが破棄されたあと、最初から接続をやり直す。
+    /// 前回の接続失敗後に最初から接続をやり直す。
     ///
     /// # Safety
-    /// 生きている `Wifi` / `Modem` が他にない状態でだけ呼ぶ。初回 `connect()` 失敗後や、
-    /// 前回の `connect_retry()` 失敗後が該当する。
+    /// 生きている `Wifi` / `Modem` が他にない状態でだけ呼ぶこと
+    /// (初回 `connect()` 失敗後や前回の `connect_retry()` 失敗後)。
     pub fn connect_retry(
         nvs: EspDefaultNvsPartition,
         ssid: &str,
@@ -163,12 +155,11 @@ pub fn send_wake_on_lan(mac_text: &str, port: u16) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-/// STATUS相当の疎通確認。接続成功または即時refusedならPCは応答あり、
-/// timeoutなら電源OFFまたは到達不能として扱う。
+/// STATUS相当の疎通確認。接続成功または即時refusedならオン、timeoutならオフ/到達不能。
 pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
-    // IPリテラルならDNSを引かない。ホスト名だと名前解決でブロックし、UIループから
-    // 10秒ごとに呼ばれるここで画面もタッチも止まる(Issue #130-3)。
-    // `to_socket_addrs()` は、制限前にNVSへ書かれたホスト名が残っている場合の互換。
+    // IPリテラルならDNSを引かない。ホスト名の名前解決はブロックし、UIループから
+    // 呼ばれるここで画面もタッチも止まる(Issue #130-3)。
+    // `to_socket_addrs()` は制限前にNVSへ書かれたホスト名が残っている場合の互換。
     if let Ok(addr) = addr_text.parse::<SocketAddr>() {
         return probe(addr, timeout);
     }
@@ -176,8 +167,7 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
     let Ok(addrs) = addr_text.to_socket_addrs() else {
         return false;
     };
-    // A/AAAAの両方を持つホスト名では、先頭1件だけ試すと到達可能な方を
-    // 取りこぼしてオフと誤判定する。順に試して1つでも通れば ONLINE とする。
+    // A/AAAA両方を持つホスト名では先頭1件だけだと取りこぼして誤判定するため順に試す。
     for addr in addrs {
         if probe(addr, timeout) {
             return true;
@@ -186,8 +176,7 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
     false
 }
 
-/// TCP connectで到達性だけを見る。`ConnectionRefused` は「相手は居るが
-/// そのportで待っていない」なので、PCはオンとみなす。
+/// `ConnectionRefused` は「相手は居るがそのportで待っていない」ためオンとみなす。
 fn probe(addr: SocketAddr, timeout: Duration) -> bool {
     match TcpStream::connect_timeout(&addr, timeout) {
         Ok(_) => true,
@@ -195,8 +184,8 @@ fn probe(addr: SocketAddr, timeout: Duration) -> bool {
     }
 }
 
-/// SNTPを開始してシステム時刻を同期する。m5stack-pc-bridgeはtimestampを検証するため、
-/// 署名付きREBOOT/SHUTDOWNは時刻同期後だけ成功する。返したhandleは保持する。
+/// SNTPでシステム時刻を同期する。bridgeはtimestampを検証するため、署名付き
+/// REBOOT/SHUTDOWNは時刻同期後だけ成功する。返したhandleは保持する。
 pub fn start_sntp() -> Result<esp_idf_svc::sntp::EspSntp<'static>, Box<dyn Error>> {
     Ok(esp_idf_svc::sntp::EspSntp::new_default()?)
 }
