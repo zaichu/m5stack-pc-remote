@@ -219,6 +219,7 @@ enum PendingKind {
     Config(ConfigChange),
     /// 確認時に提示した版を保持し、実行直前に取り直したmanifestと突き合わせる。
     /// 正規に署名された別版への差し替えは署名検証をすり抜けるため(Issue #180)。
+    /// 一致したmanifestは再取得せずそのまま書き込みへ渡す(Issue #189)。
     FirmwareUpdate {
         version: String,
     },
@@ -1332,13 +1333,16 @@ impl Client {
     ///
     /// 確認から確定までの間にbridgeの配信物が差し替わると、正規に署名された
     /// 別版でも署名検証は通る。合意した版と違う版を黙って適用しないため、
-    /// 実行直前に取得し直したmanifestの版の一致を要求する。不一致・取得失敗の
-    /// ときは更新せず、`/update` のやり直しを求める(確認は消費済みのため)。
+    /// 実行直前に取得し直したmanifestの版の一致を要求する。一致したmanifestは
+    /// そのまま `execute_ota_update` へ渡して書き込みに使い、以降は再取得しない
+    /// (Issue #189: 再確認とダウンロード開始の間の差し替え窓を塞ぐ)。
+    /// 不一致・取得失敗のときは更新せず、`/update` のやり直しを求める
+    /// (確認は消費済みのため)。
     fn execute_confirmed_ota_update(&self, chat_id: i64, confirmed_version: &str) {
         let pc_ip_address = self.settings.pc_ip_address();
         match crate::ota::fetch_verified_manifest(self.config.as_ref(), &pc_ip_address) {
             Ok(manifest) if manifest.version == confirmed_version => {
-                self.execute_ota_update(chat_id);
+                self.execute_ota_update(chat_id, &manifest);
             }
             Ok(manifest) => {
                 println!(
@@ -1363,9 +1367,10 @@ impl Client {
     }
 
     /// 確認済みのfirmware更新を開始する。成功時はrebootして戻らない。
+    /// `manifest` は `execute_confirmed_ota_update` で版一致まで確認済みのもの。
     ///
     /// 呼び出し時点でlong pollingのHTTPS接続が閉じていること(ヒープ制約、`ota.rs` 冒頭)。
-    fn execute_ota_update(&self, chat_id: i64) {
+    fn execute_ota_update(&self, chat_id: i64, manifest: &pc_remote_signing::OtaManifest) {
         // 進捗表示用のメッセージを1つ立て、以降は editMessageText で書き換える。
         // 新しいメッセージを毎回送るとチャットが進捗で埋まるため。
         //
@@ -1379,7 +1384,7 @@ impl Client {
             None
         };
 
-        let result = self.run_ota_update(chat_id, progress_message_id);
+        let result = self.run_ota_update(chat_id, progress_message_id, manifest);
         if chat_id != 0 {
             self.api.send_message(chat_id, &result);
         }
@@ -1414,8 +1419,14 @@ impl Client {
         *last_text = text;
     }
 
-    /// 電源操作ロックを取り、OTAを実行する。成功時は `restart()` で戻らない。
-    fn run_ota_update(&self, chat_id: i64, progress_message_id: Option<i64>) -> String {
+    /// 電源操作ロックを取り、検証済み `manifest` の版へOTAを実行する。
+    /// 成功時は `restart()` で戻らない。
+    fn run_ota_update(
+        &self,
+        chat_id: i64,
+        progress_message_id: Option<i64>,
+        manifest: &pc_remote_signing::OtaManifest,
+    ) -> String {
         let _guard = lock_power(&self.power_lock);
         let pc_ip_address = self.settings.pc_ip_address();
 
@@ -1445,6 +1456,7 @@ impl Client {
         };
 
         match crate::ota::run_ota_update(
+            manifest,
             self.config.as_ref(),
             &pc_ip_address,
             &mut on_progress,
@@ -1687,7 +1699,8 @@ impl Client {
                 // 先に開始をanswerして接続を閉じてから `execute_ota_update` へ渡す。
                 // ヒープ制約(long polling接続を開いたままOTAを呼ばない)の詳細は
                 // `ota.rs` の冒頭コメントと `poll_once` 内のコメントを参照。
-                // 実行直前にmanifestを取り直し、合意した版との一致を要求する
+                // 実行直前にmanifestを取り直して合意した版との一致を要求し、
+                // 一致したmanifestをそのまま書き込みへ渡す
                 // (`execute_confirmed_ota_update` のコメント参照)。
                 self.api.answer_callback_query(&id, "更新を開始します");
                 self.execute_confirmed_ota_update(chat_id, &version);

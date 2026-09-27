@@ -123,22 +123,21 @@ impl From<OtaImageError> for OtaError {
 
 /// OTAを実行する。**成功時は戻らない**(rebootする)。失敗時だけ `Err` を返す。
 ///
+/// **`manifest` は必ず `fetch_verified_manifest` で検証済みのものを渡すこと**
+/// (`download_and_flash` のコメント参照)。ここではmanifestを再取得しない。
+/// 確認時に検証したmanifestをそのまま書き込みへ使い回し、再確認とダウンロード
+/// 開始の間にbridgeの配信物を差し替える窓を残さないため(Issue #189)。
+///
 /// 呼ぶ前にTelegram long pollingのHTTPS接続を閉じ切ること(module冒頭参照)。
 /// `on_progress` / `on_applying` の失敗ではOTAを止めない契約。
 pub fn run_ota_update(
+    manifest: &OtaManifest,
     config: &AppConfig,
     pc_ip_address: &str,
     on_progress: &mut dyn FnMut(&OtaManifest, u64),
     on_applying: &mut dyn FnMut(&OtaManifest),
 ) -> Result<(), OtaError> {
-    let manifest = fetch_verified_manifest(config, pc_ip_address)?;
-    download_and_flash(
-        &manifest,
-        config,
-        pc_ip_address,
-        on_progress,
-        on_applying,
-    )?;
+    download_and_flash(manifest, config, pc_ip_address, on_progress, on_applying)?;
     println!("ota: update complete, rebooting");
     esp_idf_svc::hal::reset::restart()
 }
