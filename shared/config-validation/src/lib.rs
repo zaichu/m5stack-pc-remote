@@ -141,10 +141,16 @@ mod tests {
     #[test]
     fn composes_status_addr() {
         assert_eq!(compose_status_addr("192.168.1.50", 80), "192.168.1.50:80");
-        assert_eq!(compose_status_addr("192.168.1.50", 8080), "192.168.1.50:8080");
+        assert_eq!(
+            compose_status_addr("192.168.1.50", 8080),
+            "192.168.1.50:8080"
+        );
         assert_eq!(compose_status_addr("10.0.0.1", 65535), "10.0.0.1:65535");
         // 前後の空白はtrimする(Telegramのコピペ経由の値を想定)。
-        assert_eq!(compose_status_addr("  192.168.1.50 \n", 80), "192.168.1.50:80");
+        assert_eq!(
+            compose_status_addr("  192.168.1.50 \n", 80),
+            "192.168.1.50:80"
+        );
     }
 
     #[test]
@@ -152,7 +158,11 @@ mod tests {
         // Issue #130-3の方針: IPリテラル連結のため、`check_pc_online` の
         // `SocketAddr` 高速経路(DNSを引かない)に乗ること。
         use std::net::SocketAddr;
-        for (ip, port) in [("192.168.1.50", 80), ("10.0.0.1", 8080), ("172.16.0.2", 65535)] {
+        for (ip, port) in [
+            ("192.168.1.50", 80),
+            ("10.0.0.1", 8080),
+            ("172.16.0.2", 65535),
+        ] {
             let addr = compose_status_addr(ip, port);
             assert!(
                 addr.parse::<SocketAddr>().is_ok(),
@@ -198,12 +208,18 @@ mod tests {
     fn rejects_invalid_brightness_percent() {
         // Issue #167: 境界値は 0/100 が有効、101 が無効。
         assert!(validate_brightness_percent("101").is_err(), "101は範囲外");
-        assert!(validate_brightness_percent("255").is_err(), "u8範囲内だが範囲外");
+        assert!(
+            validate_brightness_percent("255").is_err(),
+            "u8範囲内だが範囲外"
+        );
         assert!(validate_brightness_percent("256").is_err(), "u8範囲外");
         assert!(validate_brightness_percent("-1").is_err(), "負数");
         assert!(validate_brightness_percent("abc").is_err(), "数値でない");
         assert!(validate_brightness_percent("").is_err(), "空文字");
-        assert!(validate_brightness_percent("80%").is_err(), "単位付きは拒否");
+        assert!(
+            validate_brightness_percent("80%").is_err(),
+            "単位付きは拒否"
+        );
         assert!(validate_brightness_percent("8.5").is_err(), "小数は拒否");
     }
 
@@ -239,7 +255,10 @@ mod tests {
         // `validate_brightness_percent` を素通りした不正値は上限へ丸める。
         // 下限(消灯側)へ倒さないこと。
         assert_eq!(brightness_percent_to_dcdc3_mv(101), BRIGHTNESS_DCDC3_MAX_MV);
-        assert_eq!(brightness_percent_to_dcdc3_mv(u8::MAX), BRIGHTNESS_DCDC3_MAX_MV);
+        assert_eq!(
+            brightness_percent_to_dcdc3_mv(u8::MAX),
+            BRIGHTNESS_DCDC3_MAX_MV
+        );
     }
 
     #[test]

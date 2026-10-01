@@ -183,7 +183,10 @@ impl std::fmt::Display for OtaImageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OtaImageError::SizeMismatch { expected, actual } => {
-                write!(f, "firmware size mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "firmware size mismatch: expected {expected}, got {actual}"
+                )
             }
             OtaImageError::ShaMismatch => write!(f, "firmware sha256 mismatch"),
         }
@@ -197,17 +200,14 @@ impl std::error::Error for OtaImageError {}
 /// 署名の検証はしない。呼び出し側はこの後に [`verify_manifest`] を必ず呼び、
 /// 通ってからダウンロードへ進むこと。
 pub fn parse_manifest_json(bytes: &[u8]) -> Result<OtaManifest, OtaManifestError> {
-    let manifest: OtaManifest =
-        serde_json::from_slice(bytes).map_err(|e| OtaManifestError::InvalidJson(short_json_error(&e)))?;
+    let manifest: OtaManifest = serde_json::from_slice(bytes)
+        .map_err(|e| OtaManifestError::InvalidJson(short_json_error(&e)))?;
     check_manifest_fields(&manifest)?;
     Ok(manifest)
 }
 
 /// parse済みmanifestのHMAC署名を検証する。失敗したらダウンロードへ進まないこと。
-pub fn verify_manifest(
-    manifest: &OtaManifest,
-    secret: &[u8],
-) -> Result<(), OtaManifestError> {
+pub fn verify_manifest(manifest: &OtaManifest, secret: &[u8]) -> Result<(), OtaManifestError> {
     if verify_manifest_signature(
         secret,
         &manifest.version,
@@ -865,8 +865,8 @@ mod alert_throttle_tests {
 mod ota_tests {
     use super::{
         boot_self_test_passed, ota_confirm_text, parse_manifest_json, sign_manifest,
-        verify_manifest, verify_ota_image, BootChecks, OtaImageError, OtaManifest, OtaManifestError,
-        StreamingSha256,
+        verify_manifest, verify_ota_image, BootChecks, OtaImageError, OtaManifest,
+        OtaManifestError, StreamingSha256,
     };
 
     const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
@@ -1399,9 +1399,7 @@ mod bridge_status_tests {
             br#"{"agent_online":true,"agent":"m5stack-pc-bridge","status":"ok"}"#
         ));
         // 余分な空白・改行があっても受け入れること。
-        assert!(bridge_status_online(
-            b"{\n  \"agent_online\" : true\n}"
-        ));
+        assert!(bridge_status_online(b"{\n  \"agent_online\" : true\n}"));
     }
 
     #[test]
@@ -1444,8 +1442,8 @@ mod bridge_status_tests {
 #[cfg(test)]
 mod status_text_tests {
     use super::{
-        status_buttons, status_message_html, PcControlStatus, PcStatusSnapshot,
-        STATUS_CB_REBOOT, STATUS_CB_REFRESH, STATUS_CB_SHUTDOWN, STATUS_CB_UNLOCK, STATUS_CB_WAKE,
+        status_buttons, status_message_html, PcControlStatus, PcStatusSnapshot, STATUS_CB_REBOOT,
+        STATUS_CB_REFRESH, STATUS_CB_SHUTDOWN, STATUS_CB_UNLOCK, STATUS_CB_WAKE,
     };
 
     fn status(pc_online: bool, bridge_online: bool, locked: bool) -> PcControlStatus {
@@ -1457,8 +1455,19 @@ mod status_text_tests {
         .into()
     }
 
-    fn render(pc_online: bool, bridge_online: bool, locked: bool, label: &str, battery: &str) -> String {
-        status_message_html(status(pc_online, bridge_online, locked), label, battery, "0.13.0")
+    fn render(
+        pc_online: bool,
+        bridge_online: bool,
+        locked: bool,
+        label: &str,
+        battery: &str,
+    ) -> String {
+        status_message_html(
+            status(pc_online, bridge_online, locked),
+            label,
+            battery,
+            "0.13.0",
+        )
     }
 
     fn data(status: PcControlStatus) -> Vec<Vec<&'static str>> {
@@ -1476,7 +1485,10 @@ mod status_text_tests {
         );
         assert_eq!(
             data(status(true, true, false)),
-            vec![vec![STATUS_CB_REBOOT, STATUS_CB_SHUTDOWN], vec![STATUS_CB_REFRESH]]
+            vec![
+                vec![STATUS_CB_REBOOT, STATUS_CB_SHUTDOWN],
+                vec![STATUS_CB_REFRESH]
+            ]
         );
     }
 
@@ -1501,7 +1513,10 @@ mod status_text_tests {
             "🖥️ <b>PC ・ オン</b>\n⚠️ 再起動・シャットダウンはできません\nPC側の操作サービスが応答していません\n\n📱 <b>M5Stack</b>\n🔋 100% 満充電・給電中\n🏷️ v0.13.0"
         );
         // 電源操作が通らない状態なので、押せるのは更新だけ。
-        assert_eq!(data(status(true, false, false)), vec![vec![STATUS_CB_REFRESH]]);
+        assert_eq!(
+            data(status(true, false, false)),
+            vec![vec![STATUS_CB_REFRESH]]
+        );
     }
 
     #[test]

@@ -314,18 +314,9 @@ mod tests {
 
     #[test]
     fn status_ja_distinguishes_three_states() {
-        assert_eq!(
-            status_ja(95, PowerState::Charging),
-            "95% 充電中"
-        );
-        assert_eq!(
-            status_ja(100, PowerState::Powered),
-            "100% 満充電・給電中"
-        );
-        assert_eq!(
-            status_ja(95, PowerState::OnBattery),
-            "95% 電池駆動"
-        );
+        assert_eq!(status_ja(95, PowerState::Charging), "95% 充電中");
+        assert_eq!(status_ja(100, PowerState::Powered), "100% 満充電・給電中");
+        assert_eq!(status_ja(95, PowerState::OnBattery), "95% 電池駆動");
     }
 
     #[test]
@@ -335,10 +326,7 @@ mod tests {
         let state = classify(false, true);
         assert_eq!(percent, 100);
         assert_eq!(lamp_label(percent, state), "PWR 100%");
-        assert_eq!(
-            status_ja(percent, state),
-            "100% 満充電・給電中"
-        );
+        assert_eq!(status_ja(percent, state), "100% 満充電・給電中");
 
         // USB抜: 4.114V・給電なし・充電なし → 電池駆動の表示。
         let percent = battery_percent(4.114, false, false);
@@ -369,14 +357,23 @@ mod tests {
     #[test]
     fn redraws_only_when_display_values_change() {
         // 全く同じ値なら描き直さない(ちらつき防止)。
-        assert!(!needs_redraw(display(95, false, false), display(95, false, false)));
+        assert!(!needs_redraw(
+            display(95, false, false),
+            display(95, false, false)
+        ));
         // percent・給電・充電のいずれかが変われば描き直す。
-        assert!(needs_redraw(display(95, false, false), display(90, false, false)));
+        assert!(needs_redraw(
+            display(95, false, false),
+            display(90, false, false)
+        ));
         assert!(needs_redraw(
             display(95, false, false),
             display(95, true, false)
         ));
-        assert!(needs_redraw(display(95, true, false), display(95, true, true)));
+        assert!(needs_redraw(
+            display(95, true, false),
+            display(95, true, true)
+        ));
     }
 
     #[test]

@@ -156,9 +156,7 @@ where
     match raw.parse() {
         Ok(value) => *target = value,
         // 無言でfallbackすると壊れたNVS値(" 80" 等)に気づけないためログを出す。
-        Err(_) => println!(
-            "NVS `{key}` の値を解釈できませんでした。ビルド時configを使います"
-        ),
+        Err(_) => println!("NVS `{key}` の値を解釈できませんでした。ビルド時configを使います"),
     }
 }
 
@@ -169,9 +167,7 @@ fn read_string(nvs: &EspNvs<NvsDefault>, key: &str) -> Option<String> {
         return None;
     }
     if len > MAX_STRING_LEN {
-        println!(
-            "NVS `{key}` が長すぎます({len} > {MAX_STRING_LEN})。ビルド時configを使います"
-        );
+        println!("NVS `{key}` が長すぎます({len} > {MAX_STRING_LEN})。ビルド時configを使います");
         return None;
     }
 

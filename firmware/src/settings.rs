@@ -38,7 +38,10 @@ pub struct RuntimeSettings {
 }
 
 impl RuntimeSettings {
-    pub fn new(app_config: &AppConfig, partition: EspDefaultNvsPartition) -> Result<Self, EspError> {
+    pub fn new(
+        app_config: &AppConfig,
+        partition: EspDefaultNvsPartition,
+    ) -> Result<Self, EspError> {
         let nvs = EspNvs::new(partition, NAMESPACE, true)?;
         Ok(Self {
             state: Mutex::new(State {

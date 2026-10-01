@@ -86,7 +86,9 @@ impl OtaError {
             OtaError::Image(_) => {
                 "ダウンロードしたfirmwareが壊れています。更新は中止しました。".to_string()
             }
-            OtaError::Ota(_) => "firmwareの書き込みに失敗しました。更新は中止しました。".to_string(),
+            OtaError::Ota(_) => {
+                "firmwareの書き込みに失敗しました。更新は中止しました。".to_string()
+            }
         }
     }
 }
@@ -265,11 +267,14 @@ fn download_and_flash(
                     .map_err(|e| OtaError::Ota(e.to_string()))?;
                 received += read as u64;
                 let percent = pc_remote_signing::ota_progress_percent(received, manifest.size);
-                if percent >= reported_percent.saturating_add(
-                    pc_remote_signing::OTA_PROGRESS_STEP_PERCENT,
-                ) {
+                if percent
+                    >= reported_percent.saturating_add(pc_remote_signing::OTA_PROGRESS_STEP_PERCENT)
+                {
                     reported_percent = percent;
-                    println!("ota: received {received}/{} bytes ({percent}%)", manifest.size);
+                    println!(
+                        "ota: received {received}/{} bytes ({percent}%)",
+                        manifest.size
+                    );
                     // `?` を使うと、Telegramが一時的に応答しないだけで更新が巻き戻る。
                     on_progress(manifest, received);
                 }
@@ -282,7 +287,10 @@ fn download_and_flash(
     // Issue #143: 刻みに届かない端数が残り、94%で止まったまま再起動した。
     // 端数は必ず出るので、ループ後に刻みと無関係に1回通知して100%にする。
     on_progress(manifest, received);
-    println!("ota: download complete ({received}/{} bytes)", manifest.size);
+    println!(
+        "ota: download complete ({received}/{} bytes)",
+        manifest.size
+    );
 
     // 不一致なら `?` で抜け、`update` のDrop(=abort)でboot切替は行われない。
     verify_ota_image(manifest, received, &hashing.finish_hex())?;
@@ -307,8 +315,7 @@ fn with_signed_get<T>(
     timeout: Duration,
     f: impl FnOnce(&mut HttpResponse<&mut EspHttpConnection>) -> Result<T, OtaError>,
 ) -> Result<T, OtaError> {
-    let timestamp = crate::bridge_client::unix_now()
-        .map_err(|_| OtaError::ClockNotSynced)?;
+    let timestamp = crate::bridge_client::unix_now().map_err(|_| OtaError::ClockNotSynced)?;
     let request_nonce = crate::bridge_client::nonce();
     let signature = pc_remote_signing::sign_request(
         config.bridge_shared_secret.as_bytes(),

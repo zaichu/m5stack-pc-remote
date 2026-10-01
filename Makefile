@@ -7,11 +7,22 @@ install: install-hooks
 install-hooks:
 	bash ./scripts/install-git-hooks.sh
 
+# Cargo workspace定義が無いため、test と同じく各crateを明示列挙する。
 fmt:
 	cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml
+	cargo fmt --manifest-path firmware/Cargo.toml
+	cargo fmt --manifest-path shared/pc-remote-signing/Cargo.toml
+	cargo fmt --manifest-path shared/config-validation/Cargo.toml
+	cargo fmt --manifest-path shared/battery/Cargo.toml
+	cargo fmt --manifest-path shared/wake-check/Cargo.toml
 
 fmt-check:
 	cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml --check
+	cargo fmt --manifest-path firmware/Cargo.toml --check
+	cargo fmt --manifest-path shared/pc-remote-signing/Cargo.toml --check
+	cargo fmt --manifest-path shared/config-validation/Cargo.toml --check
+	cargo fmt --manifest-path shared/battery/Cargo.toml --check
+	cargo fmt --manifest-path shared/wake-check/Cargo.toml --check
 
 clippy:
 	cargo clippy --manifest-path m5stack-pc-bridge/Cargo.toml --all-targets -- -D warnings
