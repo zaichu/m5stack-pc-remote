@@ -73,7 +73,10 @@ pub fn wake_request_failed_text() -> &'static str {
 /// 待機中にPCがオンになったときの通知文(日本語)。
 /// 「PCが起動しました。」へ所要時間を添えたもの。
 pub fn wake_succeeded_text(elapsed_secs: u64) -> String {
-    format!("PCが起動しました(所要時間 {})。", format_elapsed_ja(elapsed_secs))
+    format!(
+        "PCが起動しました(所要時間 {})。",
+        format_elapsed_ja(elapsed_secs)
+    )
 }
 
 /// 期限到達時の通知文(日本語)。Issue #182指定の「指示から N 分経過」を含める。
@@ -130,9 +133,13 @@ mod tests {
     fn poll_without_wait_never_notifies() {
         // 待機がないときのPC状態変化では何も送らない(既存の通知と二重にしない)。
         // オン・オフ・期限超過のいずれの入力でも通知なし・状態不変。
-        for (online, elapsed) in
-            [(false, 0), (true, 0), (false, 179), (false, 180), (true, 10_000)]
-        {
+        for (online, elapsed) in [
+            (false, 0),
+            (true, 0),
+            (false, 179),
+            (false, 180),
+            (true, 10_000),
+        ] {
             let (next, notice) = WakeWatch::idle().poll(online, elapsed);
             assert_eq!(next, WakeWatch::idle(), "online={online} elapsed={elapsed}");
             assert_eq!(notice, None, "online={online} elapsed={elapsed}");
@@ -192,10 +199,7 @@ mod tests {
     fn request_texts_follow_glossary() {
         // 実際の文面を固定する。WOLは内部手段のためユーザー向け文言に使わない。
         assert_eq!(wake_request_text(), "PCの起動を指示しました。");
-        assert_eq!(
-            wake_request_failed_text(),
-            "PCの起動の指示に失敗しました。"
-        );
+        assert_eq!(wake_request_failed_text(), "PCの起動の指示に失敗しました。");
         assert!(!wake_request_text().contains("WOL"));
         assert!(!wake_request_failed_text().contains("WOL"));
     }
@@ -203,22 +207,13 @@ mod tests {
     #[test]
     fn succeeded_text_appends_elapsed() {
         // 既存の「PCが起動しました」に所要時間を添える。
-        assert_eq!(
-            wake_succeeded_text(45),
-            "PCが起動しました(所要時間 45秒)。"
-        );
+        assert_eq!(wake_succeeded_text(45), "PCが起動しました(所要時間 45秒)。");
         assert_eq!(
             wake_succeeded_text(65),
             "PCが起動しました(所要時間 1分5秒)。"
         );
-        assert_eq!(
-            wake_succeeded_text(180),
-            "PCが起動しました(所要時間 3分)。"
-        );
-        assert_eq!(
-            wake_succeeded_text(0),
-            "PCが起動しました(所要時間 0秒)。"
-        );
+        assert_eq!(wake_succeeded_text(180), "PCが起動しました(所要時間 3分)。");
+        assert_eq!(wake_succeeded_text(0), "PCが起動しました(所要時間 0秒)。");
     }
 
     #[test]

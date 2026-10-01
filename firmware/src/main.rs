@@ -469,8 +469,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 None => None,
                 Some(started_at) => {
                     let elapsed_secs = started_at.elapsed().as_secs();
-                    let (next, notice) = wake_check::WakeWatch { waiting: true }
-                        .poll(now_online, elapsed_secs);
+                    let (next, notice) =
+                        wake_check::WakeWatch { waiting: true }.poll(now_online, elapsed_secs);
                     if !next.waiting {
                         telegram::clear_wake_watch(&wake_watch_shared);
                     }
@@ -480,10 +480,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             // 成功時は安定通知側を既済に進めたため、下の安定通知は回さない。
             // そうしないと10秒後に同じオンが「PCが起動しました。」として
             // もう一度飛ぶ。
-            let wake_succeeded = matches!(
-                wake_notice,
-                Some((wake_check::WakeNotice::Succeeded, _))
-            );
+            let wake_succeeded =
+                matches!(wake_notice, Some((wake_check::WakeNotice::Succeeded, _)));
             match wake_notice {
                 Some((wake_check::WakeNotice::Succeeded, elapsed_secs)) => {
                     notified_online = Some(true);
@@ -517,9 +515,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                             if let Some(notifier) = notifier.as_ref() {
                                 // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
                                 // 文言の正本は `net::pc_state_notification_ja`。
-                                notifier.notify(
-                                    net::pc_state_notification_ja(now_online).to_string(),
-                                );
+                                notifier
+                                    .notify(net::pc_state_notification_ja(now_online).to_string());
                             }
                         }
                     }

@@ -164,8 +164,7 @@ pub fn boot_notification_text() -> String {
 pub fn is_configured(config: &AppConfig) -> bool {
     // trimしないと ` token ` のような値がplaceholder判定をすり抜ける(Issue #130-1)。
     let token = config.telegram_bot_token.trim();
-    let user_id =
-        config_validation::normalize_telegram_user_id(&config.telegram_allowed_user_id);
+    let user_id = config_validation::normalize_telegram_user_id(&config.telegram_allowed_user_id);
     !token.is_empty()
         && token != PLACEHOLDER_TOKEN
         && !user_id.is_empty()
@@ -784,8 +783,7 @@ impl DailyReport {
             return None;
         }
 
-        let online =
-            net::check_pc_online(&settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
+        let online = net::check_pc_online(&settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
         Some((
             day,
             format!("定期レポート\nPC: {}", net::pc_online_label_ja(online)),
