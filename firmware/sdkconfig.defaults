@@ -13,11 +13,15 @@ CONFIG_COMPILER_CXX_RTTI=y
 # OTA(無線更新)対応。partitions.csv でota_0/ota_1/otadataを定義している(Issue #41/#79)。
 #
 # ファイル名は素の相対パスでは解決できない。cargo-embuildが生成する合成CMake
-# プロジェクトの実体は target/ 配下の一時ディレクトリにあり、ESP-IDFの
+# プロジェクトの実体は target/ 配下の一時ディレクトリ
+# (target/<triple>/<profile>/build/<pkg>/<fingerprint>/out)にあり、ESP-IDFの
 # project.cmakeはそこを基準にCONFIG_PARTITION_TABLE_CUSTOM_FILENAMEを解決する
-# (このプロジェクトのfirmware/ディレクトリではない)。Kconfigの$(VAR)展開で、
-# 実際のcrateディレクトリを指すPROJECT_DIR環境変数(cargoが子プロセスへ渡す)を
-# 使って絶対パスへ展開する。
+# (このプロジェクトのfirmware/ディレクトリではない)。つまり`..`の段数は
+# out/からcrateディレクトリまでの深さであり、cargoのbuild dir構成で変わる:
+#   旧構成 build/esp-idf-sys-<fp>/out …… 6段でfirmware/へ届く(現行esp toolchain)
+#   新構成 build/esp-idf-sys/<fp>/out …… 1段深く7段必要になる(Issue #213)
+# Kconfigの$(VAR)展開で絶対パスにする案は、$(PROJECT_DIR)がこの経路では展開
+# されずリテラルのままparttool.pyへ届くため使えない(実ビルドで確認、Issue #213)。
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../../../../../partitions.csv"
 # OTA後、起動自己診断を通過するまで新slotをcommitしない運用にする(esp_ota_mark_app_*)。
