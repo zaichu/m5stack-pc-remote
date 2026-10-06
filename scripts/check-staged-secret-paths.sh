@@ -11,6 +11,7 @@ secret_path_patterns=(
   '(^|/)[^/]*service-account[^/]*\.json$'
   '(^|/)[^/]*\.pem$'
   '(^|/)[^/]*\.key$'
+  '(^|/)[^/]*\.bin$'
 )
 
 allowed_templates=(

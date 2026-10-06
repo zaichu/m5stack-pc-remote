@@ -24,6 +24,9 @@ firmware/dependencies.lock
 # scripts/package-firmware.sh が作るOTA配信用イメージ。build成果物なのでcommitしない。
 firmware/dist/
 
+# flash/NVSダンプはWi-FiパスワードやHMAC secretを平文で含むため、誤add防止で無視する。
+*.bin
+
 # Local env and secret files.
 .env
 .env.*
