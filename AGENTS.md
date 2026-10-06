@@ -19,6 +19,7 @@
 - ソースコードの識別子は英語、コメントとドキュメントは日本語または英語のどちらでもよいが、ユーザー向け説明は日本語を優先する。
 - `.githooks/` はローカルで早期に事故を止める入口であり、品質ゲートの正本は `Makefile` と `.claude/skills/verify/SKILL.md` に置く。
 - `git add .` / `git add -A` は使わない。stageは明示パス指定または `git add -p` にする。
+- firmwareの版を上げるPRをマージしたら、`make firmware-build` と `make firmware-package` で `firmware/dist/` を更新し、Windows PCの `%ProgramData%\m5stack-pc-bridge\` へ `firmware.bin` と `firmware.version` を配置して `make ota-readiness-check` が通るまでをリリース完了とする。bridgeへの配置はWindows PC上の作業のため、エージェントが実行できない場合はユーザーへ依頼する。
 - mainへ直接pushしない。短期作業branchとPRを使う。ブランチ名は `{type}/{issue-number}-{slug}` とし、Issue には着手時に Assignee と「着手します PR #xx」コメントで明示的に紐付ける。PR本文には `Fixes #N` / `Refs #N` を必ず含める。
 - 実装を担当しないエージェントが設計・レビュー・リリース判断を担当する運用を標準とする。**誰がどの役割かは `docs/agent-roles.md` が唯一の正本**で、ここには書かない(複製すると片方だけ古くなる)。
 - 設計エージェントがコード、テスト、スクリプト、ドキュメントを直接書いた場合は、PR作成前または作成後に実装した本人以外へ逆レビューを依頼する。できない場合は理由と残リスクをPR本文に書く。
