@@ -193,6 +193,18 @@ espflash monitor --port /dev/ttyUSB0
 espflash write-bin --port /dev/ttyUSB0 0x0 backup-2mb-<日付>.bin
 ```
 
+erase-flashを伴わずpartition tableだけをin-placeで更新する場合の注意
+(2026-10-01、旧factory構成からtwo-OTA構成への実機更新で確認。Issue #211):
+
+- NVSサイズが縮小する変更(0x6000→0x4000など)では、`m5remote` namespace自体は
+  残ってもキーエントリが欠落し得る。欠落するとfirmwareは起動時にビルド時configへ
+  フォールバックするため、config.tomlが実値でない環境ではWi-Fiが
+  `ESP_ERR_TIMEOUT` で一切接続しなくなる。
+- 作業前にNVS領域全体を退避する(`espflash read-flash --port /dev/ttyUSB0 0x9000
+  <旧size> /tmp/nvs-backup.bin`)。書き換え後は起動ログの `NVS設定を読み込みました`
+  とWi-Fi接続を確認し、欠落していれば退避したイメージの先頭<新size>を書き戻すか、
+  `scripts/provision-firmware-nvs.py --write` で再投入する。
+
 移行後は、実機での確認結果(日時・確認範囲)をIssue #79に記録してからmergeする
 (実機を伴わない自動テストだけでは、実際のチップへ書き込んだときの動作を保証
 できないため)。
