@@ -12,7 +12,9 @@ pub fn path() -> PathBuf {
     crate::exe_dir_file("audit.log")
 }
 
-/// 認証成功かつ`confirm=true`のREBOOT/SHUTDOWNだけを1行追記する。
+/// 認証成功かつ`confirm=true`のREBOOT/SHUTDOWN/SLEEPだけを1行追記する。
+/// SLEEPの受理応答(200)は実行成功ではなく受理の意味で、実行の成否は応答に
+/// 含めず、この追記(`result=ok` / `result=failed`)とサーバログにだけ残す。
 ///
 /// 書く項目は timestamp / action / dry_run / result のみ。shared_secret、signature、
 /// nonce、request body、Telegram tokenは書かない。

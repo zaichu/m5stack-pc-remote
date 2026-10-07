@@ -3,9 +3,9 @@
 ## 基本方針
 
 - m5stack-pc-bridgeをインターネットへ直接公開しない。
-- LAN内でもshutdown/rebootは無認証にしない。
+- LAN内でもshutdown/reboot/sleepは無認証にしない。
 - 秘密鍵、Wi-Fiパスワード、実MACアドレスをGitに入れない。
-- REBOOT / SHUTDOWN はユーザー確認UIを必須にする。
+- REBOOT / SHUTDOWN / SLEEP はユーザー確認UIを必須にする。
 
 ## HMAC署名
 
@@ -23,7 +23,7 @@ m5stack-pc-bridge側の検証:
 - nonce が未使用であること。
 - HMAC-SHA256署名が一致すること。
 - 許可されたpathだけを実行すること。
-- `POST /reboot` と `POST /shutdown` は、署名済みJSON本文の `confirm: true` を必須にすること。
+- `POST /reboot` と `POST /shutdown` と `POST /sleep` は、署名済みJSON本文の `confirm: true` を必須にすること。
 - request bodyは128byteに制限し、`confirm` 以外のJSON fieldを拒否すること。
 - 認証失敗時のHTTP response bodyは理由を出さず、固定文言だけを返すこと。詳細理由はsecretを含まない内部ログにだけ残す。
 
@@ -38,8 +38,8 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 - `TELEGRAM_BOT_TOKEN` と `TELEGRAM_ALLOWED_USER_ID` は `firmware/config.toml` に置き、m5stack-pc-bridge用の `BRIDGE_SHARED_SECRET` とは分離する。Telegramや外部中継先には `BRIDGE_SHARED_SECRET` を渡さない。
 - どちらもSerialログ、画面表示、コミット、PR本文には出さない。`config.example.toml` にはダミー値だけを置く。
 - `from.id` を文字列として `TELEGRAM_ALLOWED_USER_ID` と厳密一致で比較する。一致しないupdateは処理も返信もしない。`callback_query`(インラインボタン)の `from.id` も同様に厳密一致で検証し、一致しない場合はpending確認を操作せず、`answerCallbackQuery` で短い拒否文言だけ返す(`sendMessage` による通常返信はしない)。
-- `/reboot` / `/shutdown` は即実行しない。6文字の確認nonceをRAM上だけに生成し、`TELEGRAM_CONFIRM_TTL_SECS`（秒、既定 60秒）で失効させる。確認メッセージには確定ボタン(再起動/シャットダウン)とキャンセルボタンのインラインキーボードを付ける。
-- 確定ボタン・キャンセルボタン・従来の確認コマンド (`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>`) のいずれも、nonce一致・TTL内・actionの種類(reboot/shutdown)一致のときだけ実行する。ボタンの `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの1-64byte制限内)で、古いメッセージのボタンや別action/別nonceのボタンは一致しないため通らない。
+- `/reboot` / `/shutdown` / `/sleep` は即実行しない。6文字の確認nonceをRAM上だけに生成し、`TELEGRAM_CONFIRM_TTL_SECS`（秒、既定 60秒）で失効させる。確認メッセージには確定ボタン(再起動/シャットダウン/スリープ)とキャンセルボタンのインラインキーボードを付ける。
+- 確定ボタン・キャンセルボタン・従来の確認コマンド (`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` / `/confirm_sleep <nonce>`) のいずれも、nonce一致・TTL内・actionの種類(reboot/shutdown/sleep)一致のときだけ実行する。ボタンの `callback_data` は `confirm:<reboot|shutdown|sleep>:<nonce>` / `cancel:<reboot|shutdown|sleep>:<nonce>` の形式(Telegramの1-64byte制限内)で、古いメッセージのボタンや別action/別nonceのボタンは一致しないため通らない。
 - nonceは実行の成功/失敗、キャンセル、またはnonce不一致・期限切れに関わらず1回で消費し、以降の確定ボタン・キャンセルボタン・`/confirm_*` では再利用できない。これにより同じ確認要求へのnonce総当たりを防ぐ。
 - `callback_query` はTelegramの仕様どおり、認可の成否や処理結果によらず必ず `answerCallbackQuery` を呼び、クライアント側のボタン読み込み状態を終える。
 - 確認実行時はm5stack-pc-bridge向けHMAC署名付きPOSTを使うため、m5stack-pc-bridge側の `confirm: true` 必須条件・timestamp・nonce検証はTelegram経由でも同様に効く。
@@ -69,7 +69,8 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 
 ## 監査ログ
 
-- m5stack-pc-bridgeは、認証成功かつ `confirm: true` の `POST /reboot` / `POST /shutdown` だけを実行ファイル横の `audit.log` へ記録します。
+- m5stack-pc-bridgeは、認証成功かつ `confirm: true` の `POST /reboot` / `POST /shutdown` / `POST /sleep` だけを実行ファイル横の `audit.log` へ記録します。
 - 記録項目は時刻、操作種別、`dry_run`、結果のみです。`shared_secret`、署名、nonce、リクエスト本文、Telegram tokenは記録しません。
-- 操作前の監査ログ追記に失敗した場合、reboot/shutdownは実行せず `500` を返します（fail-closed）。ディスクフルや権限エラーが疑われるため、`audit.log` のサイズと空き容量を確認してください。
+- `/sleep` の200応答の意味は実行成功ではなく受理(実行開始)です。実行の成否は応答に含められず、監査ログの追記(`result=ok` / `result=failed`)とサーバログにだけ残ります。
+- 操作前の監査ログ追記に失敗した場合、reboot/shutdown/sleepは実行せず `500` を返します（fail-closed）。ディスクフルや権限エラーが疑われるため、`audit.log` のサイズと空き容量を確認してください。
 - `audit.log` は約1MBで `audit.log.1` へ1世代ローテーションします。長期保存が必要な場合はWindows側で別途退避してください。

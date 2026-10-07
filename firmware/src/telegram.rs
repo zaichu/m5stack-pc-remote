@@ -3,7 +3,7 @@
 //
 // 守るべき挙動:
 //   - `from.id` が許可ユーザーIDと一致するupdateだけ処理する
-//   - /reboot と /shutdown と /update は即実行せず、単回使用の確認nonceを発行する
+//   - /reboot と /shutdown と /sleep と /update は即実行せず、単回使用の確認nonceを発行する
 //   - 確認は成功・失敗・期限切れのいずれでも消費し、再利用させない
 //   - 起動直後の最初のgetUpdates結果はoffset更新だけにし、起動前に届いた古い命令を実行しない
 //   - bot tokenとメッセージ内容をログへ出さない
@@ -135,7 +135,42 @@ pub fn begin_wake_watch(wake_watch: &SharedWakeWatch, pc_online: bool) {
     *lock_wake_watch(wake_watch) = next.waiting.then(Instant::now);
 }
 
-/// 操作ロック。有効な間はWAKE / REBOOT / SHUTDOWNを一切実行しない。
+/// スリープ指示後のオフ通知の抑止状態(Issue #217)。スリープを指示した直後、
+/// PCはTCP probeに応答しなくなり「オフ」に見えるため、「PCが停止しました。」が
+/// 誤って飛ぶ。`wake_watch` と同じくUIループとpollingスレッドで共有し、
+/// UIループのSTATUS確認で読む。オフになるのを待ってから(`Armed`)、
+/// オフ確認後はオンに戻るまで(`Suppressing`)抑止する。
+/// leaf扱い(握ったまま送信系を呼ばない)。
+pub type SharedSleepWatch = Arc<Mutex<wake_check::SleepWatch>>;
+
+/// **ガードを呼び出した文の外へ持ち出さないこと。** `wake_watch` と同じ理由
+/// (Issue #182)。呼び出し側は下の2つの公開関数を使う。
+fn lock_sleep_watch(
+    sleep_watch: &Mutex<wake_check::SleepWatch>,
+) -> std::sync::MutexGuard<'_, wake_check::SleepWatch> {
+    sleep_watch.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// スリープ指示を受け付けて抑止を始める。bridgeが受理した呼び出し側だけが呼ぶ。
+pub fn begin_sleep_watch(sleep_watch: &SharedSleepWatch) {
+    let mut guard = lock_sleep_watch(sleep_watch);
+    *guard = (*guard).begin();
+}
+
+/// STATUS確認周期ごとの更新。オフ通知を抑止すべきならtrueを返す。
+/// ガードはこの関数内で一度だけ取り、その中で `poll`→書き戻しまで行う。
+/// 読み取りと書き戻しで二度取ると、UI側が読んだ直後にTelegram側が
+/// `begin_sleep_watch` してもUI側の書き戻しで `begin` が消せる。
+/// オフになるのを待ってから(`Armed`)、オフ確認後はオンに戻るまで
+/// (`Suppressing`)抑止する。オンに戻ったら抑止を終わらせる。
+pub fn poll_sleep_watch(sleep_watch: &SharedSleepWatch, pc_online: bool) -> bool {
+    let mut guard = lock_sleep_watch(sleep_watch);
+    let (next, suppress) = (*guard).poll(pc_online);
+    *guard = next;
+    suppress
+}
+
+/// 操作ロック。有効な間はWAKE / REBOOT / SHUTDOWN / SLEEPを一切実行しない。
 /// Telegramの `/lock` `/unlock` で切り替え、本体パネル操作にも効く。
 ///
 /// 状態はメモリ上だけで保持し、M5Stackを再起動すると解除される。再起動できる
@@ -432,6 +467,9 @@ pub struct Client {
     battery: SharedBattery,
     /// 起動指示後の待機開始時刻(UIループと共有。`/wake` で書き、UIループで読む)。
     wake_watch: SharedWakeWatch,
+    /// スリープ指示後のオフ通知の抑止状態(UIループと共有。`/sleep` 受理で書き、
+    /// UIループのSTATUS確認で読む。オフになるのを待ってから、オンに戻るまで抑止する)。
+    sleep_watch: SharedSleepWatch,
     /// 未許可アクセスの検知数と、直近でアラートを送った時刻。
     unauthorized_alerts: AlertThrottle,
 }
@@ -910,6 +948,7 @@ impl Client {
         https: HttpsLock,
         battery: SharedBattery,
         wake_watch: SharedWakeWatch,
+        sleep_watch: SharedSleepWatch,
     ) -> Self {
         Self {
             last_update_id: 0,
@@ -926,6 +965,7 @@ impl Client {
             settings,
             battery,
             wake_watch,
+            sleep_watch,
             // 抑制ポリシー(閾値・間隔)はbridgeと共有する。
             unauthorized_alerts: AlertThrottle::default(),
         }
@@ -1148,6 +1188,7 @@ impl Client {
         let confirm_command = match action {
             PowerAction::Reboot => "/confirm_reboot",
             PowerAction::Shutdown => "/confirm_shutdown",
+            PowerAction::Sleep => "/confirm_sleep",
         };
         let text = format!(
             "PCを{}しますか？\nボタンを押すと実行します。\n手入力する場合: {confirm_command} {nonce}",
@@ -1215,7 +1256,18 @@ impl Client {
         let _guard = lock_power(&self.power_lock);
         let pc_ip_address = self.settings.pc_ip_address();
         match bridge_client::send_command(action, self.config.as_ref(), &pc_ip_address) {
-            Ok(code) if bridge_client::is_accepted(code) => bridge_client::accepted_text(action),
+            Ok(code) if bridge_client::is_accepted(code) => {
+                // スリープ受理後はPCがTCP probeに応答しなくなり「オフ」に見える。
+                // UIループのSTATUS確認で「PCが停止しました。」が誤って飛ばないよう、
+                // 抑止を始める(オフになるのを待ってから、オンに戻るまで。
+                // `poll_sleep_watch` 参照。bridgeの200は受理の意味で実行成功ではない)。
+                // 本体パネルのWAKE指示(`begin_wake_watch`)と同じく、
+                // 電源操作ロックを握ったまま短時間だけ共有状態を更新する。
+                if action == PowerAction::Sleep {
+                    begin_sleep_watch(&self.sleep_watch);
+                }
+                bridge_client::accepted_text(action)
+            }
             Ok(code) => bridge_client::rejected_text(action, code),
             Err(e) => {
                 println!("bridge command failed: {e}");
@@ -1501,8 +1553,10 @@ impl Client {
             "/wake" => self.do_wake(chat_id),
             "/reboot" => self.request_confirmation(chat_id, PowerAction::Reboot),
             "/shutdown" => self.request_confirmation(chat_id, PowerAction::Shutdown),
+            "/sleep" => self.request_confirmation(chat_id, PowerAction::Sleep),
             "/confirm_reboot" => self.handle_confirmation(chat_id, PowerAction::Reboot, args),
             "/confirm_shutdown" => self.handle_confirmation(chat_id, PowerAction::Shutdown, args),
+            "/confirm_sleep" => self.handle_confirmation(chat_id, PowerAction::Sleep, args),
             "/update" => self.handle_update_command(chat_id),
             "/confirm_update" => self.handle_update_confirmation(chat_id, args),
             "/set_ip" => self.handle_set_command(chat_id, SettingKind::PcIp, args),

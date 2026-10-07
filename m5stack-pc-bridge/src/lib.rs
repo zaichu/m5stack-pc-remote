@@ -5,6 +5,7 @@ pub mod auth;
 pub mod firmware;
 pub mod power;
 pub mod server;
+pub mod suspend;
 
 #[cfg(windows)]
 pub mod windows_service;

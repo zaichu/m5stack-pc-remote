@@ -1,4 +1,4 @@
-// m5stack-pc-bridgeへ送るHMAC署名付き電源操作(REBOOT / SHUTDOWN)。
+// m5stack-pc-bridgeへ送るHMAC署名付き電源操作(REBOOT / SHUTDOWN / SLEEP)。
 //
 // 署名のcanonical文字列とHMAC計算は `pc-remote-signing` (shared/) に実装があり、
 // m5stack-pc-bridge側の検証処理と同じ実装を使う。本文は常に `{"confirm":true}`。
@@ -48,6 +48,7 @@ impl PowerActionLabel for PowerAction {
         match self {
             PowerAction::Reboot => "再起動",
             PowerAction::Shutdown => "シャットダウン",
+            PowerAction::Sleep => "スリープ",
         }
     }
 
@@ -55,6 +56,7 @@ impl PowerActionLabel for PowerAction {
         match self {
             PowerAction::Reboot => "PCの再起動",
             PowerAction::Shutdown => "PCのシャットダウン",
+            PowerAction::Sleep => "PCのスリープ",
         }
     }
 }

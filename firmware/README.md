@@ -241,11 +241,11 @@ espflash reset --port /dev/ttyUSB0
 Phase 1相当(Wi-Fi / WOL / STATUS / タッチUI)に加え、既存C++実装の設計を移植した
 以下を実装済み:
 
-- **REBOOT / SHUTDOWN**(`src/bridge_client.rs`): m5stack-pc-bridgeへのHMAC-SHA256署名付きPOST（wire protocol は `shared/pc-remote-signing/src/lib.rs` を正本とする）。本文 `{"confirm":true}` 必須をC++版と揃えてある。NTP未同期のクロックでは送信前に弾く。
-  画面上はPCがオンのときだけボタンが出て、確認画面(CANCEL/OK)を必ず経由する。
+- **REBOOT / SHUTDOWN / SLEEP**(`src/bridge_client.rs`): m5stack-pc-bridgeへのHMAC-SHA256署名付きPOST（wire protocol は `shared/pc-remote-signing/src/lib.rs` を正本とする）。本文 `{"confirm":true}` 必須をC++版と揃えてある。NTP未同期のクロックでは送信前に弾く。SLEEPのbridge側200応答は実行成功ではなく受理(実行開始)の意味で、実行の成否は応答に含められない。受理後はオフになるのを待ってから、オンに戻るまで「PCが停止しました。」の通知を抑止する。
+  画面上はPCがオンのときだけボタンが出て、確認画面(CANCEL/OK)を必ず経由する。SLEEPはTelegramのみで、本体ボタンは出さない。
 - **Telegram連携**(`src/telegram.rs`): Bot APIへのアウトバウンドHTTPS long polling。
-  `/status` `/wake` `/reboot` `/shutdown` `/update` `/confirm_reboot <nonce>`
-  `/confirm_shutdown <nonce>` `/confirm_update <nonce>` とインラインキーボードによる確認。`from.id` が
+  `/status` `/wake` `/reboot` `/shutdown` `/sleep` `/update` `/confirm_reboot <nonce>`
+  `/confirm_shutdown <nonce>` `/confirm_sleep <nonce>` `/confirm_update <nonce>` とインラインキーボードによる確認。`from.id` が
   `TELEGRAM_ALLOWED_USER_ID` と一致しない更新は実行しない。確認nonceは単回使用・TTL付きで、
    一致・不一致・期限切れのいずれでも消費する。M5Stackの起動後の最初のバッチはoffsetを進めるだけで
    実行しない。TLSはルートCAをピン留めして検証する(`src/telegram_root_ca.rs`、

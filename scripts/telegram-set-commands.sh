@@ -37,13 +37,14 @@ fi
 #   そこをコピーして使う導線にする。
 # - /lock /unlock: 設定変更と同じく日常操作ではない。/settings が現在のロック状態と
 #   切り替えコマンドを表示する。
-# - /confirm_reboot /confirm_shutdown /confirm_update /confirm_set: nonce引数が必須の手入力
+# - /confirm_reboot /confirm_shutdown /confirm_sleep /confirm_update /confirm_set: nonce引数が必須の手入力
 #   フォールバック。通常はインラインボタンで確定する。
 commands='[
   {"command":"status","description":"PCの状態表示"},
   {"command":"wake","description":"PCの起動"},
   {"command":"reboot","description":"PCの再起動"},
   {"command":"shutdown","description":"PCのシャットダウン"},
+  {"command":"sleep","description":"PCのスリープ"},
   {"command":"update","description":"ファームウェア更新"},
   {"command":"settings","description":"設定"}
 ]'

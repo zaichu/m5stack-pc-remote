@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     body::Bytes,
@@ -17,9 +17,16 @@ use crate::{
     audit_log,
     auth::{verify_request, AuthConfig, AuthError, NonceStore},
     firmware::{self, FirmwarePaths},
-    power::{run_power_action, PowerAction, PowerResult},
+    power::{accepted_sleep_result, run_power_action, PowerAction, PowerResult},
 };
 use pc_remote_signing::PowerAction as SharedPowerAction;
+
+/// `SetSuspendState` はスリープからの復帰まで戻らないため、`/sleep` は
+/// 受理応答(200)を先に返し、別スレッドで遅延実行する。firmware側の
+/// `REQUEST_TIMEOUT`(3秒)より先に応答を届けるための措置。
+/// 応答の書き込み中にスリープすると応答が届かないため、実行前にこの秒数だけ
+/// 待つ(500ms〜1s程度)。値を変えたらこのコメントの根拠も更新する。
+const SLEEP_RESPONSE_GRACE: Duration = Duration::from_millis(750);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -81,6 +88,7 @@ pub fn router_with_firmware_paths(config: AgentConfig, firmware: FirmwarePaths) 
         router = match action {
             SharedPowerAction::Reboot => router.route(action.path(), post(reboot)),
             SharedPowerAction::Shutdown => router.route(action.path(), post(shutdown)),
+            SharedPowerAction::Sleep => router.route(action.path(), post(sleep)),
         };
     }
     router.layer(DefaultBodyLimit::max(128)).with_state(state)
@@ -232,6 +240,16 @@ async fn shutdown(
     command(state, method, uri, headers, body, PowerAction::Shutdown).await
 }
 
+async fn sleep(
+    State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    command(state, method, uri, headers, body, PowerAction::Sleep).await
+}
+
 /// `command`のblockingパートでの失敗。どちらも500を返すが、`Audit`は
 /// 電源操作を実行していないことを意味する。
 enum CommandFailure {
@@ -255,6 +273,13 @@ async fn command(
             };
             if !request.confirm {
                 return (StatusCode::BAD_REQUEST, "confirm must be true").into_response();
+            }
+
+            // `SetSuspendState` はスリープからの復帰まで戻らないため、
+            // sleepだけは受理応答を先に返す(下の `sleep_accepted` 参照)。
+            // reboot/shutdownは従来どおり実行完了後に200を返す。
+            if action == PowerAction::Sleep {
+                return sleep_accepted(state).await;
             }
 
             // 監査ログも電源操作(shutdown.exeの起動)もblocking I/Oのため、
@@ -310,6 +335,59 @@ async fn command(
             (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
         }
     }
+}
+
+/// `/sleep` の受理応答。`SetSuspendState` は復帰まで戻らないため200を先に返し、
+/// `suspend` は別スレッドで `SLEEP_RESPONSE_GRACE` 後に実行する。
+/// 200の意味は実行成功ではなく受理(実行開始)で、本文の `result` も
+/// `"accepted"` にする。実行の成否は応答に含められず、監査ログの追記と
+/// tracingにだけ残る。`dry_run` では実行スレッドを作らない。
+/// 監査ログを残せないときは実行せず500を返す(fail-closed、他actionと同様)。
+async fn sleep_accepted(state: AppState) -> Response {
+    let dry_run = state.dry_run;
+    let audit =
+        tokio::task::spawn_blocking(move || audit_log::append("sleep", dry_run, "accepted")).await;
+    match audit {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            tracing::error!("failed to write audit log: {err}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to write audit log",
+            )
+                .into_response();
+        }
+        Err(join_err) => {
+            tracing::error!("power command task failed: {join_err}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "power command task failed",
+            )
+                .into_response();
+        }
+    }
+
+    let response = (StatusCode::OK, Json(accepted_sleep_result(dry_run))).into_response();
+    if !dry_run {
+        // tokioのblockingプールを復帰まで塞がないよう専用OSスレッドで実行する。
+        std::thread::spawn(|| {
+            std::thread::sleep(SLEEP_RESPONSE_GRACE);
+            match run_power_action(PowerAction::Sleep, false) {
+                Ok(_) => {
+                    if let Err(err) = audit_log::append("sleep", false, "ok") {
+                        tracing::error!("failed to write audit log result: {err}");
+                    }
+                }
+                Err(err) => {
+                    tracing::error!("sleep suspend failed after accepted response: {err}");
+                    if let Err(log_err) = audit_log::append("sleep", false, "failed") {
+                        tracing::error!("failed to write audit log result: {log_err}");
+                    }
+                }
+            }
+        });
+    }
+    response
 }
 
 fn verify_headers(

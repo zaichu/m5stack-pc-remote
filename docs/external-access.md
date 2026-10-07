@@ -44,13 +44,14 @@ M5Stackが `getUpdates` を定期実行またはlong pollingし、許可ユー�
 - `/wake` — Wake-on-LANを送信
 - `/reboot` — 確認後にPCを再起動
 - `/shutdown` — 確認後にPCをシャットダウン
+- `/sleep` — 確認後にPCをスリープ(Telegramのみ。本体ボタンは対象外)
 - `/update` — 確認後にfirmwareを更新(OTA)
 - `/lock` — 電源操作を一時的に禁止
 - `/unlock` — `/lock` を解除
-- `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` — 確認の手入力フォールバック（ボタンでも可）
+- `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` / `/confirm_sleep <nonce>` — 確認の手入力フォールバック（ボタンでも可）
 - `/confirm_update <nonce>` — `/update` の確認の手入力フォールバック（ボタンでも可）
 
-`/reboot` と `/shutdown` と `/update` は即実行しません。M5Stackは日本語の確認メッセージを返し、短時間だけ有効な確認nonceを生成します。メッセージには「再起動」/「シャットダウン」ボタンと「キャンセル」ボタンのインラインキーボードが付き、タップ1回で確定/キャンセルできます。
+`/reboot` と `/shutdown` と `/sleep` と `/update` は即実行しません。M5Stackは日本語の確認メッセージを返し、短時間だけ有効な確認nonceを生成します。メッセージには「再起動」/「シャットダウン」/「スリープ」ボタンと「キャンセル」ボタンのインラインキーボードが付き、タップ1回で確定/キャンセルできます。
 
 例:
 
@@ -106,14 +107,16 @@ M5Stack IP: 192.168.1.50
 
 `/wake` はM5Stackから既存のWake-on-LAN処理を呼びます。PCがオフでもM5Stackが生きていれば実行できます。
 
-## REBOOT / SHUTDOWN
+## REBOOT / SHUTDOWN / SLEEP
 
-`/reboot` / `/shutdown` は以下の二段階です。
+`/reboot` / `/shutdown` / `/sleep` は以下の二段階です。
 
 1. Telegramで操作要求を受ける。
 2. M5Stackが確認nonce付きメッセージを、インラインキーボード(確定ボタン/キャンセルボタン)付きで返す。
-3. 許可ユーザーが確定ボタンをタップするか、`/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を送る。
+3. 許可ユーザーが確定ボタンをタップするか、`/confirm_reboot <nonce>`、`/confirm_shutdown <nonce>`、`/confirm_sleep <nonce>` を送る。
 4. M5Stackがm5stack-pc-bridgeへ既存のHMAC署名付きPOSTを送る。
+
+`/sleep` のbridge側は `shutdown.exe` ではなく `SetSuspendState` のAPI呼び出しで実行する。`SetSuspendState` は復帰まで戻らないため、bridgeは受理応答(200)を先に返し、応答送信後に別スレッドで短い遅延(750ms)を置いてからスリープを実行する。200の意味は実行成功ではなく受理(実行開始)で、本文の `result` も `"accepted"` になる。実行の成否は応答に含められず、監査ログの追記とサーバログにだけ残る。スリープ指示の直後、PCはTCP probeに応答しなくなり「オフ」に見えるため、M5Stackはオフになるのを待ってから(`Armed`)、オフ確認後はオンに戻るまで(`Suppressing`)「PCが停止しました。」の通知を抑止する(復帰の「PCが起動しました。」は送る)。指示後にオフにならないまま一定回数(`SLEEP_ARM_MAX_POLLS`)のSTATUS確認を超えたら抑止をやめ、後の本物のオフ通知を妨げない。
 
 キャンセルボタンをタップした場合はpending確認だけを消費し、m5stack-pc-bridgeへは何も送りません。ボタン経由(`callback_query`)でも `from.id` を `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、Telegram仕様に従って `answerCallbackQuery` を必ず呼びます。m5stack-pc-bridge側の `confirm: true` 必須条件は維持します。
 
@@ -204,9 +207,9 @@ M5Stack IP: 192.168.1.50
 - `from.id` が `TELEGRAM_ALLOWED_USER_ID` と一致しないupdateは無視し、返信しない。`update_id` は次回 `offset` として保持し、再処理しない。M5Stackの起動直後の最初の1バッチは、起動前に届いたコマンドを実行しないよう、offset調整のみ行い実行はしない。
 - `/status` はPCのオン/オフ、Wi-Fi状態、M5Stack local IPを返す。TCP connect probeを使う。
 - `/wake` はWake-on-LAN送信処理を呼び、成功/失敗を返信する。
- - `/reboot` / `/shutdown` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_SECS`（秒、既定 60秒）でTTL)を発行し、確定/キャンセルのインラインキーボード付きで `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` を案内する。
-- 確定ボタン・キャンセルボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、m5stack-pc-bridgeへのHMAC署名付きPOSTを呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
-- ボタンの `callback_data` は `confirm:<reboot|shutdown>:<nonce>` / `cancel:<reboot|shutdown>:<nonce>` の形式(Telegramの64byte制限内)。`callback_query` の `from.id` もメッセージと同様に `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、一致しない場合はpending確認を操作せず、Telegram仕様どおり `answerCallbackQuery` だけ短い拒否文言付きで返す(通常のメッセージ返信はしない)。
+ - `/reboot` / `/shutdown` / `/sleep` は即実行せず、6文字の確認nonce(RAM上のみ、`TELEGRAM_CONFIRM_TTL_SECS`（秒、既定 60秒）でTTL)を発行し、確定/キャンセルのインラインキーボード付きで `/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` / `/confirm_sleep <nonce>` を案内する。
+- 確定ボタン・キャンセルボタン・`/confirm_reboot <nonce>` / `/confirm_shutdown <nonce>` / `/confirm_sleep <nonce>` のいずれも、nonce一致・TTL内・action一致のときだけ実行し、m5stack-pc-bridgeへのHMAC署名付きPOSTを呼ぶ。成功/失敗/キャンセル/nonce不一致/期限切れのいずれでもnonceを消費し、再利用・ブルートフォースを防ぐ。
+- ボタンの `callback_data` は `confirm:<reboot|shutdown|sleep>:<nonce>` / `cancel:<reboot|shutdown|sleep>:<nonce>` の形式(Telegramの64byte制限内)。`callback_query` の `from.id` もメッセージと同様に `TELEGRAM_ALLOWED_USER_ID` と厳密一致で検証し、一致しない場合はpending確認を操作せず、Telegram仕様どおり `answerCallbackQuery` だけ短い拒否文言付きで返す(通常のメッセージ返信はしない)。
 - HTTP失敗時は5秒から60秒への指数バックオフを行い、画面状態を `Telegram: error` にする。
 - Telegram APIとの通信はTLSでサーバー証明書チェーンを検証する。ルートCAは `firmware/src/telegram_root_ca.rs` に埋め込んだ「Go Daddy Root Certificate Authority - G2」(2037-12-31まで有効な自己署名ルート)を使う。`api.telegram.org` の葉証明書自体はおよそ年1回更新されるが、ルートCAを固定していれば葉証明書の更新だけでは検証は壊れない。
 - Wake-on-LAN送信・m5stack-pc-bridgeへの署名付きPOST・PC状態確認は `firmware/src/net.rs` / `bridge_client.rs` に置く。UIとTelegramからの電源操作は直列化し、m5stack-pc-bridgeが応答しない場合でもUIやTelegram処理を長時間ブロックしないよう短いtimeoutを設定する。

@@ -448,16 +448,22 @@ fn short_json_error(e: &serde_json::Error) -> String {
 pub enum PowerAction {
     Reboot,
     Shutdown,
+    Sleep,
 }
 
 impl PowerAction {
-    pub const ALL: [PowerAction; 2] = [PowerAction::Reboot, PowerAction::Shutdown];
+    pub const ALL: [PowerAction; 3] = [
+        PowerAction::Reboot,
+        PowerAction::Shutdown,
+        PowerAction::Sleep,
+    ];
 
     /// callback_dataや監査ログで使う識別子(`:` 区切りで解析するため小文字)。
     pub fn slug(self) -> &'static str {
         match self {
             PowerAction::Reboot => "reboot",
             PowerAction::Shutdown => "shutdown",
+            PowerAction::Sleep => "sleep",
         }
     }
 
@@ -466,6 +472,7 @@ impl PowerAction {
         match self {
             PowerAction::Reboot => "/reboot",
             PowerAction::Shutdown => "/shutdown",
+            PowerAction::Sleep => "/sleep",
         }
     }
 

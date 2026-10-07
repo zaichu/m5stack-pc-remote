@@ -76,6 +76,10 @@ fn start_online_services(
     // 起動指示後の待機開始時刻。画面ボタンからの指示はUIループ、`/wake` からの
     // 指示はpollingスレッドで書き、UIループのSTATUS確認で読む(Issue #182)。
     wake_watch: &telegram::SharedWakeWatch,
+    // スリープ指示後のオフ通知の抑止状態。`/sleep` 受理でpollingスレッドが書き、
+    // UIループのSTATUS確認で読む(Issue #217)。オフになるのを待ってから、
+    // オフ確認後はオンに戻るまで抑止する。
+    sleep_watch: &telegram::SharedSleepWatch,
 ) {
     if sntp.is_none() {
         // m5stack-pc-bridgeはtimestampを検証するため、電源操作前に時計同期が必要になる。
@@ -107,6 +111,7 @@ fn start_online_services(
             https_lock.clone(),
             battery.clone(),
             wake_watch.clone(),
+            sleep_watch.clone(),
         );
         let state_handle = Arc::clone(telegram_state);
         // long pollingでUIやSTATUS更新を止めないよう、Telegramは専用スレッドで動かす。
@@ -223,6 +228,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // pollingスレッドが書き、UIループのSTATUS確認で読む(Issue #182)。
     // 初期値はNone(待機なし)。
     let wake_watch_shared: telegram::SharedWakeWatch = Arc::new(Mutex::new(None));
+    // スリープ指示後のオフ通知の抑止状態。`/sleep` 受理でpollingスレッドが書き、
+    // UIループのSTATUS確認で読む(Issue #217)。初期値は抑止なし。
+    let sleep_watch_shared: telegram::SharedSleepWatch =
+        Arc::new(Mutex::new(wake_check::SleepWatch::idle()));
     if !telegram::is_configured(app_config.as_ref()) {
         println!("telegram: disabled (token or user id is a placeholder)");
     }
@@ -258,6 +267,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &https_lock,
             &battery_shared,
             &wake_watch_shared,
+            &sleep_watch_shared,
         );
     }
 
@@ -368,6 +378,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &https_lock,
                     &battery_shared,
                     &wake_watch_shared,
+                    &sleep_watch_shared,
                 );
             }
         }
@@ -503,20 +514,35 @@ fn main() -> Result<(), Box<dyn Error>> {
             // 画面表示は即座に切り替えるが、Telegram通知だけは同じ結果を
             // NOTIFY_STABLE_POLLS回連続で観測してから送る。瞬断やPCの再起動中の
             // 短い揺れで通知が連投されるのを防ぐ。
+            //
+            // スリープ指示後のオフ遷移では「PCが停止しました。」を送らない
+            // (Issue #217)。スリープ直後のオフは意図した結果であり停止ではない。
+            // オフになるのを待ってから(`Armed`)、オフ確認後はオンに戻るまで
+            // (`Suppressing`)抑止し、復帰の「PCが起動しました。」は抑止しない。
+            // 抑止中も既済に進める(溜まったstreakで抑止明けに飛ぶのを防ぐ)。
+            // **ガードは `poll_sleep_watch` の中で一度だけ取り、その中で
+            // `poll`→書き戻しまで行う。**
+            let suppress_off = telegram::poll_sleep_watch(&sleep_watch_shared, now_online);
             if !wake_succeeded {
-                match notified_online {
-                    None => notified_online = Some(now_online),
-                    Some(prev) if prev == now_online => notify_streak = 0,
-                    Some(_) => {
-                        notify_streak += 1;
-                        if notify_streak >= NOTIFY_STABLE_POLLS {
-                            notified_online = Some(now_online);
-                            notify_streak = 0;
-                            if let Some(notifier) = notifier.as_ref() {
-                                // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
-                                // 文言の正本は `net::pc_state_notification_ja`。
-                                notifier
-                                    .notify(net::pc_state_notification_ja(now_online).to_string());
+                if suppress_off {
+                    notified_online = Some(false);
+                    notify_streak = 0;
+                } else {
+                    match notified_online {
+                        None => notified_online = Some(now_online),
+                        Some(prev) if prev == now_online => notify_streak = 0,
+                        Some(_) => {
+                            notify_streak += 1;
+                            if notify_streak >= NOTIFY_STABLE_POLLS {
+                                notified_online = Some(now_online);
+                                notify_streak = 0;
+                                if let Some(notifier) = notifier.as_ref() {
+                                    // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
+                                    // 文言の正本は `net::pc_state_notification_ja`。
+                                    notifier.notify(
+                                        net::pc_state_notification_ja(now_online).to_string(),
+                                    );
+                                }
                             }
                         }
                     }
