@@ -749,6 +749,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "windows-service",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
