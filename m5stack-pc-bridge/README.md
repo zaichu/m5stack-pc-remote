@@ -1,7 +1,7 @@
 # m5stack-pc-bridge
 
 Windows PC側で常駐するRust製Windows Serviceです。M5Stack Core2から届く`REBOOT` /
-`SHUTDOWN`リクエストをHMAC-SHA256署名、timestamp、nonceで検証してから実行します。
+`SHUTDOWN` / `SLEEP`リクエストをHMAC-SHA256署名、timestamp、nonceで検証してから実行します。
 M5Stack側のfirmwareは `firmware/` を参照してください。
 
 ## セットアップ
@@ -75,9 +75,11 @@ Stop-Service M5StackPcBridge
 
 ## 監査ログ
 
-認証成功かつ `confirm: true` の `POST /reboot` / `POST /shutdown` は、実行ファイルと
+認証成功かつ `confirm: true` の `POST /reboot` / `POST /shutdown` / `POST /sleep` は、実行ファイルと
 同じディレクトリの `audit.log` へ追記します。記録するのは時刻、操作種別、`dry_run`、
 結果のみで、`shared_secret`、署名、nonce、リクエスト本文、Telegram tokenは書きません。
+`/sleep` の200応答の意味は実行成功ではなく受理(実行開始)です。実行の成否は応答に含められず、
+監査ログの追記とサーバログにだけ残ります。
 
 監査ログを書けない場合、m5stack-pc-bridgeは電源操作を実行せず `500` を返します。
 `audit.log` が約1MBを超えると、書き込み前に `audit.log.1` へ1世代だけローテーションします。
@@ -87,6 +89,7 @@ Stop-Service M5StackPcBridge
 - `GET /status`
 - `POST /reboot`
 - `POST /shutdown`
+- `POST /sleep` (S3スリープ。`shutdown.exe` ではなく `SetSuspendState` のAPI呼び出しで実行。`SetSuspendState` は復帰まで戻らないため、受理応答(200)を先に返し、応答送信後に別スレッドで短い遅延を置いてから実行する。200は受理の意味で実行成功ではない)
 - `GET /firmware/manifest` (OTA Phase 2: 要HMAC認証)
 - `GET /firmware` (OTA Phase 2: 要HMAC認証)
 

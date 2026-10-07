@@ -18,7 +18,8 @@ Windows 11 Pro PC
   └─ Rust m5stack-pc-bridge
        ├─ GET /status
        ├─ POST /reboot
-       └─ POST /shutdown
+       ├─ POST /shutdown
+       └─ POST /sleep
 ```
 
 将来的な外部操作は以下の経路を想定します。
@@ -88,9 +89,10 @@ copy config.example.toml config.toml
 cargo build --release
 ```
 
-`config.toml` の `shared_secret` を32文字以上の長いランダム値に変更してください。`config.example.toml` のプレースホルダー値や短すぎる値のままでは起動しません。初期値の `dry_run = true` では実際のshutdown/rebootは実行されません。
+`config.toml` の `shared_secret` を32文字以上の長いランダム値に変更してください。`config.example.toml` のプレースホルダー値や短すぎる値のままでは起動しません。初期値の `dry_run = true` では実際のshutdown/reboot/sleepは実行されません。
 
-M5Stackからの `POST /reboot` / `POST /shutdown` は、HMAC署名に加えてJSON本文の `{"confirm":true}` が必須です。
+M5Stackからの `POST /reboot` / `POST /shutdown` / `POST /sleep` は、HMAC署名に加えてJSON本文の `{"confirm":true}` が必須です。
+`POST /sleep` の200応答は実行成功ではなく受理(実行開始)の意味です。実行の成否は応答に含められず、bridge側の監査ログとサーバログにだけ残ります。
 `GET /status` はm5stack-pc-bridgeプロセス自体のヘルスチェックであり、PCの電源状態判定にはM5Stack firmware側のTCP connect STATUSを使います。
 
 対話実行での動作確認:
@@ -110,7 +112,7 @@ Windows Serviceとして常駐させるには、管理者PowerShellで以下を�
 
 ## セットアップ: Telegram Bot (スマホ外部操作)
 
-賃貸無料回線などでルーターVPNを前提にできない場合、M5StackがTelegram Bot APIを外向きHTTPSでlong pollingし、スマホから `/status`、`/wake`、`/reboot`、`/shutdown`、`/update` を操作できます。設計の詳細は [External Access Design](docs/external-access.md) を参照してください。
+賃貸無料回線などでルーターVPNを前提にできない場合、M5StackがTelegram Bot APIを外向きHTTPSでlong pollingし、スマホから `/status`、`/wake`、`/reboot`、`/shutdown`、`/sleep`、`/update` を操作できます。設計の詳細は [External Access Design](docs/external-access.md) を参照してください。
 
 ### 1. BotFatherでbotを作る
 
@@ -156,6 +158,7 @@ bash scripts/telegram-set-commands.sh
 - `/wake`: PCの起動
 - `/reboot`: PCの再起動
 - `/shutdown`: PCのシャットダウン
+- `/sleep`: PCのスリープ
 - `/update`: ファームウェア更新
 - `/settings`: 設定
 
@@ -169,9 +172,9 @@ Telegramアプリから許可したuser idのアカウントで、bot宛てに�
 
 - `/status`: PCのオン/オフ、Wi-Fi RSSI、M5Stack IPを返信します。
 - `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
- - `/reboot` / `/shutdown`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」または「シャットダウン」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>` または `/confirm_shutdown <nonce>` を手入力しても構いません(後方互換)。nonceは `telegram_confirm_ttl_secs`（秒）の間だけ有効（既定 60秒）で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
+ - `/reboot` / `/shutdown` / `/sleep`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」「シャットダウン」「スリープ」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>`、`/confirm_shutdown <nonce>`、`/confirm_sleep <nonce>` を手入力しても構いません(後方互換)。nonceは `telegram_confirm_ttl_secs`（秒）の間だけ有効（既定 60秒）で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
  - `/update`: manifestのversionとsizeを提示してから確認を求め、確定後にfirmwareを更新して自動でM5Stackを再起動します。新しいfirmwareは起動自己診断を通るまでvalidにならず、通らないままM5Stackが再起動すると旧版へ戻ります。
-- `/lock` / `/unlock`: 旅行中などに誤操作・不正操作を防ぐため、電源操作を一時的に禁止します。ロック中は `/wake` `/reboot` `/shutdown` `/update` と確認ボタンをすべて拒否し、**M5Stack本体のタッチ操作も同様に拒否**します(画面に `LOCKED` と表示されます)。`/lock` `/unlock` `/status` はロック中でも受け付けます。ロック状態はメモリ上だけで保持するため、M5Stackを再起動すると解除されます。
+- `/lock` / `/unlock`: 旅行中などに誤操作・不正操作を防ぐため、電源操作を一時的に禁止します。ロック中は `/wake` `/reboot` `/shutdown` `/sleep` `/update` と確認ボタンをすべて拒否し、**M5Stack本体のタッチ操作も同様に拒否**します(画面に `LOCKED` と表示されます)。`/lock` `/unlock` `/status` はロック中でも受け付けます。ロック状態はメモリ上だけで保持するため、M5Stackを再起動すると解除されます。
 
 なお、次の出来事はこちらから操作しなくてもTelegramへ通知されます。
 

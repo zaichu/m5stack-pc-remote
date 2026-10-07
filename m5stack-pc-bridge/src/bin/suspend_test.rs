@@ -1,6 +1,7 @@
 //! #217 事前確認用の診断バイナリ。Windows Service相当の環境(session 0 / SYSTEM)から
-//! `SetSuspendState` を呼んだときに「S3スリープになるのか・休止になるのか・失敗するのか」を
-//! 実機で確かめるためのもの。本実装のロジックは `power.rs` 側へ取り込む。
+//! スリープ実行(`m5stack_pc_bridge::suspend::suspend`)を呼んだときの振る舞いを
+//! 実機で確かめるためのもの。実行ロジックの正本はライブラリ側(`suspend.rs`)にあり、
+//! ここは呼び出しと結果の記録だけを行う(重複コードを残さない)。
 
 #[cfg(not(windows))]
 fn main() {
@@ -9,9 +10,6 @@ fn main() {
 
 #[cfg(windows)]
 fn main() {
-    use windows_sys::Win32::Foundation::GetLastError;
-    use windows_sys::Win32::System::Power::SetSuspendState;
-
     let log_path = std::env::temp_dir().join("suspend-test.log");
     let log = |msg: &str| log_line(&log_path, msg);
 
@@ -23,25 +21,18 @@ fn main() {
         std::env::var("SESSIONNAME").unwrap_or_else(|_| "<unset>".to_string())
     ));
 
-    // 権限付与に失敗しても呼び出しは続けて、失敗の出方そのものを観測対象にする。
-    match enable_shutdown_privilege() {
-        Ok(()) => log("SeShutdownPrivilege: enabled"),
-        Err(e) => log(&format!("SeShutdownPrivilege: FAILED ({e})")),
-    }
-
     // session 0 ではコンソールが無いため、呼ぶ前に必ずstdoutとログの両方へ書いてflushする。
-    log("calling SetSuspendState(hibernate=false, force=false, disable_wake_event=false)");
-    let ok = unsafe { SetSuspendState(false, false, false) };
-    let err = unsafe { GetLastError() };
-    if ok {
-        // TRUE ならスリープへ入るので、この行は復帰後にしか出ない。
-        log(&format!(
-            "SetSuspendState returned TRUE / GetLastError={err}"
-        ));
-    } else {
-        log(&format!(
-            "SetSuspendState returned FALSE / GetLastError={err}"
-        ));
+    log(
+        "calling suspend (SetSuspendState(hibernate=false, force=false, disable_wake_event=false))",
+    );
+    match m5stack_pc_bridge::suspend::suspend() {
+        Ok(()) => {
+            // 成功時はスリープへ入るので、この行は復帰後にしか出ない。
+            log("suspend returned Ok (resumed after sleep)");
+        }
+        Err(e) => {
+            log(&format!("suspend failed: {e}"));
+        }
     }
 }
 
@@ -65,83 +56,4 @@ fn log_line(log_path: &std::path::Path, msg: &str) {
             .unwrap_or(0);
         let _ = writeln!(file, "[{now}] {msg}");
     }
-}
-
-/// `SetSuspendState` の呼び出し前に必要な `SeShutdownPrivilege` を有効化する。
-#[cfg(windows)]
-fn enable_shutdown_privilege() -> Result<(), String> {
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
-    use windows_sys::Win32::Security::{TOKEN_ADJUST_PRIVILEGES, TOKEN_QUERY};
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-
-    let mut token: HANDLE = std::ptr::null_mut();
-    let opened = unsafe {
-        OpenProcessToken(
-            GetCurrentProcess(),
-            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
-            &mut token,
-        )
-    };
-    // 失敗理由を正しく取るため、判定より前にGetLastErrorを退避する。
-    let open_err = unsafe { GetLastError() };
-    if opened == 0 {
-        return Err(format!("OpenProcessToken failed: GetLastError={open_err}"));
-    }
-
-    let result = grant_enable(token);
-    unsafe { CloseHandle(token) };
-    result
-}
-
-#[cfg(windows)]
-fn grant_enable(token: windows_sys::Win32::Foundation::HANDLE) -> Result<(), String> {
-    use windows_sys::Win32::Foundation::{GetLastError, LUID};
-    use windows_sys::Win32::Security::{
-        AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
-        SE_SHUTDOWN_NAME, TOKEN_PRIVILEGES,
-    };
-
-    let mut luid = LUID {
-        LowPart: 0,
-        HighPart: 0,
-    };
-    let found = unsafe { LookupPrivilegeValueW(std::ptr::null(), SE_SHUTDOWN_NAME, &mut luid) };
-    let luid_err = unsafe { GetLastError() };
-    if found == 0 {
-        return Err(format!(
-            "LookupPrivilegeValueW(SeShutdownPrivilege) failed: GetLastError={luid_err}"
-        ));
-    }
-
-    let privileges = TOKEN_PRIVILEGES {
-        PrivilegeCount: 1,
-        Privileges: [LUID_AND_ATTRIBUTES {
-            Luid: luid,
-            Attributes: SE_PRIVILEGE_ENABLED,
-        }],
-    };
-    let adjusted = unsafe {
-        AdjustTokenPrivileges(
-            token,
-            0,
-            &privileges,
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    // AdjustTokenPrivileges は全権限を割り当てられなくてもTRUEを返し、
-    // 最終エラーにERROR_NOT_ALL_ASSIGNED(1300)を残すため両方を見る。
-    let adjust_err = unsafe { GetLastError() };
-    if adjusted == 0 {
-        return Err(format!(
-            "AdjustTokenPrivileges failed: GetLastError={adjust_err}"
-        ));
-    }
-    if adjust_err != 0 {
-        return Err(format!(
-            "AdjustTokenPrivileges: GetLastError={adjust_err} (権限が有効化されていない可能性)"
-        ));
-    }
-    Ok(())
 }

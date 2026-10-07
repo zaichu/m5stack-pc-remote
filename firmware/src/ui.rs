@@ -688,6 +688,9 @@ pub fn draw_confirm(
     let title = match action {
         PowerAction::Reboot => "REBOOT?",
         PowerAction::Shutdown => "SHUTDOWN?",
+        // 物理ボタンからスリープは出さない(Issue #217はTelegramのみ)。
+        // `PowerAction` が増えると非網羅で落ちるため腕だけ足す。
+        PowerAction::Sleep => "SLEEP?",
     };
     Text::with_alignment(
         title,

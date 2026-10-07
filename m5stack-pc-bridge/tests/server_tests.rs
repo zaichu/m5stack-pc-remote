@@ -82,6 +82,7 @@ async fn reboot_accepts_signed_request_and_stays_dry_run() {
     assert_eq!(json["action"], "reboot");
     assert_eq!(json["dry_run"], true);
     assert_eq!(json["command"][0], "shutdown.exe");
+    assert_eq!(json["result"], "ok");
 }
 
 #[tokio::test]
@@ -99,6 +100,105 @@ async fn reboot_rejects_signed_request_without_confirm_true() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
     assert_eq!(&bytes[..], b"confirm must be true");
+}
+
+#[tokio::test]
+async fn sleep_accepts_signed_request_and_stays_dry_run() {
+    let _audit_guard = AUDIT_PATH_LOCK.lock().await;
+    let app = router(config());
+    let response = app
+        .oneshot(signed_post(
+            "/sleep",
+            "server-nonce-sleep-1",
+            r#"{"confirm":true}"#,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["action"], "sleep");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["command"][0], "SetSuspendState");
+    // sleepの200は実行成功ではなく受理(実行開始)の意味。
+    assert_eq!(json["result"], "accepted");
+}
+
+#[tokio::test]
+async fn sleep_rejects_signed_request_without_confirm_true() {
+    let app = router(config());
+    let response = app
+        .oneshot(signed_post(
+            "/sleep",
+            "server-nonce-sleep-1b",
+            r#"{"confirm":false}"#,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sleep_rejects_signature_made_for_shutdown() {
+    let app = router(config());
+    let body = r#"{"confirm":true}"#;
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+    let nonce = "server-nonce-sleep-reuse-path";
+    let secret = b"local-development-secret";
+    let signature = sign_request(
+        secret,
+        "POST",
+        "/shutdown",
+        timestamp,
+        nonce,
+        body.as_bytes(),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sleep")
+                .header("content-type", "application/json")
+                .header("x-timestamp", timestamp.to_string())
+                .header("x-nonce", nonce)
+                .header("x-signature", signature)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn sleep_appends_audit_log_on_success() {
+    let _audit_guard = AUDIT_PATH_LOCK.lock().await;
+    let audit_path = audit_log::path();
+    let before = std::fs::read_to_string(&audit_path).unwrap_or_default();
+
+    let app = router(config());
+    let response = app
+        .oneshot(signed_post(
+            "/sleep",
+            "server-nonce-sleep-audit",
+            r#"{"confirm":true}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let after = std::fs::read_to_string(&audit_path).unwrap();
+    let appended = after.get(before.len()..).unwrap_or(&after);
+    assert!(
+        appended.contains("action=sleep")
+            && appended.contains("dry_run=true")
+            && appended.contains("result="),
+        "audit log gained no sleep line: {appended:?}"
+    );
 }
 
 #[tokio::test]

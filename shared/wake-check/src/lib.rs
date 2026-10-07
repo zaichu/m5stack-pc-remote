@@ -59,6 +59,91 @@ impl WakeWatch {
     }
 }
 
+/// スリープ指示後のオフ通知の抑止状態(Issue #217)。
+/// `WakeWatch` と同じ発想の純粋ロジックで、時刻は持たず呼び出し側が
+/// `SharedSleepWatch`(`Arc<Mutex<SleepWatch>>`)として持つ。poll回数で
+/// 上限を数える(STATUS周期ベースで、時刻型を持たない方針に合わせる)。
+///
+/// スリープを指示した直後、PCはTCP probeに応答しなくなり「オフ」に見える。
+/// そのままでは `pc_state_notification_ja(false)`(「PCが停止しました。」)が
+/// 飛ぶため、オフになるのを待ってから(`Armed`)、オフ確認後はオンに戻るまで
+/// (`Suppressing`)オフ通知を抑止する。オンに戻ったときの
+/// 「PCが起動しました。」は抑止しない(復帰は知らせる)。
+/// 指示後にオフにならないまま上限を超えたら抑止をやめ(`Idle`)、
+/// 後の本物のオフ通知を永遠に抑止しない。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SleepWatch {
+    phase: SleepPhase,
+}
+
+/// STATUS確認周期(`firmware/src/main.rs` の `STATUS_INTERVAL`=10秒)で
+/// 6回=約60秒。受理後にスリープへ入るのは数秒のはずで、十分に余裕がある。
+/// 値を変えたらテスト(`sleep_armed_expires_without_going_off`)も更新する。
+pub const SLEEP_ARM_MAX_POLLS: u32 = 6;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SleepPhase {
+    #[default]
+    Idle,
+    Armed {
+        polls: u32,
+    },
+    Suppressing,
+}
+
+impl SleepWatch {
+    pub fn idle() -> Self {
+        Self {
+            phase: SleepPhase::Idle,
+        }
+    }
+
+    /// スリープ指示を受け付けたときの更新。bridgeが受理した呼び出し側だけが呼ぶ
+    /// (拒否・送信失敗ではPCは起きたままのはずで、後の本物のオフを抑止しない)。
+    pub fn begin(self) -> Self {
+        Self {
+            phase: SleepPhase::Armed { polls: 0 },
+        }
+    }
+
+    /// STATUS確認周期ごとの更新。戻り値は(次の状態, オフ通知を抑止するか)。
+    /// - `Idle` は何も抑止しない。
+    /// - `Armed` + online は `Armed` のまま(受理直後はまだオンなので解除しない)。
+    /// - `Armed`/`Suppressing` + offline は `Suppressing` へ進み/留まり抑止する。
+    /// - `Suppressing` + online は `Idle` に戻し、そのpoll自体は抑止しない。
+    /// - `Armed` のまま上限を超えたら `Idle` に戻す。
+    pub fn poll(self, pc_online: bool) -> (Self, bool) {
+        match self.phase {
+            SleepPhase::Idle => (self, false),
+            SleepPhase::Armed { polls } => {
+                if !pc_online {
+                    (
+                        Self {
+                            phase: SleepPhase::Suppressing,
+                        },
+                        true,
+                    )
+                } else if polls + 1 >= SLEEP_ARM_MAX_POLLS {
+                    (Self::idle(), false)
+                } else {
+                    (
+                        Self {
+                            phase: SleepPhase::Armed { polls: polls + 1 },
+                        },
+                        false,
+                    )
+                }
+            }
+            SleepPhase::Suppressing => {
+                if pc_online {
+                    (Self::idle(), false)
+                } else {
+                    (self, true)
+                }
+            }
+        }
+    }
+}
 /// 起動指示を受け付けたときの応答文(日本語)。用語は `docs/glossary.md` が正本。
 /// WOLは内部手段のため文言に使わない。
 pub fn wake_request_text() -> &'static str {
@@ -231,5 +316,85 @@ mod tests {
             wake_timed_out_text(240),
             "PCが起動しませんでした(指示から 4分経過)。"
         );
+    }
+
+    #[test]
+    fn sleep_idle_never_suppresses() {
+        // 抑止なしではオン・オフのいずれでも抑止しない(通常の通知を邪魔しない)。
+        for online in [false, true] {
+            let (next, suppress) = SleepWatch::idle().poll(online);
+            assert_eq!(next, SleepWatch::idle(), "online={online}");
+            assert!(!suppress, "online={online}");
+        }
+    }
+
+    #[test]
+    fn sleep_armed_online_does_not_disarm() {
+        // 受理直後はPCがまだオンなのが通常なので、Armedのまま解除しない。
+        // この1回のonlineで解除すると、後のオフで誤通知が出て機能しない。
+        let armed = SleepWatch::idle().begin();
+        let (next, suppress) = armed.poll(true);
+        assert!(!suppress);
+        // まだオフを見ていないので、オフが来れば抑止できる(Idleに戻っていない)。
+        let (next, suppress) = next.poll(false);
+        assert!(suppress);
+        assert_ne!(next, SleepWatch::idle());
+    }
+
+    #[test]
+    fn sleep_suppresses_off_until_back_on() {
+        // オフを確認してからオンに戻るまで抑止し、オンに戻ったら終わる。
+        // オンに戻ったときの通知は抑止しない(復帰は知らせる)。
+        let armed = SleepWatch::idle().begin();
+        // 受理直後のオンは解除しない。
+        let (armed, suppress) = armed.poll(true);
+        assert!(!suppress);
+        // オフ確認で抑止開始。
+        let (suppressing, suppress) = armed.poll(false);
+        assert!(suppress);
+        for _ in 0..3 {
+            let (next, suppress) = suppressing.poll(false);
+            assert_eq!(next, suppressing);
+            assert!(suppress);
+        }
+        let (next, suppress) = suppressing.poll(true);
+        assert_eq!(next, SleepWatch::idle());
+        assert!(!suppress);
+        // 終わった後はオフでも抑止しない。
+        let (next, suppress) = next.poll(false);
+        assert_eq!(next, SleepWatch::idle());
+        assert!(!suppress);
+    }
+
+    #[test]
+    fn sleep_armed_offline_suppresses_immediately() {
+        // begin → poll(true) → poll(false) の系列でも抑止が続くこと。
+        let (armed, suppress) = SleepWatch::idle().begin().poll(true);
+        assert!(!suppress);
+        let (next, suppress) = armed.poll(false);
+        assert!(suppress);
+        let (next, suppress) = next.poll(false);
+        assert!(suppress);
+        assert_ne!(next, SleepWatch::idle());
+    }
+
+    #[test]
+    fn sleep_armed_expires_without_going_off() {
+        // 指示後にPCがオフにならないまま上限を超えたら抑止をやめる。
+        // 後の本物のオフ通知を永遠に抑止しないため。
+        let mut state = SleepWatch::idle().begin();
+        for _ in 0..(SLEEP_ARM_MAX_POLLS - 1) {
+            let (next, suppress) = state.poll(true);
+            assert!(!suppress);
+            assert_ne!(next, SleepWatch::idle());
+            state = next;
+        }
+        let (next, suppress) = state.poll(true);
+        assert!(!suppress);
+        assert_eq!(next, SleepWatch::idle());
+        // 解除後のオフは抑止しない。
+        let (next, suppress) = next.poll(false);
+        assert!(!suppress);
+        assert_eq!(next, SleepWatch::idle());
     }
 }
