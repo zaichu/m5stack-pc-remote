@@ -26,6 +26,13 @@ ureq = { version = "3.4", default-features = false, features = ["rustls", "json"
 [target.'cfg(windows)'.dependencies]
 tokio = { version = "1.39", features = ["sync"] }
 windows-service = "0.8"
+# suspend_test診断バイナリ専用。SetSuspendStateとSeShutdownPrivilegeの付与だけに使う。
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Power",
+  "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile = "3.10"
