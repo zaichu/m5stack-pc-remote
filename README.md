@@ -49,7 +49,9 @@ Rust版はWi-Fi / WOL / STATUS / タッチUI / REBOOT / SHUTDOWN / Telegram経�
 
 ## セットアップ: Rust firmware
 
-事前に `cargo install espup ldproxy espflash && espup install --targets esp32` が必要です（詳細は `firmware/README.md` 参照）。
+firmware の `esp` toolchain は 1.98.1.0 を使用します。事前に
+`cargo install espup ldproxy espflash && espup install -v 1.98.1.0 --targets esp32`
+で導入または既存の `esp` を入れ替えてください（詳細は `firmware/README.md` 参照）。
 
 ```bash
 cd firmware

@@ -45,9 +45,12 @@ abortするため採用しない(詳細は #16)。
 
 ```bash
 cargo install espup ldproxy espflash
-espup install --targets esp32
+espup install -v 1.98.1.0 --targets esp32
 . ~/export-esp.sh   # 新しいターミナルを開くたびに必要
 ```
+
+firmware の `rust-toolchain.toml` は channel `esp` を参照する。上記コマンドは、
+既存の `esp` toolchain がある場合も 1.98.1.0 へ入れ替える。
 
 ## セットアップ
 
