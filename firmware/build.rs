@@ -10,9 +10,6 @@ fn main() {
     generate_config();
 }
 
-/// `daily_report_hour` がこの値(0-23の範囲外)なら定期レポートを送らない。
-const DAILY_REPORT_DISABLED: i64 = -1;
-
 /// config.tomlのkeyと、生成するRust定数の対応。新しい設定はここへ1行足す。
 /// 並びはそのまま生成順になる。
 const KEYS: &[Key] = &[
@@ -40,11 +37,24 @@ const KEYS: &[Key] = &[
     ),
     // 定期レポート関連は後から追加した任意keyなので、既存のconfig.tomlでも
     // ビルドが通るよう既定値を持たせる(必須にするとkey追加まで壊れる)。
-    Key::int("daily_report_hour", "DAILY_REPORT_HOUR", IntTy::I64).default(DAILY_REPORT_DISABLED),
-    Key::int("timezone_offset_hours", "TIMEZONE_OFFSET_HOURS", IntTy::I64).default(0),
+    // 有効範囲の正本は config-validation crate(Issue #228)。
+    Key::int("daily_report_hour", "DAILY_REPORT_HOUR", IntTy::I64)
+        .default(config_validation::DAILY_REPORT_DISABLED)
+        .range(
+            config_validation::DAILY_REPORT_DISABLED,
+            config_validation::DAILY_REPORT_HOUR_MAX,
+        ),
+    Key::int("timezone_offset_hours", "TIMEZONE_OFFSET_HOURS", IntTy::I64)
+        .default(0)
+        .range(
+            config_validation::TIMEZONE_OFFSET_MIN_HOURS,
+            config_validation::TIMEZONE_OFFSET_MAX_HOURS,
+        ),
     // 画面の明るさ(Issue #167)。後から追加した任意keyなので既定値100
     // (現状の2800mVと同じ明るさ)を持たせ、既存のconfig.tomlでもビルドが通る。
-    Key::int("brightness", "BRIGHTNESS", IntTy::U8).default(100),
+    Key::int("brightness", "BRIGHTNESS", IntTy::U8)
+        .default(config_validation::BRIGHTNESS_MAX_PERCENT as i64)
+        .range(0, config_validation::BRIGHTNESS_MAX_PERCENT as i64),
 ];
 
 enum Kind {
@@ -54,6 +64,8 @@ enum Kind {
         /// `Some` なら任意key。key が無いときはこの値を使う。
         /// default は整数keyだけの意味なので、Int の内側に持たせる。
         default: Option<i64>,
+        /// 型の範囲より狭い意味上の有効範囲(両端含む)。正本はconfig-validation。
+        range: Option<(i64, i64)>,
     },
 }
 
@@ -124,7 +136,11 @@ impl Key {
             key,
             alias: None,
             const_name,
-            kind: Kind::Int { ty, default: None },
+            kind: Kind::Int {
+                ty,
+                default: None,
+                range: None,
+            },
         }
     }
 
@@ -143,11 +159,37 @@ impl Key {
             kind,
         } = self;
         let kind = match kind {
-            Kind::Int { ty, .. } => Kind::Int {
+            Kind::Int { ty, range, .. } => Kind::Int {
                 ty,
                 default: Some(default),
+                range,
             },
             Kind::Text => panic!("Key::default() は整数keyにのみ使えます"),
+        };
+        Self {
+            key,
+            alias,
+            const_name,
+            kind,
+        }
+    }
+
+    /// 意味上の有効範囲(両端含む)。整数key専用。範囲外はconfig.tomlエラーにする。
+    /// Text key に付けると const 評価時の panic(= build.rs のコンパイルエラー)になる。
+    const fn range(self, min: i64, max: i64) -> Self {
+        let Self {
+            key,
+            alias,
+            const_name,
+            kind,
+        } = self;
+        let kind = match kind {
+            Kind::Int { ty, default, .. } => Kind::Int {
+                ty,
+                default,
+                range: Some((min, max)),
+            },
+            Kind::Text => panic!("Key::range() は整数keyにのみ使えます"),
         };
         Self {
             key,
@@ -201,9 +243,9 @@ fn generate_config() {
     for spec in KEYS {
         let (ty, literal) = match spec.kind {
             Kind::Text => ("&str", text_literal(&table, spec)),
-            Kind::Int { ty, default } => (
+            Kind::Int { ty, default, range } => (
                 ty.rust_name(),
-                int_value(&table, spec, ty, default).to_string(),
+                int_value(&table, spec, ty, default, range).to_string(),
             ),
         };
         out.push_str("#[allow(dead_code)]\n");
@@ -249,7 +291,13 @@ fn text_literal(table: &toml::Table, spec: &Key) -> String {
 
 /// 整数keyの値をTOMLから引き、生成先の型範囲を検証した i64 を返す。
 /// `default` が `Some` で key も alias も無いときは既定値を使う。
-fn int_value(table: &toml::Table, spec: &Key, ty: IntTy, default: Option<i64>) -> i64 {
+fn int_value(
+    table: &toml::Table,
+    spec: &Key,
+    ty: IntTy,
+    default: Option<i64>,
+    range: Option<(i64, i64)>,
+) -> i64 {
     let value = match (lookup(table, spec), default) {
         (None, Some(default)) => default,
         _ => require(table, spec)
@@ -266,6 +314,16 @@ fn int_value(table: &toml::Table, spec: &Key, ty: IntTy, default: Option<i64>) -
             ty.min_value(),
             ty.max_value()
         );
+    }
+    // 型の範囲内でも意味上の有効範囲(正本はconfig-validation)の外は拒否する。
+    // 書き込み側で止めないと、保存値が起動時のclampで別の値になる(Issue #228)。
+    if let Some((min, max)) = range {
+        if !(min..=max).contains(&value) {
+            panic!(
+                "config.toml: `{}` は{min}〜{max}で指定してください。指定値: {value}",
+                spec.key
+            );
+        }
     }
     value
 }

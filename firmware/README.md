@@ -102,6 +102,10 @@ NVS上では全keyを文字列として保存する。`wol_port`、`status_port`
 `daily_report_hour`、`timezone_offset_hours`、`brightness` は起動時に数値へ変換する。
 既存NVSに残る `agent_port` / `agent_secret` は移行互換として読み込む。
 
+各値の有効範囲は `shared/config-validation` crateが正本。ビルド時(build.rs)と
+NVSイメージ生成時(provision-firmware-nvs.py)は範囲外をエラーで拒否し、
+起動時にNVS由来の範囲外値が見つかった場合だけ既定値へ戻す。
+
 現時点の正本運用は `config.toml` 更新後に再build/flashする方式。NVS provisioningのみで
 secretを差し替える手順は、NVS partitionを書き換えてもWi-Fiや実機起動に影響しないことを
 確認してから運用手順に昇格する。

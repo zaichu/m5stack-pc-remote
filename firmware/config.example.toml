@@ -33,7 +33,7 @@ telegram_confirm_ttl_secs = 60
 
 # 定期ステータスレポート(任意)。daily_report_hour に 0-23 のローカル時刻を書くと、
 # その時刻に1日1回、PC状態をTelegramへ送る。範囲外(既定の -1)なら送らない。
-# timezone_offset_hours はUTCからのずれ。JSTなら 9。
+# timezone_offset_hours はUTCからのずれ(有効範囲 -12〜+14)。JSTなら 9。
 daily_report_hour = -1
 timezone_offset_hours = 9
 

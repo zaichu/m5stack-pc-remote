@@ -39,6 +39,8 @@ esp-idf-hal = "0.45"
 embuild = { version = "0.33", features = ["espidf"] }
 # Git管理外のconfig.tomlをビルド時に読む。host側で動くためesp-idf toolchainは不要。
 toml = "1.1"
+# 設定値の有効範囲をbuild.rsの検証でも同じ定義で使う(Issue #228)。
+config-validation = { path = "../shared/config-validation" }
 
 [package.metadata.esp-idf-sys]
 esp_idf_version = "v5.3.2"
