@@ -115,7 +115,14 @@ def validate_config(
     # 有効範囲の正本は shared/config-validation(Issue #228)。ここで拒否しないと、
     # 保存した値が起動時のclampで別の値になる。
     for key, (lo, hi) in derive_ranges().items():
-        if key in data and not lo <= int(data[key]) <= hi:
+        if key not in data:
+            continue
+        value = data[key]
+        # int() はfloatを切り捨てboolを0/1へ変換するため、型確認より先に
+        # 渡すと `brightness = 100.9` のような不正値を受理してしまう。
+        if type(value) is not int:
+            raise ValueError(f"{key} は整数で指定してください")
+        if not lo <= value <= hi:
             raise ValueError(f"{key} は{lo}〜{hi}で指定してください")
 
 
