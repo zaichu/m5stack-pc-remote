@@ -26,7 +26,7 @@ except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore[no-redef]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config_keys import ConfigKey, derive_mappings  # noqa: E402
+from config_keys import ConfigKey, derive_mappings, derive_ranges  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -112,11 +112,18 @@ def validate_config(
         if value < 1:
             raise ValueError(f"{key} は1以上で指定してください")
 
-    if "daily_report_hour" in data and not -1 <= int(data["daily_report_hour"]) <= 23:
-        raise ValueError("daily_report_hour は-1(無効)または0..23で指定してください")
-
-    if "timezone_offset_hours" in data and not -14 <= int(data["timezone_offset_hours"]) <= 14:
-        raise ValueError("timezone_offset_hours は-14..14で指定してください")
+    # 有効範囲の正本は shared/config-validation(Issue #228)。ここで拒否しないと、
+    # 保存した値が起動時のclampで別の値になる。
+    for key, (lo, hi) in derive_ranges().items():
+        if key not in data:
+            continue
+        value = data[key]
+        # int() はfloatを切り捨てboolを0/1へ変換するため、型確認より先に
+        # 渡すと `brightness = 100.9` のような不正値を受理してしまう。
+        if type(value) is not int:
+            raise ValueError(f"{key} は整数で指定してください")
+        if not lo <= value <= hi:
+            raise ValueError(f"{key} は{lo}〜{hi}で指定してください")
 
 
 def write_csv(path: Path, config: dict[str, object], keys: tuple[ConfigKey, ...]) -> None:

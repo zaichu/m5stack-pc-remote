@@ -1,6 +1,10 @@
-//! firmwareの実行時設定値(Telegramから変更可能なもの)のvalidation。
+//! firmwareの実行時設定値のvalidation・有効範囲の正本。
 //! `firmware` はESP32専用でhostビルドできないため、入力検証だけを分離してhostで
 //! テストする(`shared/*` 共通の方針)。**DNS解決やネットワーク接続はしない。**
+//!
+//! 範囲の定義はここが唯一の正本(Issue #228)。Telegram入力・ビルド時
+//! (`firmware/build.rs`)・NVSイメージ生成(`scripts/provision-firmware-nvs.py`)・
+//! 起動時(`firmware/src/app_config.rs`)の全入口が同じ定数・判定関数を使う。
 
 use std::net::Ipv4Addr;
 use std::str::FromStr;
@@ -40,17 +44,46 @@ pub fn validate_wol_port(input: &str) -> Result<u16, String> {
     validate_port(input.trim())
 }
 
+/// `timezone_offset_hours` の有効範囲(両端含む)。実在するUTCオフセットは
+/// UTC-12〜UTC+14。
+pub const TIMEZONE_OFFSET_MIN_HOURS: i64 = -12;
+pub const TIMEZONE_OFFSET_MAX_HOURS: i64 = 14;
+
+/// `daily_report_hour` で「送らない」を表す値。有効なのはこの値と
+/// 0〜`DAILY_REPORT_HOUR_MAX` だけ。
+pub const DAILY_REPORT_DISABLED: i64 = -1;
+pub const DAILY_REPORT_HOUR_MAX: i64 = 23;
+
+/// `timezone_offset_hours` として有効な値か。
+pub fn is_valid_timezone_offset_hours(hours: i64) -> bool {
+    (TIMEZONE_OFFSET_MIN_HOURS..=TIMEZONE_OFFSET_MAX_HOURS).contains(&hours)
+}
+
+/// `daily_report_hour` として有効な値か。-1(無効)と0〜23のみが有効で、
+/// 連続rangeと同値。
+pub fn is_valid_daily_report_hour(hour: i64) -> bool {
+    (DAILY_REPORT_DISABLED..=DAILY_REPORT_HOUR_MAX).contains(&hour)
+}
+
+/// 画面の明るさの有効上限。有効範囲は0〜`BRIGHTNESS_MAX_PERCENT`(Issue #167)。
+pub const BRIGHTNESS_MAX_PERCENT: u8 = 100;
+
+/// 明るさ(%)として有効な値か。下限の0はu8の型範囲が担保する。
+pub fn is_valid_brightness_percent(percent: u8) -> bool {
+    percent <= BRIGHTNESS_MAX_PERCENT
+}
+
 /// 画面の明るさ(0〜100)を検証する(Issue #167)。
 /// 0%は「消灯」の意味にしない(消灯はIssue #168のスリープ機能の役割)。
 /// 範囲だけを見て、電圧への丸めは `brightness_percent_to_dcdc3_mv` が担当。
 pub fn validate_brightness_percent(input: &str) -> Result<u8, String> {
     let trimmed = input.trim();
-    let percent: u8 = trimmed
-        .parse()
-        .map_err(|_| format!("`{trimmed}` は明るさ(0〜100の数値)ではありません(例: 80)"))?;
-    if percent > 100 {
+    let percent: u8 = trimmed.parse().map_err(|_| {
+        format!("`{trimmed}` は明るさ(0〜{BRIGHTNESS_MAX_PERCENT}の数値)ではありません(例: 80)")
+    })?;
+    if !is_valid_brightness_percent(percent) {
         return Err(format!(
-            "`{trimmed}` は範囲外です。明るさは0〜100で指定してください"
+            "`{trimmed}` は範囲外です。明るさは0〜{BRIGHTNESS_MAX_PERCENT}で指定してください"
         ));
     }
     Ok(percent)
@@ -68,11 +101,11 @@ pub const BRIGHTNESS_DCDC3_MIN_MV: u16 = 2500;
 
 /// 明るさ(0〜100)をDCDC3電圧(mV)へ線形変換する。MIN〜MAXへ割り付けて
 /// AXP192の25mVステップへ切り捨てる(`set_dcdc3_voltage` と同じ丸めで実電圧と一致させる)。
-/// 101以上の不正値は上限へ丸める(消灯側へは倒さない)。
+/// 不正値は上限へ丸める(消灯側へは倒さない)。
 pub fn brightness_percent_to_dcdc3_mv(percent: u8) -> u16 {
-    let clamped = percent.min(100);
+    let clamped = percent.min(BRIGHTNESS_MAX_PERCENT);
     let range = BRIGHTNESS_DCDC3_MAX_MV - BRIGHTNESS_DCDC3_MIN_MV;
-    let mv = BRIGHTNESS_DCDC3_MIN_MV + range * clamped as u16 / 100;
+    let mv = BRIGHTNESS_DCDC3_MIN_MV + range * clamped as u16 / BRIGHTNESS_MAX_PERCENT as u16;
     mv - (mv % 25)
 }
 
@@ -193,6 +226,43 @@ mod tests {
         assert!(validate_wol_port("-1").is_err(), "負数");
         assert!(validate_wol_port("nine").is_err(), "数値でない");
         assert!(validate_wol_port("").is_err(), "空文字");
+    }
+
+    #[test]
+    fn validates_timezone_offset_hours() {
+        // Issue #228: 正本は実在するUTCオフセットの範囲(-12〜+14)。
+        // 旧provisioning側の-14〜14とずれていて、-13/-14が保存できるのに
+        // 起動時に0へ変わる不具合があった。
+        assert_eq!(TIMEZONE_OFFSET_MIN_HOURS, -12);
+        assert_eq!(TIMEZONE_OFFSET_MAX_HOURS, 14);
+        assert!(is_valid_timezone_offset_hours(-12));
+        assert!(is_valid_timezone_offset_hours(0));
+        assert!(is_valid_timezone_offset_hours(14));
+        assert!(!is_valid_timezone_offset_hours(-13));
+        assert!(!is_valid_timezone_offset_hours(15));
+        assert!(!is_valid_timezone_offset_hours(i64::MIN));
+        assert!(!is_valid_timezone_offset_hours(i64::MAX));
+    }
+
+    #[test]
+    fn validates_daily_report_hour() {
+        // -1(無効)と0〜23だけが有効。-2以下は「無効」とは区別して拒否する。
+        assert_eq!(DAILY_REPORT_DISABLED, -1);
+        assert_eq!(DAILY_REPORT_HOUR_MAX, 23);
+        assert!(is_valid_daily_report_hour(-1));
+        assert!(is_valid_daily_report_hour(0));
+        assert!(is_valid_daily_report_hour(23));
+        assert!(!is_valid_daily_report_hour(-2));
+        assert!(!is_valid_daily_report_hour(24));
+    }
+
+    #[test]
+    fn validates_brightness_percent_range() {
+        assert_eq!(BRIGHTNESS_MAX_PERCENT, 100);
+        assert!(is_valid_brightness_percent(0));
+        assert!(is_valid_brightness_percent(100));
+        assert!(!is_valid_brightness_percent(101));
+        assert!(!is_valid_brightness_percent(u8::MAX));
     }
 
     #[test]

@@ -7,7 +7,8 @@ config.toml key <-> 生成const <-> NVS key の対応を機械的に導出する
 
 provisionスクリプトはこれを使い、`check` サブコマンドはREADMEの対応表と突き合わせる。
 対応表をファイルごとに手で書かなくて済むようにするのが目的(#76)。
-扱うのはキー名だけで、設定値(secret)には一切触れない。
+設定値の有効範囲も `shared/config-validation/src/lib.rs` の定数から導出する(#228)。
+扱うのはキー名と範囲の定数だけで、設定値(secret)には一切触れない。
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ FIRMWARE_DIR = REPO_ROOT / "firmware"
 _BUILD_RS = FIRMWARE_DIR / "build.rs"
 _APP_CONFIG_RS = FIRMWARE_DIR / "src" / "app_config.rs"
 _README_MD = FIRMWARE_DIR / "README.md"
+_VALIDATION_RS = REPO_ROOT / "shared" / "config-validation" / "src" / "lib.rs"
 
 
 @dataclass(frozen=True)
@@ -130,6 +132,43 @@ def derive_mappings(firmware_dir: Path | None = None) -> tuple[ConfigKey, ...]:
     if problems:
         raise ValueError("設定キー対応の整合性を取れません:\n  " + "\n  ".join(problems))
     return tuple(derived)
+
+
+# config.toml key -> (下限を表すconst名, 上限を表すconst名)。下限constが無いkeyの下限は0。
+# const名の正本は shared/config-validation/src/lib.rs(Issue #228)。
+_RANGE_CONST_NAMES: dict[str, tuple[str | None, str]] = {
+    "daily_report_hour": ("DAILY_REPORT_DISABLED", "DAILY_REPORT_HOUR_MAX"),
+    "timezone_offset_hours": ("TIMEZONE_OFFSET_MIN_HOURS", "TIMEZONE_OFFSET_MAX_HOURS"),
+    "brightness": (None, "BRIGHTNESS_MAX_PERCENT"),
+}
+
+
+def parse_int_consts(text: str) -> dict[str, int]:
+    """`pub const NAME: <整数型> = <値>;` を 名前->値 へ取り出す。"""
+    return {
+        name: int(value)
+        for name, value in re.findall(
+            r"pub const (\w+): (?:i64|u8|u16|u32|u64|usize) = (-?\d+);", text
+        )
+    }
+
+
+def derive_ranges(validation_rs: Path | None = None) -> dict[str, tuple[int, int]]:
+    """config.toml key -> (min, max) の有効範囲を lib.rs の定数から導出する。"""
+    text = (validation_rs or _VALIDATION_RS).read_text(encoding="utf-8")
+    consts = parse_int_consts(text)
+    ranges: dict[str, tuple[int, int]] = {}
+    problems = []
+    for toml_key, (min_name, max_name) in _RANGE_CONST_NAMES.items():
+        missing = [n for n in (min_name, max_name) if n is not None and n not in consts]
+        if missing:
+            problems.append(f"{toml_key}: {', '.join(missing)} がlib.rsに無い")
+            continue
+        lo = consts[min_name] if min_name is not None else 0
+        ranges[toml_key] = (lo, consts[max_name])
+    if problems:
+        raise ValueError("範囲定数を源码から解析できませんでした:\n  " + "\n  ".join(problems))
+    return ranges
 
 
 def parse_readme_table(text: str) -> set[tuple[str, str]]:

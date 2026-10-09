@@ -73,22 +73,24 @@ impl AppConfig {
     /// NVS由来の値はbuild.rs側の検証を迂回するため、明らかに不正な範囲外の値を
     /// 既定値へ戻す(`timezone_offset_hours` が極端だと `unix + offset * 3600` で
     /// 日付がずれ、定期レポートが意図しない時刻に出る)。
+    /// 有効範囲の正本は config-validation crate(Issue #228)。
     fn clamp_ranges(&mut self) {
-        // 実在するUTCオフセットの範囲(UTC-12〜UTC+14)。
-        if !(-12..=14).contains(&self.timezone_offset_hours) {
+        if !config_validation::is_valid_timezone_offset_hours(self.timezone_offset_hours) {
             println!(
-                "timezone_offset_hours={} は範囲外(-12..=14)です。0として扱います",
-                self.timezone_offset_hours
+                "timezone_offset_hours={} は範囲外({}〜{})です。0として扱います",
+                self.timezone_offset_hours,
+                config_validation::TIMEZONE_OFFSET_MIN_HOURS,
+                config_validation::TIMEZONE_OFFSET_MAX_HOURS
             );
             self.timezone_offset_hours = 0;
         }
-        // 0-23が有効時刻。範囲外は「無効(送らない)」を意味する -1 に寄せる。
-        if !(0..=23).contains(&self.daily_report_hour) && self.daily_report_hour != -1 {
+        // 範囲外は「無効(送らない)」を意味する -1 に寄せる。
+        if !config_validation::is_valid_daily_report_hour(self.daily_report_hour) {
             println!(
                 "daily_report_hour={} は範囲外です。無効(-1)として扱います",
                 self.daily_report_hour
             );
-            self.daily_report_hour = -1;
+            self.daily_report_hour = config_validation::DAILY_REPORT_DISABLED;
         }
         // 0なら既定値へ丸める。hostは持たず `pc_ip_address` から組み立てる(Issue #176)。
         let normalized = config_validation::normalize_status_port(self.pc_status_port);
@@ -99,14 +101,14 @@ impl AppConfig {
             );
             self.pc_status_port = normalized;
         }
-        // u8なので101〜255が入り得る(build.rsのチェックはu8範囲まで)ため丸める。
-        // Telegram経由の入力は `config_validation` が0〜100に制限する。
-        if self.brightness > 100 {
+        if !config_validation::is_valid_brightness_percent(self.brightness) {
             println!(
-                "brightness={} は範囲外(0〜100)です。100として扱います",
-                self.brightness
+                "brightness={} は範囲外(0〜{})です。{}として扱います",
+                self.brightness,
+                config_validation::BRIGHTNESS_MAX_PERCENT,
+                config_validation::BRIGHTNESS_MAX_PERCENT
             );
-            self.brightness = 100;
+            self.brightness = config_validation::BRIGHTNESS_MAX_PERCENT;
         }
     }
 
