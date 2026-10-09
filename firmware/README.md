@@ -106,9 +106,9 @@ NVS上では全keyを文字列として保存する。`wol_port`、`status_port`
 NVSイメージ生成時(provision-firmware-nvs.py)は範囲外をエラーで拒否し、
 起動時にNVS由来の範囲外値が見つかった場合だけ既定値へ戻す。
 
-現時点の正本運用は `config.toml` 更新後に再build/flashする方式。NVS provisioningのみで
-secretを差し替える手順は、NVS partitionを書き換えてもWi-Fiや実機起動に影響しないことを
-確認してから運用手順に昇格する。
+secretを差し替えるときは `config.toml` を更新してからNVSイメージを生成し、実機のNVSへ
+書き込む。起動時はNVSの値がビルド時configを上書きするため、再build/flashだけでは
+新しい値は反映されない。
 
 NVSイメージ生成:
 
@@ -133,8 +133,11 @@ M5Stackの再起動時に `NVS設定を読み込みました` と表示される
 ## 書き込み・モニタ
 
 ```bash
-espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust
+espflash flash --monitor --partition-table partitions.csv target/xtensa-esp32-espidf/release/m5remote-rust
 ```
+
+`--partition-table` は必須。省略すると espflash が自前のテーブルで書き込み、
+ビルドと実機のpartition構成が食い違う(詳細は後述のOTA移行手順を参照)。
 
 WSL2から書き込む場合はusbipd-winでUSBデバイスをアタッチしてから実行する。
 

@@ -14,28 +14,9 @@ secret_path_patterns=(
   '(^|/)[^/]*\.bin$'
 )
 
-allowed_templates=(
-  ".env.example"
-  ".env.local.example"
-)
-
-is_allowed_template() {
-  local path="$1"
-  local allowed
-  for allowed in "${allowed_templates[@]}"; do
-    if [[ "$path" == "$allowed" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
 blocked=()
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
-  if is_allowed_template "$path"; then
-    continue
-  fi
   for pattern in "${secret_path_patterns[@]}"; do
     if [[ "$path" =~ $pattern ]]; then
       blocked+=("$path")

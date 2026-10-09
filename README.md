@@ -22,7 +22,7 @@ Windows 11 Pro PC
        └─ POST /sleep
 ```
 
-将来的な外部操作は以下の経路を想定します。
+外部からの操作は以下の経路です。
 
 ```text
 Smartphone
@@ -58,17 +58,17 @@ cd firmware
 cp config.example.toml config.toml
 . ~/export-esp.sh
 cargo build --release --target xtensa-esp32-espidf
-espflash flash --monitor target/xtensa-esp32-espidf/release/m5remote-rust
+espflash flash --monitor --partition-table partitions.csv target/xtensa-esp32-espidf/release/m5remote-rust
 ```
 
 `config.toml` はGit管理外です。秘密情報をRustソース(`src/`配下)へ直接書かないでください。
 M5Stackの起動時はNVSの `m5remote` namespaceを先に読み、値があればそれを使います。NVSが未設定の
 場合は `config.toml` からビルド時生成した設定をfallbackとして使います。
-tokenやsecretをローテーションした時は、現時点では `config.toml` を更新して再build/flashする
-運用を正本にします。NVS provisioningだけで差し替える手順は、実機で安全に確認できてから
-運用手順に昇格します。
+tokenやsecretをローテーションした時は `config.toml` を更新し、NVSイメージを生成して
+実機のNVSへ書き込みます。起動時はNVSの値がビルド時configを上書きするため、
+再build/flashだけでは新しい値は反映されません。
 
-NVSイメージだけを生成する場合:
+NVSイメージを生成する場合:
 
 ```bash
 make firmware-nvs-image
