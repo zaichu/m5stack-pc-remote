@@ -169,11 +169,11 @@ bash scripts/telegram-set-commands.sh
 
 ### 5. 実行方法
 
-書き込み後、M5Stackの画面に `Telegram: polling` と表示されればTelegram連携が有効です。placeholderのままだと `Telegram: disabled` と表示され、Telegram機能だけが無効化されます(タッチUI・WOL・STATUSは通常どおり動作します)。
+書き込み後、M5Stack画面右上の `TG` ランプが緑になればTelegram連携が有効です(赤はエラー、暗色は無効)。placeholderのままだと `TG` ランプは暗色になり、Telegram機能だけが無効化されます(タッチUI・WOL・STATUSは通常どおり動作します)。
 
 Telegramアプリから許可したuser idのアカウントで、bot宛てに以下を送信します。
 
-- `/status`: PCのオン/オフ、Wi-Fi RSSI、M5Stack IPを返信します。
+- `/status`: PCのオン/オフと電源操作の可否、M5Stackのバッテリー状態とファームウェアバージョンを、操作ボタン付きで返信します。
 - `/wake`: Wake-on-LANを送信し、成功/失敗を返信します。
  - `/reboot` / `/shutdown` / `/sleep`: 即実行せず、日本語の確認メッセージが返信されます。メッセージには「再起動」「シャットダウン」「スリープ」ボタンと「キャンセル」ボタン(インラインキーボード)が付いており、タップするだけで確定/キャンセルできます。ボタンを使わない場合は、同じメッセージに記載された `/confirm_reboot <nonce>`、`/confirm_shutdown <nonce>`、`/confirm_sleep <nonce>` を手入力しても構いません(後方互換)。nonceは `telegram_confirm_ttl_secs`（秒）の間だけ有効（既定 60秒）で、ボタンタップ・コマンド入力・キャンセル・期限切れのいずれか1回で消費され、以降は再利用できません。
  - `/update`: manifestのversionとsizeを提示してから確認を求め、確定後にfirmwareを更新して自動でM5Stackを再起動します。新しいfirmwareは起動自己診断を通るまでvalidにならず、通らないままM5Stackが再起動すると旧版へ戻ります。
@@ -186,7 +186,7 @@ Telegramアプリから許可したuser idのアカウントで、bot宛てに�
 - M5Stack本体のタッチパネルから電源操作を実行したとき(`[本体パネル操作]` のprefixが付きます)
 - 未許可ユーザーからのアクセスを検知したとき(3回たまった時点で通知。最短送信間隔1時間)
 
-Telegram APIとのTLS通信は `firmware/src/telegram_root_ca.rs` に埋め込んだルートCA証明書でサーバー証明書を検証します。Telegramが将来ルート認証局を切り替えた場合、画面が `Telegram: polling` から `Telegram: error` に変わります。その場合の証明書更新手順は [External Access Design](docs/external-access.md) の「CA証明書のローテーション運用」を参照してください。
+Telegram APIとのTLS通信は `firmware/src/telegram_root_ca.rs` に埋め込んだルートCA証明書でサーバー証明書を検証します。Telegramが将来ルート認証局を切り替えた場合、画面の `TG` ランプが緑から赤に変わります。その場合の証明書更新手順は [External Access Design](docs/external-access.md) の「CA証明書のローテーション運用」を参照してください。
 
 ## ローカル品質チェック
 
