@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use serde::Serialize;
+use pc_remote_signing::OtaManifest;
 use time::format_description::well_known::Rfc3339;
 
 /// `firmware.version` が無いときにmanifestの `version` へ入れるフォールバック値
@@ -29,64 +29,44 @@ impl FirmwarePaths {
     }
 }
 
-/// ディスクから読んだ配信対象。`created_at` は `firmware.bin` のmtime(UTC)。
-#[derive(Clone, Debug)]
-pub struct FirmwareImage {
-    pub bytes: Vec<u8>,
-    pub version: String,
-    pub sha256_hex: String,
-    pub created_at: time::OffsetDateTime,
-}
-
-impl FirmwareImage {
-    pub fn size(&self) -> u64 {
-        self.bytes.len() as u64
-    }
-}
-
-/// `GET /firmware/manifest` の応答。本文はフィールド宣言順で固定される。
-#[derive(Debug, Serialize)]
-pub struct FirmwareManifest {
-    pub version: String,
-    pub size: u64,
-    pub sha256: String,
-    pub created_at: String,
-    pub signature: String,
-}
-
-/// 配信ファイルを読み込む(同期I/Oなので呼び出し側でblockingスレッドへ逃がす)。
+/// `GET /firmware` 用にバイナリだけを読む(同期I/Oなので呼び出し側でblockingスレッドへ逃がす)。
+/// sha256・version・mtimeはmanifestのための値であり、バイト列の配信には要らないため取らない。
 /// `firmware.bin` が無いときは `ErrorKind::NotFound` を返す(呼び出し側は404へ写像)。
 /// 応答本文・エラーメッセージにファイルパスは含めない。
-pub fn load(paths: &FirmwarePaths) -> std::io::Result<FirmwareImage> {
-    let bytes = std::fs::read(&paths.bin)?;
-    let modified = std::fs::metadata(&paths.bin)?.modified()?;
-    Ok(FirmwareImage {
-        sha256_hex: pc_remote_signing::body_sha256_hex(&bytes),
-        bytes,
-        version: read_version(&paths.version),
-        created_at: modified.into(),
-    })
+pub fn read_bin(paths: &FirmwarePaths) -> std::io::Result<Vec<u8>> {
+    std::fs::read(&paths.bin)
 }
 
-/// manifestを組み立ててHMAC-SHA256署名を付ける。
+/// manifestの組み立てに失敗した原因。
+#[derive(Debug, thiserror::Error)]
+pub enum ManifestError {
+    /// 配信ファイルの読み込みに失敗した。`firmware.bin` が無いときは
+    /// `ErrorKind::NotFound`(呼び出し側は404へ写像)。
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// `created_at` のRFC3339整形に失敗した。
+    #[error(transparent)]
+    Format(#[from] time::error::Format),
+}
+
+/// `GET /firmware/manifest` 用にmanifestを組み立ててHMAC-SHA256署名を付ける
+/// (同期I/Oなので呼び出し側でblockingスレッドへ逃がす)。`created_at` は
+/// `firmware.bin` のmtime(UTC)のRFC3339文字列。
 /// canonical文字列の組み立ては `pc-remote-signing::manifest_canonical_string` に任せ、
 /// ここで自前の順序を発明しない(検証側とずれるため)。
-pub fn build_manifest(
-    image: &FirmwareImage,
-    secret: &[u8],
-) -> Result<FirmwareManifest, time::error::Format> {
-    let created_at = image.created_at.format(&Rfc3339)?;
-    let signature = pc_remote_signing::sign_manifest(
-        secret,
-        &image.version,
-        image.size(),
-        &image.sha256_hex,
-        &created_at,
-    );
-    Ok(FirmwareManifest {
-        version: image.version.clone(),
-        size: image.size(),
-        sha256: image.sha256_hex.clone(),
+/// 応答本文・エラーメッセージにファイルパスは含めない。
+pub fn build_manifest(paths: &FirmwarePaths, secret: &[u8]) -> Result<OtaManifest, ManifestError> {
+    let bytes = read_bin(paths)?;
+    let size = bytes.len() as u64;
+    let sha256 = pc_remote_signing::body_sha256_hex(&bytes);
+    let version = read_version(&paths.version);
+    let modified = std::fs::metadata(&paths.bin)?.modified()?;
+    let created_at = time::OffsetDateTime::from(modified).format(&Rfc3339)?;
+    let signature = pc_remote_signing::sign_manifest(secret, &version, size, &sha256, &created_at);
+    Ok(OtaManifest {
+        version,
+        size,
+        sha256,
         created_at,
         signature,
     })
@@ -104,8 +84,10 @@ fn read_version(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_manifest, load, FirmwarePaths, UNKNOWN_VERSION};
+    use super::{build_manifest, read_bin, FirmwarePaths, ManifestError, UNKNOWN_VERSION};
     use std::io::Write;
+
+    const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
 
     fn write_bin(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) {
         let mut file = std::fs::File::create(dir.path().join(name)).unwrap();
@@ -121,33 +103,45 @@ mod tests {
     }
 
     #[test]
-    fn loads_size_hash_and_version() {
+    fn read_bin_returns_only_bytes() {
         let dir = tempfile::tempdir().unwrap();
         write_bin(&dir, "firmware.bin", b"fake-firmware-image");
         write_bin(&dir, "firmware.version", b"  0.2.0\n");
-        let image = load(&paths(&dir)).unwrap();
-        assert_eq!(image.bytes, b"fake-firmware-image");
-        assert_eq!(image.size(), 19);
+        assert_eq!(read_bin(&paths(&dir)).unwrap(), b"fake-firmware-image");
+    }
+
+    #[test]
+    fn manifest_has_size_hash_and_version() {
+        let dir = tempfile::tempdir().unwrap();
+        write_bin(&dir, "firmware.bin", b"fake-firmware-image");
+        write_bin(&dir, "firmware.version", b"  0.2.0\n");
+        let manifest = build_manifest(&paths(&dir), SECRET).unwrap();
+        assert_eq!(manifest.version, "0.2.0");
+        assert_eq!(manifest.size, 19);
         assert_eq!(
-            image.sha256_hex,
+            manifest.sha256,
             pc_remote_signing::body_sha256_hex(b"fake-firmware-image")
         );
-        assert_eq!(image.version, "0.2.0");
+        assert!(manifest.created_at.contains('T'));
     }
 
     #[test]
     fn falls_back_to_unknown_version_without_version_file() {
         let dir = tempfile::tempdir().unwrap();
         write_bin(&dir, "firmware.bin", b"fake-firmware-image");
-        let image = load(&paths(&dir)).unwrap();
-        assert_eq!(image.version, UNKNOWN_VERSION);
+        let manifest = build_manifest(&paths(&dir), SECRET).unwrap();
+        assert_eq!(manifest.version, UNKNOWN_VERSION);
     }
 
     #[test]
     fn missing_bin_is_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        let err = load(&paths(&dir)).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(
+            read_bin(&paths(&dir)).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        let err = build_manifest(&paths(&dir), SECRET).unwrap_err();
+        assert!(matches!(err, ManifestError::Io(e) if e.kind() == std::io::ErrorKind::NotFound));
     }
 
     #[test]
@@ -155,15 +149,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_bin(&dir, "firmware.bin", b"fake-firmware-image");
         write_bin(&dir, "firmware.version", b"0.2.0");
-        let image = load(&paths(&dir)).unwrap();
-        let secret = b"0123456789abcdef0123456789abcdef";
-        let manifest = build_manifest(&image, secret).unwrap();
-        assert_eq!(manifest.version, "0.2.0");
-        assert_eq!(manifest.size, image.size());
-        assert_eq!(manifest.sha256, image.sha256_hex);
-        assert!(manifest.created_at.contains('T'));
+        let manifest = build_manifest(&paths(&dir), SECRET).unwrap();
         assert!(pc_remote_signing::verify_manifest_signature(
-            secret,
+            SECRET,
             &manifest.version,
             manifest.size,
             &manifest.sha256,
