@@ -4,7 +4,7 @@
 
 - Rust firmwareプロジェクトを使う。
 - Wi-Fiへ接続する。
-- 設定ファイルからPCのMAC、IP、broadcast addressを読む。
+- 設定ファイルからPCのMAC、IPを読む。
 - Wake-on-LAN Magic Packetを送る。
 - TCP connect probeでオン/オフを判定する。
 - 画面には最低限のSTATUSとWAKEボタンを表示する。

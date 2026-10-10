@@ -18,7 +18,7 @@ Windows 11 Pro Desktop
 
 M5Stack firmwareは `firmware/` のRust実装です。Wi-Fi / WOL / STATUS / UI / REBOOT / SHUTDOWN / Telegram経由操作まで実機確認済みです。
 
-## 将来の外部操作
+## 外部操作
 
 ```text
 Smartphone
@@ -32,7 +32,7 @@ Windows PC
 
 m5stack-pc-bridgeはLAN内限定です。外部公開が必要な場合でも、m5stack-pc-bridgeの管理ポートは直接公開せず、M5Stackが外向きHTTPSで取得したコマンドだけを実行します。
 
-詳細設計は [External Access Design](external-access.md) を正本にします。コスト方針は [Cost Policy](cost.md) を参照。初期案はTelegram Bot APIのlong polling方式です。
+詳細設計は [External Access Design](external-access.md) を正本にします。コスト方針は [Cost Policy](cost.md) を参照。Telegram Bot APIのlong polling方式を採用しています。
 
 ## 用語
 

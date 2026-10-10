@@ -30,8 +30,6 @@ firmware/dist/
 # Local env and secret files.
 .env
 .env.*
-!.env.example
-!.env.local.example
 *secret*.json
 *credential*.json
 *service-account*.json
