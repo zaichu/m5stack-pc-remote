@@ -16,25 +16,33 @@ const KEYS: &[Key] = &[
     Key::text("wifi_ssid", "WIFI_SSID"),
     Key::text("wifi_password", "WIFI_PASSWORD"),
     Key::text("pc_mac_address", "PC_MAC_ADDRESS"),
-    Key::int("wol_port", "WOL_PORT", IntTy::U16),
+    // 整数keyの意味上の有効範囲は `.range()` が宣言の正本で、provisioning側は
+    // ここから導出して同じ検証をする(Issue #234)。portの0は無効。
+    Key::int("wol_port", "WOL_PORT", IntTy::U16).range(1, u16::MAX as i64),
     // STATUS確認先のport。hostは持たず、`pc_ip_address` から読み出し時に導く
     // (Issue #176)。既定は `config_validation::DEFAULT_STATUS_PORT` と同じ80。
+    // 0は「既定値を使う」の意味(`normalize_status_port`)なので範囲は絞らない。
     Key::int("pc_status_port", "PC_STATUS_PORT", IntTy::U16).default(80),
-    Key::int("bridge_port", "BRIDGE_PORT", IntTy::U16).alias("agent_port"),
+    Key::int("bridge_port", "BRIDGE_PORT", IntTy::U16)
+        .alias("agent_port")
+        .range(1, u16::MAX as i64),
     Key::text("bridge_shared_secret", "BRIDGE_SHARED_SECRET").alias("agent_shared_secret"),
     Key::text("pc_ip_address", "PC_IP_ADDRESS"),
     Key::text("telegram_bot_token", "TELEGRAM_BOT_TOKEN"),
     Key::text("telegram_allowed_user_id", "TELEGRAM_ALLOWED_USER_ID"),
+    // 0はpollのbusy-loop・確認の即時失効を意味するため1以上。
     Key::int(
         "telegram_long_poll_timeout_seconds",
         "TELEGRAM_LONG_POLL_TIMEOUT_SECONDS",
         IntTy::U32,
-    ),
+    )
+    .range(1, i64::MAX),
     Key::int(
         "telegram_confirm_ttl_secs",
         "TELEGRAM_CONFIRM_TTL_SECS",
         IntTy::U64,
-    ),
+    )
+    .range(1, i64::MAX),
     // 定期レポート関連は後から追加した任意keyなので、既存のconfig.tomlでも
     // ビルドが通るよう既定値を持たせる(必須にするとkey追加まで壊れる)。
     // 有効範囲の正本は config-validation crate(Issue #228)。
