@@ -282,8 +282,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     // `mark_app_valid_after_self_test` は未pendingの通常起動ではno-opなので、
     // 毎起動呼んでも無害(詳細は `ota.rs` のコメントを参照)。
     let mut ota_validated = false;
-    // 自己診断が通らなかったことを一度だけログへ出すためのフラグ。
-    let mut self_test_reported = false;
 
     let mut screen = Screen::Main;
     let mut status_at = Instant::now();
@@ -348,22 +346,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if !status.wifi_connected {
                     status.pc_online = false;
                 }
-                if matches!(screen, Screen::Main) {
-                    refresh_main(
-                        &mut display,
-                        &with_toast(&status, &toast_text),
-                        &app_config,
-                        &mut clock_minute,
-                    )?;
-                } else if matches!(screen, Screen::Calendar) {
-                    // Calendar滞在中もヘッダー(Wi-Fiランプ等)が破綻しないよう追随する。
-                    refresh_calendar(
-                        &mut display,
-                        &with_toast(&status, &toast_text),
-                        &app_config,
-                        &mut calendar_day,
-                    )?;
-                }
+                // Calendar滞在中もヘッダー(Wi-Fiランプ等)が破綻しないよう追随する。
+                refresh_current_screen(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &screen,
+                    &app_config,
+                    &mut clock_minute,
+                    &mut calendar_day,
+                )?;
             }
             if now_connected {
                 start_online_services(
@@ -390,22 +381,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
         if now_telegram != status.telegram {
             status.telegram = now_telegram;
-            if matches!(screen, Screen::Main) {
-                refresh_main(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &app_config,
-                    &mut clock_minute,
-                )?;
-            } else if matches!(screen, Screen::Calendar) {
-                // Calendar滞在中もヘッダー(Telegramランプ)が破綻しないよう追随する。
-                refresh_calendar(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &app_config,
-                    &mut calendar_day,
-                )?;
-            }
+            // Calendar滞在中もヘッダー(Telegramランプ)が破綻しないよう追随する。
+            refresh_current_screen(
+                &mut display,
+                &with_toast(&status, &toast_text),
+                &screen,
+                &app_config,
+                &mut clock_minute,
+                &mut calendar_day,
+            )?;
         }
 
         // Wi-Fi断中も電池表示を止めないため、PC状態の確認とは条件を分ける。
@@ -463,7 +447,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
             let previous_online = status.pc_online;
-            let previous_battery = status.battery;
             let now_online =
                 net::check_pc_online(&settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
             if now_online != status.pc_online {
@@ -550,33 +533,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             // 表示内容が変わったときだけ描き直す。`draw_main`は全画面消去から
             // 始まるため、10秒ごとに無条件で呼ぶとその周期で画面がちらつく。
-            // PC状態の変化はカード・ボタン配置に影響するため全画面描き直し、
-            // バッテリーだけの変化はヘッダー帯だけ描き直す(Issue #160)。
-            if matches!(screen, Screen::Main) {
-                if status.pc_online != previous_online {
-                    refresh_main(
-                        &mut display,
-                        &with_toast(&status, &toast_text),
-                        &app_config,
-                        &mut clock_minute,
-                    )?;
-                } else if status.battery != previous_battery {
-                    ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
-                }
-            } else if matches!(screen, Screen::Calendar) {
-                // Calendar滞在中もPC状態の変化に追随し、REBOOT/SHUTDOWNの
-                // 表示条件をMainと一致させる。バッテリーだけの変化は
-                // ヘッダー帯だけ描き直す(Mainと同じ)。
-                if status.pc_online != previous_online {
-                    refresh_calendar(
-                        &mut display,
-                        &with_toast(&status, &toast_text),
-                        &app_config,
-                        &mut calendar_day,
-                    )?;
-                } else if status.battery != previous_battery {
-                    ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
-                }
+            // PC状態の変化はカード・ボタン配置に影響するため全画面描き直す
+            // (Issue #160)。バッテリーの変化はポーリング側でヘッダーだけ描き直す。
+            // Calendar滞在中もPC状態の変化に追随し、REBOOT/SHUTDOWNの
+            // 表示条件をMainと一致させる。
+            if status.pc_online != previous_online {
+                refresh_current_screen(
+                    &mut display,
+                    &with_toast(&status, &toast_text),
+                    &screen,
+                    &app_config,
+                    &mut clock_minute,
+                    &mut calendar_day,
+                )?;
             }
 
             // 通ったときだけ新slotをvalidにする。通らなければ次回起動で旧slotへ戻る。
@@ -591,20 +560,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         ota_validated = true;
                         println!("ota: boot self-test passed, marked app valid");
                     }
-                    Ok(false) => {
-                        // 通らなかったことを一度だけ出す。これが無いと、
-                        // 「次回起動で旧slotへ戻る」状態がログから読み取れず、
-                        // OTA後の実機確認で正常との区別がつかない。10秒周期で
-                        // 出すと通常運用のログを埋めるため初回だけにする。
-                        if !self_test_reported {
-                            self_test_reported = true;
-                            println!(
-                                "ota: boot self-test not passed yet (wifi_connected={}); \
-                                 pending slot stays unvalidated and will roll back on reboot",
-                                status.wifi_connected
-                            );
-                        }
-                    }
+                    // この呼び出し条件(display_ok・wifi_connectedともに真)では
+                    // 自己診断は必ず通る。将来条件が変わっても ota_validated を
+                    // 立てなければ次周期に再評価されるため、何もしない。
+                    Ok(false) => {}
                     Err(e) => println!("ota: mark app valid failed (will retry): {e}"),
                 }
             }
@@ -614,22 +573,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         let now_locked = operation_lock.is_locked();
         if now_locked != status.locked {
             status.locked = now_locked;
-            if matches!(screen, Screen::Main) {
-                refresh_main(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &app_config,
-                    &mut clock_minute,
-                )?;
-            } else if matches!(screen, Screen::Calendar) {
-                // Calendar滞在中もLOCK表示とボタンの有効・無効表示を追随させる。
-                refresh_calendar(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &app_config,
-                    &mut calendar_day,
-                )?;
-            }
+            // Calendar滞在中もLOCK表示とボタンの有効・無効表示を追随させる。
+            refresh_current_screen(
+                &mut display,
+                &with_toast(&status, &toast_text),
+                &screen,
+                &app_config,
+                &mut clock_minute,
+                &mut calendar_day,
+            )?;
         }
 
         // 明るさ設定の即時反映(Issue #167)。Telegramでの変更確定はpollingスレッドが
@@ -683,22 +635,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             // 復帰時の再描画(Issue #172)。消灯中は描画しないため、ここで現在の
             // 画面を描き直して時計帯を最新の分へ戻す。`screen` は借用だけにし、
             // 確認画面を開いたまま消灯した場合も復帰後に確認画面を維持する。
-            if matches!(screen, Screen::Main) {
-                refresh_main(
+            if let Screen::Confirm(action) = &screen {
+                ui::draw_confirm(&mut display, *action)?;
+            } else {
+                refresh_current_screen(
                     &mut display,
                     &with_toast(&status, &toast_text),
+                    &screen,
                     &app_config,
                     &mut clock_minute,
-                )?;
-            } else if matches!(screen, Screen::Calendar) {
-                refresh_calendar(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &app_config,
                     &mut calendar_day,
                 )?;
-            } else if let Screen::Confirm(action) = &screen {
-                ui::draw_confirm(&mut display, *action)?;
             }
             std::thread::sleep(TOUCH_POLL_INTERVAL);
             continue;
@@ -734,7 +681,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
 
                 match screen {
-                    Screen::Main => {
+                    // 電源ボタン行はMain/Calendarで共通のため、電源操作はまとめて
+                    // 処理し、画面固有の遷移(時計帯・BACK)だけ分ける。
+                    Screen::Main | Screen::Calendar => {
                         if ui::WAKE_BUTTON.contains(x, y) {
                             println!("WAKE tapped at x={x} y={y}");
                             let _guard = telegram::lock_power(&power_lock);
@@ -755,11 +704,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 std::thread::sleep(TOUCH_POLL_INTERVAL);
                                 continue;
                             }
-                            let wol_result = net::send_wake_on_lan(
+                            let (toast, report) = match net::send_wake_on_lan(
                                 &app_config.pc_mac_address,
                                 settings.wol_port(),
-                            );
-                            let (toast, report) = match wol_result {
+                            ) {
                                 Ok(()) => {
                                     println!("WOL sent");
                                     // 画面のトーストはASCIIフォントのため英語のまま。
@@ -777,11 +725,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                             notify_panel_action(notifier.as_ref(), report);
                             toast_text = Some(toast.to_string());
                             toast_at = Instant::now();
-                            refresh_main(
+                            refresh_current_screen(
                                 &mut display,
                                 &with_toast(&status, &toast_text),
+                                &screen,
                                 &app_config,
                                 &mut clock_minute,
+                                &mut calendar_day,
                             )?;
                         } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
                             screen = Screen::Confirm(PowerAction::Reboot);
@@ -789,7 +739,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         } else if status.pc_online && ui::SHUTDOWN_BUTTON.contains(x, y) {
                             screen = Screen::Confirm(PowerAction::Shutdown);
                             ui::draw_confirm(&mut display, PowerAction::Shutdown)?;
-                        } else if ui::CLOCK_TAP_ZONE.contains(x, y) {
+                        } else if matches!(screen, Screen::Main)
+                            && ui::CLOCK_TAP_ZONE.contains(x, y)
+                        {
                             // 時計帯タップでCalendar画面へ(Issue #173)。
                             // 電源操作ではないためLOCK中でも許可する。
                             // タップ領域は電源ボタン行と重ならない内側に絞ってある。
@@ -801,64 +753,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 &app_config,
                                 &mut calendar_day,
                             )?;
-                        }
-                    }
-                    Screen::Calendar => {
-                        if ui::WAKE_BUTTON.contains(x, y) {
-                            println!("WAKE tapped at x={x} y={y} (calendar)");
-                            let _guard = telegram::lock_power(&power_lock);
-                            // status.lockedはループ先頭で読んだ値なので、判定から
-                            // ここまでの間にTelegramの/lockが通っている可能性がある。
-                            // 実行直前に共有状態を直接見る。
-                            if operation_lock.is_locked() {
-                                reject_locked(
-                                    &mut display,
-                                    &status,
-                                    &mut toast_text,
-                                    &mut toast_at,
-                                    &mut screen,
-                                    &app_config,
-                                    &mut clock_minute,
-                                )?;
-                                touch_was_down = touch_down;
-                                std::thread::sleep(TOUCH_POLL_INTERVAL);
-                                continue;
-                            }
-                            let wol_result = net::send_wake_on_lan(
-                                &app_config.pc_mac_address,
-                                settings.wol_port(),
-                            );
-                            let (toast, report) = match wol_result {
-                                Ok(()) => {
-                                    println!("WOL sent");
-                                    // 画面のトーストはASCIIフォントのため英語のまま。
-                                    telegram::begin_wake_watch(
-                                        &wake_watch_shared,
-                                        status.pc_online,
-                                    );
-                                    ("Magic packet sent", wake_check::wake_request_text())
-                                }
-                                Err(e) => {
-                                    println!("WOL failed: {e}");
-                                    ("WOL failed", wake_check::wake_request_failed_text())
-                                }
-                            };
-                            notify_panel_action(notifier.as_ref(), report);
-                            toast_text = Some(toast.to_string());
-                            toast_at = Instant::now();
-                            refresh_calendar(
-                                &mut display,
-                                &with_toast(&status, &toast_text),
-                                &app_config,
-                                &mut calendar_day,
-                            )?;
-                        } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
-                            screen = Screen::Confirm(PowerAction::Reboot);
-                            ui::draw_confirm(&mut display, PowerAction::Reboot)?;
-                        } else if status.pc_online && ui::SHUTDOWN_BUTTON.contains(x, y) {
-                            screen = Screen::Confirm(PowerAction::Shutdown);
-                            ui::draw_confirm(&mut display, PowerAction::Shutdown)?;
-                        } else if ui::CALENDAR_BACK_BUTTON.contains(x, y) {
+                        } else if matches!(screen, Screen::Calendar)
+                            && ui::CALENDAR_BACK_BUTTON.contains(x, y)
+                        {
                             // BACKボタン。電源ボタン行と重ならない専用座標のため、
                             // 電源ボタン判定の後に置いても見た目と結果が一致する。
                             // LOCK中でも表示切替は許可する。
@@ -871,7 +768,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 &mut clock_minute,
                             )?;
                         }
-                        // カレンダーグリッド内タップは何も起こさない。
+                        // カレンダーグリッド等の空白タップは何も起こさない。
                     }
                     Screen::Confirm(action) => {
                         if ui::CANCEL_BUTTON.contains(x, y) {
@@ -938,16 +835,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if toast_text.is_some() && toast_at.elapsed() >= TOAST_TTL {
             toast_text = None;
-            if matches!(screen, Screen::Main) {
-                refresh_main(&mut display, &status, &app_config, &mut clock_minute)?;
-            } else if matches!(screen, Screen::Calendar) {
-                refresh_calendar(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &app_config,
-                    &mut calendar_day,
-                )?;
-            }
+            refresh_current_screen(
+                &mut display,
+                &status,
+                &screen,
+                &app_config,
+                &mut clock_minute,
+                &mut calendar_day,
+            )?;
         }
 
         // 時計帯の更新(Issue #172)。表示中の分が変わったときだけ帯を描き直し、
@@ -1071,6 +966,24 @@ fn refresh_calendar(
         status,
         &ui::calendar_view(unix, app_config.timezone_offset_hours),
     )
+}
+
+/// 現在の画面(Main/Calendar)を状態に合わせて描き直す。
+/// Confirm画面は操作途中の表示を保つため描き直さない(消灯復帰など明示的な
+/// 場面だけが `ui::draw_confirm` を呼ぶ)。
+fn refresh_current_screen(
+    display: &mut board::Core2Display<'_>,
+    status: &Status<'_>,
+    screen: &Screen,
+    app_config: &AppConfig,
+    clock_minute: &mut i64,
+    calendar_day: &mut Option<ui::CalendarDay>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match screen {
+        Screen::Main => refresh_main(display, status, app_config, clock_minute),
+        Screen::Calendar => refresh_calendar(display, status, app_config, calendar_day),
+        Screen::Confirm(_) => Ok(()),
+    }
 }
 
 fn with_toast<'a>(status: &Status<'a>, toast: &'a Option<String>) -> Status<'a> {
