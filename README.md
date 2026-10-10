@@ -68,9 +68,10 @@ tokenやsecretをローテーションした時は `config.toml` を更新し、
 実機のNVSへ書き込みます。起動時はNVSの値がビルド時configを上書きするため、
 再build/flashだけでは新しい値は反映されません。
 
-NVSイメージを生成する場合:
+NVSイメージを生成する場合(リポジトリ直下へ戻ってから実行):
 
 ```bash
+cd ..
 make firmware-nvs-image
 ```
 
