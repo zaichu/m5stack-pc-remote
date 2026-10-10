@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use clap::Parser;
 use windows_service::service::{
     ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
 };
@@ -39,9 +40,8 @@ pub fn run() -> anyhow::Result<()> {
 fn run_foreground() -> anyhow::Result<()> {
     // foreground 実行では `--config` / `M5STACK_PC_BRIDGE_CONFIG` を解釈する。
     // `std::env::args()` はSCMが `service_main` へ渡す引数とは別物なので混同しないこと。
-    let cli_config = crate::parse_config_arg(std::env::args_os().skip(1));
-    let env_config = crate::env_config_path(std::env::var_os(crate::CONFIG_ENV_VAR));
-    let config = crate::load_foreground_config(cli_config, env_config)?;
+    let args = crate::Cli::parse();
+    let config = crate::load_config(args.config_path())?;
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(server::serve(config))
 }
@@ -120,7 +120,7 @@ fn run_and_report_status(
     )?;
 
     // service起動時の設定は実行ファイル横に固定する(`--config`/環境変数の解決はしない)。
-    let config = crate::load_default_config()?;
+    let config = crate::load_config(crate::default_config_path())?;
 
     let runtime = tokio::runtime::Runtime::new()?;
     let (graceful_tx, graceful_rx) = tokio::sync::oneshot::channel::<()>();

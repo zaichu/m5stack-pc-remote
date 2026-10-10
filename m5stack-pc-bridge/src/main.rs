@@ -9,23 +9,13 @@ fn main() -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     use clap::Parser;
-    use m5stack_pc_bridge::{app_config::AgentConfig, server};
-
-    #[derive(Debug, Parser)]
-    struct Args {
-        #[arg(long, env = "M5STACK_PC_BRIDGE_CONFIG")]
-        config: Option<String>,
-    }
+    use m5stack_pc_bridge::{server, Cli};
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let args = Args::parse();
-    let config_path = args
-        .config
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(m5stack_pc_bridge::default_config_path);
-    let config = AgentConfig::from_path(&config_path)?;
+    let args = Cli::parse();
+    let config = m5stack_pc_bridge::load_config(args.config_path())?;
     server::serve(config).await
 }
