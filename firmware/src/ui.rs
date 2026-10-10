@@ -574,21 +574,8 @@ pub fn draw_calendar(
 
     CALENDAR_BACK_BUTTON.draw(display, "BACK", palette::NEUTRAL, true)?;
 
-    // 配色はMainと同じく沈める。タップはmain.rs側で弾く。
-    let enabled = !status.locked;
-    WAKE_BUTTON.draw(display, "WAKE", palette::ACCENT, enabled)?;
-    // REBOOT / SHUTDOWNはMainと同じくPCがオンのときだけ表示する。
-    if status.pc_online {
-        REBOOT_BUTTON.draw(display, "REBOOT", palette::WARN, enabled)?;
-        SHUTDOWN_BUTTON.draw(display, "SHUTDOWN", palette::DANGER, enabled)?;
-    }
-
-    // トーストは一時的な結果表示なので常時表示のロックより優先する(Mainと同じ優先順位)。
-    if let Some(text) = status.toast {
-        draw_banner(display, text, palette::ACCENT)?;
-    } else if status.locked {
-        draw_banner(display, "LOCKED - send /unlock in Telegram", palette::WARN)?;
-    }
+    draw_power_buttons(display, status)?;
+    draw_status_banner(display, status)?;
 
     Ok(())
 }
@@ -618,6 +605,36 @@ fn draw_banner(
     Ok(())
 }
 
+/// Main/Calendar共通の電源ボタン行。ロック中はボタンを沈めた配色にし、
+/// 押しても動かないことを見た目で示す(タップを実際に弾くのはmain.rs側)。
+/// REBOOT / SHUTDOWNはPCがオンのときだけ表示して、誤操作の入口を減らす。
+fn draw_power_buttons(
+    display: &mut Core2Display<'_>,
+    status: &Status<'_>,
+) -> Result<(), Box<dyn Error>> {
+    let enabled = !status.locked;
+    WAKE_BUTTON.draw(display, "WAKE", palette::ACCENT, enabled)?;
+    if status.pc_online {
+        REBOOT_BUTTON.draw(display, "REBOOT", palette::WARN, enabled)?;
+        SHUTDOWN_BUTTON.draw(display, "SHUTDOWN", palette::DANGER, enabled)?;
+    }
+    Ok(())
+}
+
+/// トースト/ロック状態のバナー。トーストは一時的な結果表示なので、
+/// 常時表示のロック状態より優先する。
+fn draw_status_banner(
+    display: &mut Core2Display<'_>,
+    status: &Status<'_>,
+) -> Result<(), Box<dyn Error>> {
+    if let Some(text) = status.toast {
+        draw_banner(display, text, palette::ACCENT)?;
+    } else if status.locked {
+        draw_banner(display, "LOCKED - send /unlock in Telegram", palette::WARN)?;
+    }
+    Ok(())
+}
+
 /// ヘッダー帯だけを描き直す。帯全体を塗りつぶすため古いランプ文言のゴーストは残らず、
 /// 全画面clearよりちらつきと転送量(約1/9)が少ない。
 pub fn redraw_header(
@@ -640,21 +657,8 @@ pub fn draw_main(
     draw_status_card(display, status)?;
     redraw_clock(display, clock)?;
 
-    // ロック中はボタンを沈めた配色にし、押しても動かないことを見た目で示す。
-    let enabled = !status.locked;
-    WAKE_BUTTON.draw(display, "WAKE", palette::ACCENT, enabled)?;
-    // REBOOT / SHUTDOWNはPCがオンのときだけ表示して、誤操作の入口を減らす。
-    if status.pc_online {
-        REBOOT_BUTTON.draw(display, "REBOOT", palette::WARN, enabled)?;
-        SHUTDOWN_BUTTON.draw(display, "SHUTDOWN", palette::DANGER, enabled)?;
-    }
-
-    // トーストは一時的な結果表示なので、常時表示のロックより優先する。
-    if let Some(text) = status.toast {
-        draw_banner(display, text, palette::ACCENT)?;
-    } else if status.locked {
-        draw_banner(display, "LOCKED - send /unlock in Telegram", palette::WARN)?;
-    }
+    draw_power_buttons(display, status)?;
+    draw_status_banner(display, status)?;
 
     Ok(())
 }
