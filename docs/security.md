@@ -44,7 +44,7 @@ m5stack-pc-bridgeの待受ポートはプライベートネットワークに限
 - `callback_query` はTelegramの仕様どおり、認可の成否や処理結果によらず必ず `answerCallbackQuery` を呼び、クライアント側のボタン読み込み状態を終える。
 - 確認実行時はm5stack-pc-bridge向けHMAC署名付きPOSTを使うため、m5stack-pc-bridge側の `confirm: true` 必須条件・timestamp・nonce検証はTelegram経由でも同様に効く。
 - TelegramとのHTTPS通信はサーバー証明書チェーンを検証する。ルートCAは `firmware/src/telegram_root_ca.rs` に埋め込んだ「Go Daddy Root Certificate Authority - G2」(有効期限2037-12-31)。bot tokenは全てのTelegram API URLに含まれるため、経路上の中間者攻撃に対しても証明書検証で保護する。証明書検証省略は使わない。
-- Telegramがルート認証局を切り替えた場合、この検証は失敗するようになる(画面が `Telegram: error` になる)。ローテーション手順は `docs/external-access.md` の「CA証明書のローテーション運用」を正本とする。
+- Telegramがルート認証局を切り替えた場合、この検証は失敗するようになる(画面の `TG` ランプが赤になる)。ローテーション手順は `docs/external-access.md` の「CA証明書のローテーション運用」を正本とする。
 
 ## shared_secret の保存とACL
 
