@@ -132,7 +132,8 @@ pub fn verify_manifest_signature(
 /// OTA配信のmanifest(`GET /firmware/manifest` の応答)。構造体は1箇所に置く
 /// (片方だけfieldを増減すると署名検証以前にparseで壊れる)。
 /// 未知fieldは許容する(将来fieldを足しても古いfirmwareのOTAが止まらないように)。
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+/// 応答側(m5stack-pc-bridge)もこの型を `Serialize` で返し、field宣言を複製しない。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct OtaManifest {
     pub version: String,
     pub size: u64,

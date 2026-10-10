@@ -140,31 +140,26 @@ async fn firmware_manifest(
     // 読み込みはblocking I/O(数MB級)のためblockingスレッドへ逃がす。
     let outcome = tokio::task::spawn_blocking({
         let state = state.clone();
-        move || {
-            firmware::load(&state.firmware).map(|image| {
-                firmware::build_manifest(&image, &state.auth.secret)
-                    .map(|manifest| (image, manifest))
-            })
-        }
+        move || firmware::build_manifest(&state.firmware, &state.auth.secret)
     })
     .await;
 
     match outcome {
-        Ok(Ok(Ok((_, manifest)))) => (StatusCode::OK, Json(manifest)).into_response(),
-        Ok(Ok(Err(err))) => {
+        Ok(Ok(manifest)) => (StatusCode::OK, Json(manifest)).into_response(),
+        Ok(Err(firmware::ManifestError::Io(err))) if err.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, "firmware not found").into_response()
+        }
+        Ok(Err(firmware::ManifestError::Io(err))) => {
+            tracing::error!("failed to read firmware: {err}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "failed to read firmware").into_response()
+        }
+        Ok(Err(firmware::ManifestError::Format(err))) => {
             tracing::error!("failed to format firmware manifest timestamp: {err}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to build firmware manifest",
             )
                 .into_response()
-        }
-        Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-            (StatusCode::NOT_FOUND, "firmware not found").into_response()
-        }
-        Ok(Err(err)) => {
-            tracing::error!("failed to read firmware: {err}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "failed to read firmware").into_response()
         }
         Err(join_err) => {
             tracing::error!("firmware manifest task failed: {join_err}");
@@ -193,13 +188,13 @@ async fn firmware_binary(
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
 
-    let outcome = tokio::task::spawn_blocking(move || firmware::load(&state.firmware)).await;
+    let outcome = tokio::task::spawn_blocking(move || firmware::read_bin(&state.firmware)).await;
 
     match outcome {
-        Ok(Ok(image)) => (
+        Ok(Ok(bytes)) => (
             StatusCode::OK,
             [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-            image.bytes,
+            bytes,
         )
             .into_response(),
         Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => {
