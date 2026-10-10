@@ -26,7 +26,7 @@ except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore[no-redef]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config_keys import ConfigKey, derive_mappings, derive_ranges  # noqa: E402
+from config_keys import INT_TY_BOUNDS, ConfigKey, derive_mappings  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -102,28 +102,27 @@ def validate_config(
     if empty:
         raise ValueError("空にできないconfigがあります: " + ", ".join(empty))
 
-    for key in ("wol_port", "bridge_port"):
-        value = int(data[key])
-        if value < 1 or value > 65535:
-            raise ValueError(f"{key} は1..65535で指定してください")
-
-    for key in ("telegram_long_poll_timeout_seconds", "telegram_confirm_ttl_secs"):
-        value = int(data[key])
-        if value < 1:
-            raise ValueError(f"{key} は1以上で指定してください")
-
-    # 有効範囲の正本は shared/config-validation(Issue #228)。ここで拒否しないと、
-    # 保存した値が起動時のclampで別の値になる。
-    for key, (lo, hi) in derive_ranges().items():
-        if key not in data:
+    # 整数keyの型・範囲検証。個別のkey名をここへ書かず、build.rs の IntTy と
+    # `.range()` 宣言を config_keys.py 経由で共有する(Issue #234)。ここで
+    # 拒否しないと、保存した値が起動時のparse失敗・clampで別の値になる。
+    for key in keys:
+        if key.int_ty is None or key.toml_key not in data:
             continue
-        value = data[key]
-        # int() はfloatを切り捨てboolを0/1へ変換するため、型確認より先に
-        # 渡すと `brightness = 100.9` のような不正値を受理してしまう。
+        value = data[key.toml_key]
+        # int() はfloatを切り捨てboolを0/1へ変換するため、変換して判定すると
+        # `wol_port = 9.5` のような不正値を受理してしまう。build.rs の
+        # as_integer() と同じく整数型だけを認める。
         if type(value) is not int:
-            raise ValueError(f"{key} は整数で指定してください")
+            raise ValueError(f"{key.toml_key} は整数で指定してください")
+        lo, hi = INT_TY_BOUNDS[key.int_ty]
         if not lo <= value <= hi:
-            raise ValueError(f"{key} は{lo}〜{hi}で指定してください")
+            raise ValueError(
+                f"{key.toml_key} は {key.int_ty.lower()} の範囲({lo}〜{hi})で指定してください"
+            )
+        if key.int_range is not None:
+            lo, hi = key.int_range
+            if not lo <= value <= hi:
+                raise ValueError(f"{key.toml_key} は{lo}〜{hi}で指定してください")
 
 
 def write_csv(path: Path, config: dict[str, object], keys: tuple[ConfigKey, ...]) -> None:
