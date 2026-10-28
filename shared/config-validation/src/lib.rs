@@ -6,7 +6,7 @@
 //! (`firmware/build.rs`)・NVSイメージ生成(`scripts/provision-firmware-nvs.py`)・
 //! 起動時(`firmware/src/app_config.rs`)の全入口が同じ定数・判定関数を使う。
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 
 /// `pc_ip_address` として妥当なIPv4アドレスか検証する。
@@ -26,6 +26,27 @@ pub fn validate_ipv4(input: &str) -> Result<String, String> {
 /// (`check_pc_online` の高速経路に乗せる。Issue #130-3)。
 pub fn compose_status_addr(pc_ip_address: &str, status_port: u16) -> String {
     format!("{}:{status_port}", pc_ip_address.trim())
+}
+
+/// STATUS確認先を `SocketAddr` へ変換する。IPリテラル専用でDNSは引かない。
+/// UIループのホットパス用。ホスト名(旧NVSの互換)は `None` になり、呼び出し側は
+/// 起動時に1回だけ解決した値を保持して使うこと。
+pub fn parse_status_socket_addr(addr_text: &str) -> Option<SocketAddr> {
+    addr_text.trim().parse().ok()
+}
+
+/// STATUS確認先を解決する。IPリテラルはDNSを引かずに返し、ホスト名のときだけ
+/// `resolve_hostname` を1回呼ぶ。呼び出し側は起動時に1回だけ呼び、結果を保持する。
+/// DNS・ネットワーク自体はこの関数ではなく `resolve_hostname` 側の責務。
+pub fn resolve_status_addr_with(
+    addr_text: &str,
+    resolve_hostname: impl FnOnce(&str) -> Option<SocketAddr>,
+) -> Option<SocketAddr> {
+    let trimmed = addr_text.trim();
+    if let Ok(addr) = trimmed.parse::<SocketAddr>() {
+        return Some(addr);
+    }
+    resolve_hostname(trimmed)
 }
 
 /// STATUS確認先portの既定値。`firmware/build.rs` の
@@ -202,6 +223,52 @@ mod tests {
                 "{addr} は SocketAddr としてparseできること"
             );
         }
+    }
+
+    #[test]
+    fn parses_status_socket_addr_without_dns() {
+        // IPリテラルはそのまま `SocketAddr` になる。前後空白も許容する。
+        assert_eq!(
+            parse_status_socket_addr("192.168.1.50:80"),
+            Some("192.168.1.50:80".parse().unwrap())
+        );
+        assert_eq!(
+            parse_status_socket_addr("  192.168.1.50:8080 \n"),
+            Some("192.168.1.50:8080".parse().unwrap())
+        );
+        // ホスト名・port欠落・空文字は `None`(DNSは引かない)。
+        assert_eq!(parse_status_socket_addr("my-pc.local:80"), None);
+        assert_eq!(parse_status_socket_addr("192.168.1.50"), None);
+        assert_eq!(parse_status_socket_addr(""), None);
+    }
+
+    #[test]
+    fn resolves_status_addr_calling_dns_only_for_hostnames() {
+        use std::cell::Cell;
+        // IPリテラルではDNS相当のクロージャを呼ばない(UIループで止まらないこと)。
+        let called = Cell::new(false);
+        assert_eq!(
+            resolve_status_addr_with("192.168.1.50:80", |_| {
+                called.set(true);
+                None
+            }),
+            Some("192.168.1.50:80".parse().unwrap())
+        );
+        assert!(!called.get());
+        // ホスト名はクロージャへ1回だけ委ねる(起動時の1回解決に対応)。
+        let called = Cell::new(0);
+        let resolved: SocketAddr = "10.0.0.9:80".parse().unwrap();
+        assert_eq!(
+            resolve_status_addr_with("my-pc.local:80", |trimmed| {
+                called.set(called.get() + 1);
+                assert_eq!(trimmed, "my-pc.local:80");
+                Some(resolved)
+            }),
+            Some(resolved)
+        );
+        assert_eq!(called.get(), 1);
+        // 解決不能は `None`(呼び出し側はSTATUSをオフ扱いにする)。
+        assert_eq!(resolve_status_addr_with("my-pc.local:80", |_| None), None);
     }
 
     #[test]

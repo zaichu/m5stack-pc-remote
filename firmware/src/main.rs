@@ -254,6 +254,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     status.wifi_connected = wifi.as_ref().is_some_and(net::Wifi::is_up);
+    // STATUS確認先は起動時に解決し、結果を保持する。UIループ内で毎回
+    // `to_socket_addrs()` を実行すると旧NVSのホスト名で画面もタッチも止まる
+    // (Issue #248)。Wi-Fi未接続の起動時はDNSを引かず、接続後の最初の
+    // STATUS確認で1回だけ解決する。
+    let mut status_target_text = settings.pc_status_addr();
+    let mut status_target = if status.wifi_connected {
+        net::resolve_status_addr_once(&status_target_text)
+    } else {
+        config_validation::parse_status_socket_addr(&status_target_text)
+    };
     if status.wifi_connected {
         start_online_services(
             &mut sntp,
@@ -447,8 +457,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
             let previous_online = status.pc_online;
-            let now_online =
-                net::check_pc_online(&settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
+            let addr_text = settings.pc_status_addr();
+            if addr_text != status_target_text {
+                status_target_text = addr_text;
+                // 実行時の変更はIPv4検証済みのためparseのみ。DNSは引かない。
+                status_target = config_validation::parse_status_socket_addr(&status_target_text);
+            }
+            if status_target.is_none() {
+                // 起動時・変更時に未解決のままなら解決を試みる。
+                // ここへ来るのは旧NVSのホスト名だけで、成功すれば以降は
+                // 保持した値を使い、失敗時は従来通りオフ扱いになる。
+                status_target = net::resolve_status_addr_once(&status_target_text);
+            }
+            let now_online = status_target
+                .map(|addr| net::check_pc_online_addr(addr, net::STATUS_PROBE_TIMEOUT))
+                .unwrap_or(false);
             if now_online != status.pc_online {
                 status.pc_online = now_online;
                 println!("PC status changed: online={}", status.pc_online);
