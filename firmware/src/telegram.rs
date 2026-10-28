@@ -1934,8 +1934,8 @@ impl Client {
             return;
         }
 
-        // NTP同期を短時間だけ待つ。未同期なら電源操作の送信側で拒否する。
-        net::wait_for_time_sync(Duration::from_secs(10));
+        // NTP同期を短時間だけ待つ。未同期でもpollingは開始し、電源操作の送信側で拒否する。
+        net::wait_for_time_sync(net::NTP_SYNC_WAIT);
 
         let mut backoff = BACKOFF_MIN;
         *lock_state(&state) = State::Polling;

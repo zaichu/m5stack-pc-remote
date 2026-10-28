@@ -254,6 +254,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     status.wifi_connected = wifi.as_ref().is_some_and(net::Wifi::is_up);
+    // STATUS確認先は起動時に解決し、結果を保持する。UIループ内で毎回
+    // `to_socket_addrs()` を実行すると旧NVSのホスト名で画面もタッチも止まる
+    // (Issue #248)。Wi-Fi未接続の起動時はDNSを引かず、接続後の最初の
+    // STATUS確認で1回だけ解決する。
+    let mut status_target_text = settings.pc_status_addr();
+    let mut status_targets: Vec<std::net::SocketAddr> = if status.wifi_connected {
+        net::resolve_status_addr_once(&status_target_text)
+    } else {
+        config_validation::parse_status_socket_addr(&status_target_text)
+            .into_iter()
+            .collect()
+    };
+    // DNSを試したか。未試行と解決失敗を区別し、失敗後の再解決で
+    // UIループを止め続けないための旗。
+    let mut status_dns_tried = status.wifi_connected;
     if status.wifi_connected {
         start_online_services(
             &mut sntp,
@@ -447,8 +462,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
             status_at = Instant::now();
             let previous_online = status.pc_online;
+            let addr_text = settings.pc_status_addr();
+            if addr_text != status_target_text {
+                status_target_text = addr_text;
+                // 実行時の変更はIPv4検証済みのためparseのみ。DNSは引かない。
+                status_targets = config_validation::parse_status_socket_addr(&status_target_text)
+                    .into_iter()
+                    .collect();
+                status_dns_tried = false;
+            }
+            if status_targets.is_empty() && !status_dns_tried {
+                // 未解決のままなら1回だけ解決を試みる。失敗しても再試行は
+                // せず、設定変更時まで未解決として保持する。
+                status_dns_tried = true;
+                status_targets = net::resolve_status_addr_once(&status_target_text);
+            }
             let now_online =
-                net::check_pc_online(&settings.pc_status_addr(), net::STATUS_PROBE_TIMEOUT);
+                net::check_pc_online_cached(&status_targets, net::STATUS_PROBE_TIMEOUT);
             if now_online != status.pc_online {
                 status.pc_online = now_online;
                 println!("PC status changed: online={}", status.pc_online);

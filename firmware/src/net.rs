@@ -23,6 +23,10 @@ pub fn is_ntp_synced(unix_seconds: i64) -> bool {
 /// PC死活確認のTCP接続タイムアウト。長くすると画面更新とTelegram応答が遅くなる。
 pub const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 
+/// Telegram polling開始前のNTP待ち上限。未同期でも電源操作は送信側が拒否する
+/// ため、長く待たずpollingを開始する(Issue #248)。
+pub const NTP_SYNC_WAIT: Duration = Duration::from_secs(2);
+
 /// PCの死活状態の日本語表記。用語は `docs/glossary.md` が正本
 /// (状態は「オン/オフ」と書き、「オンライン/オフライン」は使わない)。
 pub fn pc_online_label_ja(online: bool) -> &'static str {
@@ -156,9 +160,12 @@ pub fn send_wake_on_lan(mac_text: &str, port: u16) -> Result<(), Box<dyn Error>>
 }
 
 /// STATUS相当の疎通確認。接続成功または即時refusedならオン、timeoutならオフ/到達不能。
+/// UIループでは使わないこと。ホスト名の名前解決が毎回走り画面もタッチも止まる
+/// ため、UI側は起動時に1回だけ解決した `SocketAddr` を保持し、
+/// `check_pc_online_addr` を使う(Issue #248)。Telegramスレッド側の互換経路として残す。
 pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
-    // IPリテラルならDNSを引かない。ホスト名の名前解決はブロックし、UIループから
-    // 呼ばれるここで画面もタッチも止まる(Issue #130-3)。
+    // IPリテラルならDNSを引かない。ホスト名の名前解決はブロックするため、
+    // UIループからは呼ばないこと(関数の説明を参照。Issue #130-3)。
     // `to_socket_addrs()` は制限前にNVSへ書かれたホスト名が残っている場合の互換。
     if let Ok(addr) = addr_text.parse::<SocketAddr>() {
         return probe(addr, timeout);
@@ -174,6 +181,25 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
         }
     }
     false
+}
+
+/// 起動時に1回だけ呼ぶSTATUS確認先の解決。IPリテラルはDNSを引かない。
+/// 解決結果の保持と再解決の判断は呼び出し側が行い、UIループ内ではDNSを引かない。
+/// 複数アドレスは順序どおり返し、先頭1件への切り捨てはしない。
+pub fn resolve_status_addr_once(addr_text: &str) -> Vec<SocketAddr> {
+    config_validation::resolve_status_addr_with(addr_text, |trimmed| {
+        trimmed
+            .to_socket_addrs()
+            .map(|addrs| addrs.collect())
+            .unwrap_or_default()
+    })
+}
+
+/// 解決済みの確認先への疎通確認。DNSを引かないためUIループから呼べる。
+/// 複数アドレスは順に試し、いずれかが成功すればオンにする(従来の
+/// `check_pc_online` と同じフォールバック)。
+pub fn check_pc_online_cached(addrs: &[SocketAddr], timeout: Duration) -> bool {
+    addrs.iter().any(|addr| probe(*addr, timeout))
 }
 
 /// `ConnectionRefused` は「相手は居るがそのportで待っていない」ためオンとみなす。
