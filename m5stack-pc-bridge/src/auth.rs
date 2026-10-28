@@ -47,8 +47,10 @@ impl NonceStore {
         now: OffsetDateTime,
         ttl_seconds: i64,
     ) -> bool {
-        // 毎リクエストの全走査 O(N) を避けるため、100件ごとに間引き
-        if self.seen.len().is_multiple_of(100) {
+        // 毎リクエストの全走査 O(N) を避けるため、100件ごとに間引きする。
+        // 上限到達時は必ず掃除する。並行挿入の競合で上限を超えた非倍数サイズに
+        // 留まると間引きが二度と走らず、期限切れが残っても拒否し続けるため。
+        if self.seen.len().is_multiple_of(100) || self.seen.len() >= Self::MAX_ENTRIES {
             self.evict_expired(now.unix_timestamp(), ttl_seconds);
         }
         if nonce.len() > Self::MAX_NONCE_LEN
