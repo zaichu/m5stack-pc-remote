@@ -20,6 +20,7 @@ use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConne
 use serde_json::{json, Value};
 
 use pc_remote_signing::AlertThrottle;
+use telegram_cursor::UpdateCursor;
 
 use crate::app_config::AppConfig;
 use crate::board::Battery;
@@ -41,8 +42,6 @@ const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const BACKOFF_MIN: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const RESPONSE_BUFFER: usize = 4096;
-/// ESP32のヒープ保護。超過分は読まずにエラーとし、backoffへ回す。
-const RESPONSE_MAX_BYTES: usize = 32 * 1024;
 
 /// UIスレッドへ共有するTelegram状態。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -453,8 +452,9 @@ struct Pending {
 }
 
 pub struct Client {
-    last_update_id: i64,
-    initial_sync_done: bool,
+    /// `getUpdates` の offset 進行。純粋ロジックは `telegram_cursor` 側にあり、
+    /// hostテストで取りこぼしなしを固定する。
+    cursor: UpdateCursor,
     pending: Option<Pending>,
     /// 設定変更ボタンを押した後、値の入力を待っている項目。
     pending_input: Option<PendingInput>,
@@ -951,8 +951,7 @@ impl Client {
         sleep_watch: SharedSleepWatch,
     ) -> Self {
         Self {
-            last_update_id: 0,
-            initial_sync_done: false,
+            cursor: UpdateCursor::new(),
             pending: None,
             pending_input: None,
             power_lock,
@@ -1812,17 +1811,19 @@ impl Client {
         self.dispatch_command(chat_id, command, args);
     }
 
-    fn process_updates(&mut self, results: &[Value], dispatch: bool) {
+    fn process_updates(&mut self, results: &[Value]) {
+        // offsetは受けた分だけ進める(取りこぼしなし)。起動直後の滞留分は
+        // 実行せず、空応答が返るまで同期中とする。判定は `telegram_cursor` 側。
+        let dispatch = self.cursor.advance(
+            results
+                .iter()
+                .map(|item| item["update_id"].as_i64().unwrap_or_default()),
+        );
+        if !dispatch {
+            // 起動直後の滞留分はoffset更新だけ行う。
+            return;
+        }
         for item in results {
-            let update_id = item["update_id"].as_i64().unwrap_or_default();
-            if update_id >= self.last_update_id {
-                self.last_update_id = update_id + 1;
-            }
-            if !dispatch {
-                // 起動直後の最初のバッチはoffset更新だけ行う。
-                continue;
-            }
-
             // 受信した種類だけ残す。本文やnonceは出さない。
             // 「ボタンを押しても無反応」のとき、updateが届いていないのか
             // 処理側で落ちているのかを切り分けるために必要。
@@ -1858,10 +1859,11 @@ impl Client {
         // 必要な種類を毎回明示する。値はJSON配列をpercent-encodeした固定文字列。
         const ALLOWED_UPDATES: &str = "%5B%22message%22%2C%22callback_query%22%5D";
         let url = format!(
-            "{}?timeout={}&offset={}&allowed_updates={ALLOWED_UPDATES}",
+            "{}?timeout={}&offset={}&limit={}&allowed_updates={ALLOWED_UPDATES}",
             self.api.api_url("getUpdates"),
             self.config.telegram_long_poll_timeout_seconds,
-            self.last_update_id
+            self.cursor.offset(),
+            telegram_cursor::GET_UPDATES_LIMIT,
         );
         // long pollingの接続はここで閉じ切ってから、updateの処理へ移る。
         //
@@ -1900,10 +1902,12 @@ impl Client {
                 if read == 0 {
                     break;
                 }
-                if body.len() + read > RESPONSE_MAX_BYTES {
-                    return Err(
-                        format!("getUpdates response exceeds {RESPONSE_MAX_BYTES} bytes").into(),
-                    );
+                if body.len() + read > telegram_cursor::GET_UPDATES_MAX_BYTES {
+                    return Err(format!(
+                        "getUpdates response exceeds {} bytes",
+                        telegram_cursor::GET_UPDATES_MAX_BYTES
+                    )
+                    .into());
                 }
                 body.extend_from_slice(&chunk[..read]);
             }
@@ -1920,9 +1924,7 @@ impl Client {
         let Some(results) = parsed["result"].as_array().cloned() else {
             return Err("getUpdates response has no result array".into());
         };
-        let dispatch = self.initial_sync_done;
-        self.process_updates(&results, dispatch);
-        self.initial_sync_done = true;
+        self.process_updates(&results);
         Ok(())
     }
 
