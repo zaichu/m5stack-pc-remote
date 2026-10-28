@@ -44,6 +44,17 @@ I2C操作、成功後の状態更新、復帰時の再描画とタッチの消�
 10秒の周期で処理し、判定の全分岐と60秒の境界はホストテストで確認する。
 `make fmt-check`・`make clippy`・`make test` にこのcrateの確認を含む。
 
+### カレンダーの日付更新判定
+
+`shared/calendar-update` は表示済みの日付と現在の日付を比較し、再描画が必要かを
+判定する。NTP未同期は `None` とし、未同期が続く間と同期済みの同日中は描き直さない。
+未同期から同期、同期から未同期、年月日のいずれかの変化では描き直す。
+
+時刻取得、NTP同期の判定、ローカル日付への変換、描画と表示済み日付の記録は
+firmware側に残す。消灯中・Calendar以外の画面では日付更新判定を行わず、ループの
+処理順序と20msの待機は維持する。判定の全分岐はホストテストで確認し、
+`make fmt`・`make fmt-check`・`make clippy`・`make test` にこのcrateを含む。
+
 ## ハードウェア定義(M5GFXのCore2 autodetect実装に準拠)
 
 - LCD ILI9342C 320x240: MOSI=23, MISO=38(未使用), SCLK=18, DC=15, CS=5、SPI 40MHz
