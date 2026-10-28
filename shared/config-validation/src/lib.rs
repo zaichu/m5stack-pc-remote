@@ -35,16 +35,18 @@ pub fn parse_status_socket_addr(addr_text: &str) -> Option<SocketAddr> {
     addr_text.trim().parse().ok()
 }
 
-/// STATUS確認先を解決する。IPリテラルはDNSを引かずに返し、ホスト名のときだけ
-/// `resolve_hostname` を1回呼ぶ。呼び出し側は起動時に1回だけ呼び、結果を保持する。
+/// STATUS確認先を解決する。IPリテラルはDNSを引かずに1件だけ返し、ホスト名の
+/// ときだけ `resolve_hostname` を1回呼ぶ。呼び出し側は起動時に1回だけ呼び、
+/// 結果全体を保持する。複数アドレスの順次確認は既存の挙動(Issue #130-3の
+/// A/AAAAフォールバック)を保つため、先頭1件への切り捨てはここではしない。
 /// DNS・ネットワーク自体はこの関数ではなく `resolve_hostname` 側の責務。
 pub fn resolve_status_addr_with(
     addr_text: &str,
-    resolve_hostname: impl FnOnce(&str) -> Option<SocketAddr>,
-) -> Option<SocketAddr> {
+    resolve_hostname: impl FnOnce(&str) -> Vec<SocketAddr>,
+) -> Vec<SocketAddr> {
     let trimmed = addr_text.trim();
     if let Ok(addr) = trimmed.parse::<SocketAddr>() {
-        return Some(addr);
+        return vec![addr];
     }
     resolve_hostname(trimmed)
 }
@@ -250,25 +252,29 @@ mod tests {
         assert_eq!(
             resolve_status_addr_with("192.168.1.50:80", |_| {
                 called.set(true);
-                None
+                Vec::new()
             }),
-            Some("192.168.1.50:80".parse().unwrap())
+            vec!["192.168.1.50:80".parse().unwrap()]
         );
         assert!(!called.get());
-        // ホスト名はクロージャへ1回だけ委ねる(起動時の1回解決に対応)。
+        // ホスト名はクロージャへ1回だけ委ね、複数アドレスは順序どおり保つ
+        // (先頭1件への切り捨てはA/AAAAフォールバックを壊す)。
         let called = Cell::new(0);
-        let resolved: SocketAddr = "10.0.0.9:80".parse().unwrap();
+        let resolved: Vec<SocketAddr> = vec![
+            "10.0.0.9:80".parse().unwrap(),
+            "10.0.0.10:80".parse().unwrap(),
+        ];
         assert_eq!(
             resolve_status_addr_with("my-pc.local:80", |trimmed| {
                 called.set(called.get() + 1);
                 assert_eq!(trimmed, "my-pc.local:80");
-                Some(resolved)
+                resolved.clone()
             }),
-            Some(resolved)
+            resolved
         );
         assert_eq!(called.get(), 1);
-        // 解決不能は `None`(呼び出し側はSTATUSをオフ扱いにする)。
-        assert_eq!(resolve_status_addr_with("my-pc.local:80", |_| None), None);
+        // 解決不能は空(呼び出し側はSTATUSをオフ扱いにする)。
+        assert!(resolve_status_addr_with("my-pc.local:80", |_| Vec::new()).is_empty());
     }
 
     #[test]

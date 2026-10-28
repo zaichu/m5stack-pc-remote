@@ -185,15 +185,21 @@ pub fn check_pc_online(addr_text: &str, timeout: Duration) -> bool {
 
 /// 起動時に1回だけ呼ぶSTATUS確認先の解決。IPリテラルはDNSを引かない。
 /// 解決結果の保持と再解決の判断は呼び出し側が行い、UIループ内ではDNSを引かない。
-pub fn resolve_status_addr_once(addr_text: &str) -> Option<SocketAddr> {
+/// 複数アドレスは順序どおり返し、先頭1件への切り捨てはしない。
+pub fn resolve_status_addr_once(addr_text: &str) -> Vec<SocketAddr> {
     config_validation::resolve_status_addr_with(addr_text, |trimmed| {
-        trimmed.to_socket_addrs().ok()?.next()
+        trimmed
+            .to_socket_addrs()
+            .map(|addrs| addrs.collect())
+            .unwrap_or_default()
     })
 }
 
 /// 解決済みの確認先への疎通確認。DNSを引かないためUIループから呼べる。
-pub fn check_pc_online_addr(addr: SocketAddr, timeout: Duration) -> bool {
-    probe(addr, timeout)
+/// 複数アドレスは順に試し、いずれかが成功すればオンにする(従来の
+/// `check_pc_online` と同じフォールバック)。
+pub fn check_pc_online_cached(addrs: &[SocketAddr], timeout: Duration) -> bool {
+    addrs.iter().any(|addr| probe(*addr, timeout))
 }
 
 /// `ConnectionRefused` は「相手は居るがそのportで待っていない」ためオンとみなす。
