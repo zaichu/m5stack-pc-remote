@@ -23,6 +23,7 @@ use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
 use app_config::AppConfig;
+use backlight::{Action as BacklightAction, SLEEP_TIMEOUT};
 use board::{DisplayPins, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use bridge_client::PowerAction;
 use settings::RuntimeSettings;
@@ -40,11 +41,6 @@ const TOAST_TTL: Duration = Duration::from_secs(3);
 /// STATUS_INTERVAL(10秒)×2回なので、20秒続いた変化だけを通知する。
 /// タッチのポーリング間隔。取りこぼさない程度に短く、CPUを回しすぎない程度に長く。
 const TOUCH_POLL_INTERVAL: Duration = Duration::from_millis(20);
-/// スリープ(Issue #168): この時間タッチが無ければバックライトを消す。
-/// Telegramでのリモート操作(WOL/reboot/shutdown等)はこのタイマーをリセット
-/// しない(画面の前に人がいるとは限らないため)。
-const SLEEP_TIMEOUT: Duration = Duration::from_secs(60);
-
 const NOTIFY_STABLE_POLLS: u8 = 2;
 
 /// タッチUIの現在画面。
@@ -700,45 +696,50 @@ fn main() -> Result<(), Box<dyn Error>> {
         // スリープ(Issue #168)。LDO2(LCD+タッチ電源)は触らないため、消灯中も
         // タッチ検出自体は生きている。復帰用の最初のタッチはここで消費し、
         // 下のボタン判定へは渡さない(誤操作防止)。
-        if backlight_on {
-            if touch_rising_edge {
+        match backlight::decide(
+            backlight_on,
+            touch_rising_edge,
+            last_touch_activity_at.elapsed(),
+        ) {
+            BacklightAction::None => {}
+            BacklightAction::ResetIdle => {
                 last_touch_activity_at = Instant::now();
-            } else if last_touch_activity_at.elapsed() >= SLEEP_TIMEOUT {
-                match board::set_backlight_on(&mut axp, false) {
-                    Ok(()) => {
-                        backlight_on = false;
-                        println!("sleep: backlight off (idle {}s)", SLEEP_TIMEOUT.as_secs());
-                    }
-                    Err(e) => println!("sleep: backlight off failed: {e:?}"),
-                }
             }
-        } else if touch_rising_edge {
-            match board::apply_brightness(&mut axp, applied_brightness) {
+            BacklightAction::TurnOff => match board::set_backlight_on(&mut axp, false) {
                 Ok(()) => {
-                    backlight_on = true;
-                    last_touch_activity_at = Instant::now();
-                    println!("sleep: backlight on (touch)");
+                    backlight_on = false;
+                    println!("sleep: backlight off (idle {}s)", SLEEP_TIMEOUT.as_secs());
                 }
-                Err(e) => println!("sleep: backlight on failed: {e:?}"),
+                Err(e) => println!("sleep: backlight off failed: {e:?}"),
+            },
+            BacklightAction::Wake => {
+                match board::apply_brightness(&mut axp, applied_brightness) {
+                    Ok(()) => {
+                        backlight_on = true;
+                        last_touch_activity_at = Instant::now();
+                        println!("sleep: backlight on (touch)");
+                    }
+                    Err(e) => println!("sleep: backlight on failed: {e:?}"),
+                }
+                touch_was_down = touch_down;
+                // 復帰時の再描画(Issue #172)。消灯中は描画しないため、ここで現在の
+                // 画面を描き直して時計帯を最新の分へ戻す。`screen` は借用だけにし、
+                // 確認画面を開いたまま消灯した場合も復帰後に確認画面を維持する。
+                if let Screen::Confirm(action) = &screen {
+                    ui::draw_confirm(&mut display, *action)?;
+                } else {
+                    refresh_current_screen(
+                        &mut display,
+                        &with_toast(&status, &toast_text),
+                        &screen,
+                        &app_config,
+                        &mut clock_minute,
+                        &mut calendar_day,
+                    )?;
+                }
+                std::thread::sleep(TOUCH_POLL_INTERVAL);
+                continue;
             }
-            touch_was_down = touch_down;
-            // 復帰時の再描画(Issue #172)。消灯中は描画しないため、ここで現在の
-            // 画面を描き直して時計帯を最新の分へ戻す。`screen` は借用だけにし、
-            // 確認画面を開いたまま消灯した場合も復帰後に確認画面を維持する。
-            if let Screen::Confirm(action) = &screen {
-                ui::draw_confirm(&mut display, *action)?;
-            } else {
-                refresh_current_screen(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &screen,
-                    &app_config,
-                    &mut clock_minute,
-                    &mut calendar_day,
-                )?;
-            }
-            std::thread::sleep(TOUCH_POLL_INTERVAL);
-            continue;
         }
 
         if let Some((x, y)) = touch_point {

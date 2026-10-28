@@ -72,6 +72,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b7e4c2464d97fe331d41de9d5db0def0a96f4d823b8b32a2efd503578988973"
 
 [[package]]
+name = "backlight"
+version = "0.1.0"
+
+[[package]]
 name = "battery"
 version = "0.1.0"
 
@@ -1051,6 +1055,7 @@ name = "m5remote-rust"
 version = "0.16.0"
 dependencies = [
  "axp192",
+ "backlight",
  "battery",
  "config-validation",
  "embedded-graphics",
