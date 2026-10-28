@@ -953,7 +953,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // 1回描き直し、`NO CLOCK` から当月グリッドへ切り替える。
         if backlight_on && matches!(screen, Screen::Calendar) {
             let now_day = ui::calendar_date(now_unix_secs(), app_config.timezone_offset_hours);
-            if now_day != calendar_day {
+            if calendar_update::needs_redraw(calendar_day, now_day) {
                 refresh_calendar(
                     &mut display,
                     &with_toast(&status, &toast_text),

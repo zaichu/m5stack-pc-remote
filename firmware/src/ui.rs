@@ -15,6 +15,7 @@ use embedded_graphics::text::{Alignment, Text};
 
 use crate::board::{Battery, Core2Display, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::bridge_client::PowerAction;
+pub use calendar_update::CalendarDay;
 
 /// 配色。1箇所にまとめて画面全体のトーンを揃える。
 mod palette {
@@ -406,14 +407,6 @@ pub fn redraw_clock(
     .map_err(draw_failed)?;
 
     Ok(())
-}
-
-/// 月間カレンダーの1日分の日付(日付変化の検出にも使う)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CalendarDay {
-    pub year: i64,
-    pub month: u32,
-    pub day: u32,
 }
 
 /// 当日の日付を求める。SNTP未同期時はNone(1970年などの誤った日付を作らない)。
