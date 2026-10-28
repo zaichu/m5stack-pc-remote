@@ -14,6 +14,7 @@ fmt:
 	cargo fmt --manifest-path shared/pc-remote-signing/Cargo.toml
 	cargo fmt --manifest-path shared/config-validation/Cargo.toml
 	cargo fmt --manifest-path shared/battery/Cargo.toml
+	cargo fmt --manifest-path shared/backlight/Cargo.toml
 	cargo fmt --manifest-path shared/wake-check/Cargo.toml
 	cargo fmt --manifest-path shared/online-state/Cargo.toml
 
@@ -23,11 +24,13 @@ fmt-check:
 	cargo fmt --manifest-path shared/pc-remote-signing/Cargo.toml --check
 	cargo fmt --manifest-path shared/config-validation/Cargo.toml --check
 	cargo fmt --manifest-path shared/battery/Cargo.toml --check
+	cargo fmt --manifest-path shared/backlight/Cargo.toml --check
 	cargo fmt --manifest-path shared/wake-check/Cargo.toml --check
 	cargo fmt --manifest-path shared/online-state/Cargo.toml --check
 
 clippy:
 	cargo clippy --manifest-path m5stack-pc-bridge/Cargo.toml --all-targets -- -D warnings
+	cargo clippy --manifest-path shared/backlight/Cargo.toml --all-targets -- -D warnings
 
 test:
 	cargo test --manifest-path m5stack-pc-bridge/Cargo.toml
@@ -36,6 +39,7 @@ test:
 	cargo test --manifest-path shared/pc-remote-signing/Cargo.toml
 	cargo test --manifest-path shared/config-validation/Cargo.toml
 	cargo test --manifest-path shared/battery/Cargo.toml
+	cargo test --manifest-path shared/backlight/Cargo.toml
 	cargo test --manifest-path shared/wake-check/Cargo.toml
 	cargo test --manifest-path shared/online-state/Cargo.toml
 	cargo test --manifest-path shared/telegram-cursor/Cargo.toml
