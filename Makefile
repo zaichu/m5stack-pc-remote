@@ -15,6 +15,7 @@ fmt:
 	cargo fmt --manifest-path shared/config-validation/Cargo.toml
 	cargo fmt --manifest-path shared/battery/Cargo.toml
 	cargo fmt --manifest-path shared/wake-check/Cargo.toml
+	cargo fmt --manifest-path shared/online-state/Cargo.toml
 
 fmt-check:
 	cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml --check
@@ -23,6 +24,7 @@ fmt-check:
 	cargo fmt --manifest-path shared/config-validation/Cargo.toml --check
 	cargo fmt --manifest-path shared/battery/Cargo.toml --check
 	cargo fmt --manifest-path shared/wake-check/Cargo.toml --check
+	cargo fmt --manifest-path shared/online-state/Cargo.toml --check
 
 clippy:
 	cargo clippy --manifest-path m5stack-pc-bridge/Cargo.toml --all-targets -- -D warnings
@@ -35,6 +37,7 @@ test:
 	cargo test --manifest-path shared/config-validation/Cargo.toml
 	cargo test --manifest-path shared/battery/Cargo.toml
 	cargo test --manifest-path shared/wake-check/Cargo.toml
+	cargo test --manifest-path shared/online-state/Cargo.toml
 	cargo test --manifest-path shared/telegram-cursor/Cargo.toml
 
 # toolchainが無い開発端末では警告してskipするが、CI(CI=1)では必ず実行する。

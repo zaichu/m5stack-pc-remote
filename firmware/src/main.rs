@@ -57,6 +57,8 @@ enum Screen {
 /// Wi-Fi接続後にだけ意味があるサービス(SNTPとTelegram poller)を開始する。
 /// 再接続時に何度呼んでもよい。NTP同期は待たない(UIループを止めない。
 /// 未同期の時計は電源操作側が拒否する)。
+/// 何を始めるかの判定は副作用のない `online_state::OnlineState::transition` に寄せ、
+/// ここでは開始の実行だけを行う。
 #[allow(clippy::too_many_arguments)]
 fn start_online_services(
     sntp: &mut Option<esp_idf_svc::sntp::EspSntp<'static>>,
@@ -81,7 +83,51 @@ fn start_online_services(
     // オフ確認後はオンに戻るまで抑止する。
     sleep_watch: &telegram::SharedSleepWatch,
 ) {
-    if sntp.is_none() {
+    let (_, actions) = online_state::OnlineState::from_parts(
+        true,
+        sntp.is_some(),
+        notifier.is_some(),
+        *telegram_started,
+    )
+    .transition(
+        online_state::OnlineEvent::WifiConnected,
+        telegram::is_configured(app_config.as_ref()),
+    );
+    apply_online_actions(
+        actions,
+        sntp,
+        telegram_started,
+        power_lock,
+        operation_lock,
+        telegram_state,
+        notifier,
+        app_config,
+        settings,
+        https_lock,
+        battery,
+        wake_watch,
+        sleep_watch,
+    );
+}
+
+/// `transition` が要求した開始だけを実行する。判定は行わない。
+#[allow(clippy::too_many_arguments)]
+fn apply_online_actions(
+    actions: online_state::OnlineActions,
+    sntp: &mut Option<esp_idf_svc::sntp::EspSntp<'static>>,
+    telegram_started: &mut bool,
+    power_lock: &telegram::PowerLock,
+    operation_lock: &telegram::OperationLock,
+    telegram_state: &Arc<Mutex<telegram::State>>,
+    notifier: &mut Option<telegram::Notifier>,
+    app_config: &Arc<AppConfig>,
+    settings: &Arc<RuntimeSettings>,
+    https_lock: &telegram::HttpsLock,
+    battery: &telegram::SharedBattery,
+    wake_watch: &telegram::SharedWakeWatch,
+    sleep_watch: &telegram::SharedSleepWatch,
+) {
+    if actions.start_sntp {
         // m5stack-pc-bridgeはtimestampを検証するため、電源操作前に時計同期が必要になる。
         // ここではSNTP開始だけ行い、同期待ちは別スレッド側に任せる。
         match net::start_sntp() {
@@ -93,7 +139,7 @@ fn start_online_services(
         }
     }
 
-    if notifier.is_none() {
+    if actions.start_notifier {
         // PC状態変化などをUIループから送るための送信専用スレッド。
         *notifier = telegram::start_notifier(
             Arc::clone(app_config),
@@ -102,7 +148,7 @@ fn start_online_services(
         );
     }
 
-    if !*telegram_started && telegram::is_configured(app_config.as_ref()) {
+    if actions.start_telegram {
         let client = telegram::Client::new(
             Arc::clone(power_lock),
             operation_lock.clone(),
@@ -122,8 +168,9 @@ fn start_online_services(
             Ok(_) => {
                 *telegram_started = true;
                 println!("telegram: polling task started");
-                // 起動通知は polling 開始の初回だけ送る。この `if !*telegram_started`
-                // ブロックは起動後に一度だけ通るため、再接続で誤発火しない。
+                // 起動通知は polling 開始の初回だけ送る。この `if actions.start_telegram`
+                // ブロックは未起動のときだけ通り、起動後は要求自体が出ないため、
+                // 再接続で誤発火しない。
                 // `Notifier::notify` は mpsc 送信だけで即戻り、送信失敗も
                 // 通知スレッド側でログに留めるため、起動処理を止めない。
                 if let Some(notifier) = notifier.as_ref() {
@@ -355,7 +402,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
 
-            let now_connected = wifi.as_ref().is_some_and(net::Wifi::is_up);
+            let event = if wifi.as_ref().is_some_and(net::Wifi::is_up) {
+                online_state::OnlineEvent::WifiConnected
+            } else {
+                online_state::OnlineEvent::WifiDisconnected
+            };
+            let (next, actions) = online_state::OnlineState::from_parts(
+                status.wifi_connected,
+                sntp.is_some(),
+                notifier.is_some(),
+                telegram_started,
+            )
+            .transition(event, telegram::is_configured(app_config.as_ref()));
+            let now_connected = next.is_online();
             if now_connected != status.wifi_connected {
                 status.wifi_connected = now_connected;
                 if !status.wifi_connected {
@@ -372,7 +431,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )?;
             }
             if now_connected {
-                start_online_services(
+                apply_online_actions(
+                    actions,
                     &mut sntp,
                     &mut telegram_started,
                     &power_lock,
