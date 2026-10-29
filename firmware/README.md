@@ -55,6 +55,16 @@ firmware側に残す。消灯中・Calendar以外の画面では日付更新判�
 処理順序と20msの待機は維持する。判定の全分岐はホストテストで確認し、
 `make fmt`・`make fmt-check`・`make clippy`・`make test` にこのcrateを含む。
 
+### トーストの期限切れ判定
+
+`shared/toast-expiry` はトースト表示の有無と表示開始からの経過時間から、
+期限切れかを判定する。表示中は3秒で期限切れになり、表示が無い間は経過時間に
+関わらず期限切れにならない。
+
+期限切れ後の表示クリアと再描画は firmware側に残す。ループの処理順序と20msの
+待機は維持する。判定の全分岐と3秒の境界はホストテストで確認し、
+`make fmt`・`make fmt-check`・`make clippy`・`make test` にこのcrateを含む。
+
 ## ハードウェア定義(M5GFXのCore2 autodetect実装に準拠)
 
 - LCD ILI9342C 320x240: MOSI=23, MISO=38(未使用), SCLK=18, DC=15, CS=5、SPI 40MHz

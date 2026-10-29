@@ -1078,6 +1078,7 @@ dependencies = [
  "serde",
  "serde_json",
  "telegram-cursor",
+ "toast-expiry",
  "toml",
  "wake-check",
 ]
@@ -1578,6 +1579,10 @@ dependencies = [
  "quote",
  "syn 3.0.4",
 ]
+
+[[package]]
+name = "toast-expiry"
+version = "0.1.0"
 
 [[package]]
 name = "toml"

@@ -29,6 +29,8 @@ backlight = { path = "../shared/backlight" }
 calendar-update = { path = "../shared/calendar-update" }
 # PCの起動指示後の待機状態と期限判定の純粋ロジック。host側でテストできるよう分離してある。
 wake-check = { path = "../shared/wake-check" }
+# トースト(一時表示)の期限切れ判定の純粋ロジック。host側でテストできるよう分離してある。
+toast-expiry = { path = "../shared/toast-expiry" }
 # getUpdates の offset 進行の純粋ロジック。host側でテストできるよう分離してある。
 telegram-cursor = { path = "../shared/telegram-cursor" }
 # Wi-Fi接続とオンラインサービス起動の状態遷移の純粋ロジック。host側でテストできるよう分離してある。
