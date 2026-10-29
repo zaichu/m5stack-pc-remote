@@ -36,7 +36,6 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(10);
 /// 普段は2レジスタ読みだけなのでI2C負荷は無視できる。
 const BATTERY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
-const TOAST_TTL: Duration = Duration::from_secs(3);
 /// PC状態のTelegram通知を出すまでに必要な、同じ結果の連続観測回数。
 /// STATUS_INTERVAL(10秒)×2回なので、20秒続いた変化だけを通知する。
 /// タッチのポーリング間隔。取りこぼさない程度に短く、CPUを回しすぎない程度に長く。
@@ -924,7 +923,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         touch_was_down = touch_down;
 
-        if toast_text.is_some() && toast_at.elapsed() >= TOAST_TTL {
+        if toast_expiry::is_expired(toast_text.is_some(), toast_at.elapsed()) {
             toast_text = None;
             refresh_current_screen(
                 &mut display,
