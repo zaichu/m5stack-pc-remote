@@ -31,6 +31,8 @@ calendar-update = { path = "../shared/calendar-update" }
 wake-check = { path = "../shared/wake-check" }
 # トースト(一時表示)の期限切れ判定の純粋ロジック。host側でテストできるよう分離してある。
 toast-expiry = { path = "../shared/toast-expiry" }
+# PC状態の安定通知判定の純粋ロジック。host側でテストできるよう分離してある。
+notify-stable = { path = "../shared/notify-stable" }
 # getUpdates の offset 進行の純粋ロジック。host側でテストできるよう分離してある。
 telegram-cursor = { path = "../shared/telegram-cursor" }
 # Wi-Fi接続とオンラインサービス起動の状態遷移の純粋ロジック。host側でテストできるよう分離してある。
