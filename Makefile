@@ -18,6 +18,7 @@ fmt:
 	cargo fmt --manifest-path shared/calendar-update/Cargo.toml
 	cargo fmt --manifest-path shared/wake-check/Cargo.toml
 	cargo fmt --manifest-path shared/toast-expiry/Cargo.toml
+	cargo fmt --manifest-path shared/notify-stable/Cargo.toml
 	cargo fmt --manifest-path shared/online-state/Cargo.toml
 
 fmt-check:
@@ -30,6 +31,7 @@ fmt-check:
 	cargo fmt --manifest-path shared/calendar-update/Cargo.toml --check
 	cargo fmt --manifest-path shared/wake-check/Cargo.toml --check
 	cargo fmt --manifest-path shared/toast-expiry/Cargo.toml --check
+	cargo fmt --manifest-path shared/notify-stable/Cargo.toml --check
 	cargo fmt --manifest-path shared/online-state/Cargo.toml --check
 
 clippy:
@@ -37,6 +39,7 @@ clippy:
 	cargo clippy --manifest-path shared/backlight/Cargo.toml --all-targets -- -D warnings
 	cargo clippy --manifest-path shared/calendar-update/Cargo.toml --all-targets -- -D warnings
 	cargo clippy --manifest-path shared/toast-expiry/Cargo.toml --all-targets -- -D warnings
+	cargo clippy --manifest-path shared/notify-stable/Cargo.toml --all-targets -- -D warnings
 
 test:
 	cargo test --manifest-path m5stack-pc-bridge/Cargo.toml
@@ -49,6 +52,7 @@ test:
 	cargo test --manifest-path shared/calendar-update/Cargo.toml
 	cargo test --manifest-path shared/wake-check/Cargo.toml
 	cargo test --manifest-path shared/toast-expiry/Cargo.toml
+	cargo test --manifest-path shared/notify-stable/Cargo.toml
 	cargo test --manifest-path shared/online-state/Cargo.toml
 	cargo test --manifest-path shared/telegram-cursor/Cargo.toml
 

@@ -1073,6 +1073,7 @@ dependencies = [
  "esp-idf-sys",
  "ft6x36",
  "mipidsi",
+ "notify-stable",
  "online-state",
  "pc-remote-signing",
  "serde",
@@ -1157,6 +1158,10 @@ checksum = "b9985ef7269fa99f3b12437bb698381da2428743ab90f20393f399fa14cab21a"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "notify-stable"
+version = "0.1.0"
 
 [[package]]
 name = "num-traits"

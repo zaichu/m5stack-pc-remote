@@ -65,6 +65,17 @@ firmware側に残す。消灯中・Calendar以外の画面では日付更新判�
 待機は維持する。判定の全分岐と3秒の境界はホストテストで確認し、
 `make fmt`・`make fmt-check`・`make clippy`・`make test` にこのcrateを含む。
 
+### PC状態の安定通知判定
+
+`shared/notify-stable` はSTATUS確認ごとのPCのオンライン状態から、Telegram通知を
+送るかを判定する。初めての観測は通知せず基準値として取り込み、同じ結果が2回
+連続したときだけ通知する。起動成功通知で既済のときは何もせず、スリープ指示後の
+オフは通知せずオフとして既済に進める。
+
+STATUS取得・画面描画・通知送信は firmware側に残す。ループの処理順序と10秒の
+STATUS周期・20msの待機は維持する。判定の全分岐と2回の境界はホストテストで確認し、
+`make fmt`・`make fmt-check`・`make clippy`・`make test` にこのcrateを含む。
+
 ## ハードウェア定義(M5GFXのCore2 autodetect実装に準拠)
 
 - LCD ILI9342C 320x240: MOSI=23, MISO=38(未使用), SCLK=18, DC=15, CS=5、SPI 40MHz

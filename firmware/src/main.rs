@@ -36,11 +36,8 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(10);
 /// 普段は2レジスタ読みだけなのでI2C負荷は無視できる。
 const BATTERY_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const WIFI_RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
-/// PC状態のTelegram通知を出すまでに必要な、同じ結果の連続観測回数。
-/// STATUS_INTERVAL(10秒)×2回なので、20秒続いた変化だけを通知する。
 /// タッチのポーリング間隔。取りこぼさない程度に短く、CPUを回しすぎない程度に長く。
 const TOUCH_POLL_INTERVAL: Duration = Duration::from_millis(20);
-const NOTIFY_STABLE_POLLS: u8 = 2;
 
 /// タッチUIの現在画面。
 enum Screen {
@@ -351,8 +348,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut touch_was_down = false;
     // 画面表示とは別に持ち、瞬断での連投を防ぐ。起動直後の最初の観測は通知せず
     // 基準値として取り込む(そうしないと再起動のたびに通知が飛ぶ)。
-    let mut notified_online: Option<bool> = None;
-    let mut notify_streak: u8 = 0;
+    // 判定はhostテスト済みの `notify_stable::StableNotify::poll` に寄せる。
+    let mut stable_notify = notify_stable::StableNotify::new();
     // Telegramへ通知済みの給電状態。PC状態通知と同じ考え方で、
     // 起動直後の最初の観測は通知せず基準値として取り込み、同じ観測が
     // `battery::POWER_NOTIFY_STABLE_POLLS` 回連続したときだけ通知する。
@@ -563,8 +560,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 matches!(wake_notice, Some((wake_check::WakeNotice::Succeeded, _)));
             match wake_notice {
                 Some((wake_check::WakeNotice::Succeeded, elapsed_secs)) => {
-                    notified_online = Some(true);
-                    notify_streak = 0;
+                    stable_notify.notified_online = Some(true);
+                    stable_notify.notify_streak = 0;
                     if let Some(notifier) = notifier.as_ref() {
                         // 文言の正本は `wake_check::wake_succeeded_text`。
                         notifier.notify(wake_check::wake_succeeded_text(elapsed_secs));
@@ -579,41 +576,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 None => {}
             }
 
-            // 画面表示は即座に切り替えるが、Telegram通知だけは同じ結果を
-            // NOTIFY_STABLE_POLLS回連続で観測してから送る。瞬断やPCの再起動中の
-            // 短い揺れで通知が連投されるのを防ぐ。
-            //
-            // スリープ指示後のオフ遷移では「PCが停止しました。」を送らない
-            // (Issue #217)。スリープ直後のオフは意図した結果であり停止ではない。
-            // オフになるのを待ってから(`Armed`)、オフ確認後はオンに戻るまで
-            // (`Suppressing`)抑止し、復帰の「PCが起動しました。」は抑止しない。
-            // 抑止中も既済に進める(溜まったstreakで抑止明けに飛ぶのを防ぐ)。
+            // 安定通知の判定(`notify_stable::StableNotify::poll`、Issue #217の抑止を含む)は
+            // 純粋ロジックに寄せ、ここでは送信だけ行う。起動成功通知で既済のときは
+            // 同じオンを送らない(上の `wake_succeeded` 判定で既済化済み)。
             // **ガードは `poll_sleep_watch` の中で一度だけ取り、その中で
             // `poll`→書き戻しまで行う。**
             let suppress_off = telegram::poll_sleep_watch(&sleep_watch_shared, now_online);
-            if !wake_succeeded {
-                if suppress_off {
-                    notified_online = Some(false);
-                    notify_streak = 0;
-                } else {
-                    match notified_online {
-                        None => notified_online = Some(now_online),
-                        Some(prev) if prev == now_online => notify_streak = 0,
-                        Some(_) => {
-                            notify_streak += 1;
-                            if notify_streak >= NOTIFY_STABLE_POLLS {
-                                notified_online = Some(now_online);
-                                notify_streak = 0;
-                                if let Some(notifier) = notifier.as_ref() {
-                                    // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
-                                    // 文言の正本は `net::pc_state_notification_ja`。
-                                    notifier.notify(
-                                        net::pc_state_notification_ja(now_online).to_string(),
-                                    );
-                                }
-                            }
-                        }
-                    }
+            let (next_stable, should_notify) =
+                stable_notify.poll(now_online, wake_succeeded, suppress_off);
+            stable_notify = next_stable;
+            if should_notify {
+                if let Some(notifier) = notifier.as_ref() {
+                    // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
+                    // 文言の正本は `net::pc_state_notification_ja`。
+                    notifier.notify(net::pc_state_notification_ja(now_online).to_string());
                 }
             }
             // 表示内容が変わったときだけ描き直す。`draw_main`は全画面消去から
