@@ -20,6 +20,7 @@ fmt:
 	cargo fmt --manifest-path shared/toast-expiry/Cargo.toml
 	cargo fmt --manifest-path shared/notify-stable/Cargo.toml
 	cargo fmt --manifest-path shared/online-state/Cargo.toml
+	cargo fmt --manifest-path shared/battery-read/Cargo.toml
 
 fmt-check:
 	cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml --check
@@ -33,6 +34,7 @@ fmt-check:
 	cargo fmt --manifest-path shared/toast-expiry/Cargo.toml --check
 	cargo fmt --manifest-path shared/notify-stable/Cargo.toml --check
 	cargo fmt --manifest-path shared/online-state/Cargo.toml --check
+	cargo fmt --manifest-path shared/battery-read/Cargo.toml --check
 
 clippy:
 	cargo clippy --manifest-path m5stack-pc-bridge/Cargo.toml --all-targets -- -D warnings
@@ -40,6 +42,7 @@ clippy:
 	cargo clippy --manifest-path shared/calendar-update/Cargo.toml --all-targets -- -D warnings
 	cargo clippy --manifest-path shared/toast-expiry/Cargo.toml --all-targets -- -D warnings
 	cargo clippy --manifest-path shared/notify-stable/Cargo.toml --all-targets -- -D warnings
+	cargo clippy --manifest-path shared/battery-read/Cargo.toml --all-targets -- -D warnings
 
 test:
 	cargo test --manifest-path m5stack-pc-bridge/Cargo.toml
@@ -54,6 +57,7 @@ test:
 	cargo test --manifest-path shared/toast-expiry/Cargo.toml
 	cargo test --manifest-path shared/notify-stable/Cargo.toml
 	cargo test --manifest-path shared/online-state/Cargo.toml
+	cargo test --manifest-path shared/battery-read/Cargo.toml
 	cargo test --manifest-path shared/telegram-cursor/Cargo.toml
 
 # toolchainが無い開発端末では警告してskipするが、CI(CI=1)では必ず実行する。

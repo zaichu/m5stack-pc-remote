@@ -33,6 +33,8 @@ wake-check = { path = "../shared/wake-check" }
 toast-expiry = { path = "../shared/toast-expiry" }
 # PC状態の安定通知判定の純粋ロジック。host側でテストできるよう分離してある。
 notify-stable = { path = "../shared/notify-stable" }
+# バッテリー読み出し要否の純粋判定。host側でテストできるよう分離してある。
+battery-read = { path = "../shared/battery-read" }
 # getUpdates の offset 進行の純粋ロジック。host側でテストできるよう分離してある。
 telegram-cursor = { path = "../shared/telegram-cursor" }
 # Wi-Fi接続とオンラインサービス起動の状態遷移の純粋ロジック。host側でテストできるよう分離してある。
