@@ -466,7 +466,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             battery_fast_at = Instant::now();
             // ラッチ読みに失敗したら安全側に倒して読む側にする。
             let pending = board::power_event_pending(&mut *i2c_bus.borrow_mut()).unwrap_or(true);
-            if pending || battery_at.elapsed() >= STATUS_INTERVAL {
+            if battery_read::should_read(pending, battery_at.elapsed()) {
                 battery_at = Instant::now();
                 let now_battery = board::read_battery(&mut axp);
                 // ラッチが出っぱなしになると次の抜き挿しを見分けられないため、

@@ -76,6 +76,17 @@ STATUS取得・画面描画・通知送信は firmware側に残す。ループ�
 STATUS周期・20msの待機は維持する。判定の全分岐と2回の境界はホストテストで確認し、
 `make fmt`・`make fmt-check`・`make clippy`・`make test` にこのcrateを含む。
 
+### バッテリー読み出し要否の判定
+
+`shared/battery-read` はIRQラッチの有無と前回フル読み出しからの経過時間から、
+フル読み出し(`read_battery`)が必要かを判定する。ラッチ有りはすぐ読み、
+ラッチ無しは10秒の保険で読む。
+
+ラッチ読み失敗時の安全側(読む側)への倒し方・I2Cの読み出し・ラッチのクリア・
+描画・通知は firmware側に残す。ループの処理順序と1秒の確認周期・10秒の保険は
+維持する。判定の全分岐と10秒の境界はホストテストで確認し、
+`make fmt`・`make fmt-check`・`make clippy`・`make test` にこのcrateを含む。
+
 ## ハードウェア定義(M5GFXのCore2 autodetect実装に準拠)
 
 - LCD ILI9342C 320x240: MOSI=23, MISO=38(未使用), SCLK=18, DC=15, CS=5、SPI 40MHz
