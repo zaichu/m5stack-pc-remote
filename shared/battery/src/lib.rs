@@ -47,8 +47,6 @@ pub fn percent_from_volts(volts: f32) -> u8 {
         (4.15, 100.0),
     ];
 
-    let round5 = |p: f32| ((p / 5.0).round() * 5.0) as u8;
-
     if volts <= CURVE[0].0 {
         return 0;
     }
@@ -57,10 +55,16 @@ pub fn percent_from_volts(volts: f32) -> u8 {
         let (v_high, p_high) = pair[1];
         if volts < v_high {
             let ratio = (volts - v_low) / (v_high - v_low);
-            return round5(p_low + ratio * (p_high - p_low));
+            return round5_percent(p_low + ratio * (p_high - p_low));
         }
     }
     100
+}
+
+// 呼び出し側が隣接するCURVE値の間だけを補間し、丸め後も0〜100に収まる。
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn round5_percent(percent: f32) -> u8 {
+    ((percent / 5.0).round() * 5.0) as u8
 }
 
 /// 給電・充電状態を加味した残量%を返す。
