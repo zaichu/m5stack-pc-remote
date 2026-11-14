@@ -53,7 +53,7 @@ impl OnlineState {
     }
 
     /// 呼び出し側の実ハンドル(`Option` の有無と起動済み旗)から組み立てる。
-    pub fn from_parts(
+    pub const fn from_parts(
         wifi_connected: bool,
         sntp_started: bool,
         notifier_started: bool,
@@ -71,11 +71,11 @@ impl OnlineState {
         }
     }
 
-    pub fn is_online(&self) -> bool {
+    pub const fn is_online(&self) -> bool {
         matches!(self, Self::Online(_))
     }
 
-    pub fn services(&self) -> Services {
+    pub const fn services(&self) -> Services {
         match *self {
             Self::Online(services) | Self::Offline(services) => services,
         }
