@@ -158,13 +158,13 @@ pub enum OtaManifestError {
 impl std::fmt::Display for OtaManifestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OtaManifestError::InvalidJson(reason) => {
+            Self::InvalidJson(reason) => {
                 write!(f, "firmware manifest is not valid JSON: {reason}")
             }
-            OtaManifestError::InvalidField(field) => {
+            Self::InvalidField(field) => {
                 write!(f, "firmware manifest has an invalid field: {field}")
             }
-            OtaManifestError::SignatureMismatch => {
+            Self::SignatureMismatch => {
                 write!(f, "firmware manifest signature mismatch")
             }
         }
@@ -183,13 +183,13 @@ pub enum OtaImageError {
 impl std::fmt::Display for OtaImageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OtaImageError::SizeMismatch { expected, actual } => {
+            Self::SizeMismatch { expected, actual } => {
                 write!(
                     f,
                     "firmware size mismatch: expected {expected}, got {actual}"
                 )
             }
-            OtaImageError::ShaMismatch => write!(f, "firmware sha256 mismatch"),
+            Self::ShaMismatch => write!(f, "firmware sha256 mismatch"),
         }
     }
 }
@@ -253,7 +253,7 @@ pub fn ota_progress_percent(received: u64, total: u64) -> u8 {
     // u64乗算はオーバーフローし得るためu128へ広げる(`saturating_mul` だと
     // received == total でも100にならない)。
     let received = received.min(total);
-    ((received as u128 * 100) / total as u128) as u8
+    u8::try_from((u128::from(received) * 100) / u128::from(total)).unwrap_or(100)
 }
 
 /// 進捗を通知する刻み(パーセント)。バイト数固定だとサイズにより更新回数が
@@ -267,7 +267,7 @@ pub fn ota_progress_text(version: &str, received: u64, total: u64) -> String {
     // セル数は刻みから計算する(刻みだけ変えてバーを古いままにする事故を防ぐ)。
     const CELLS: usize = (100 / OTA_PROGRESS_STEP_PERCENT) as usize;
     let percent = ota_progress_percent(received, total);
-    let filled = (percent as usize * CELLS).div_ceil(100).min(CELLS);
+    let filled = (usize::from(percent) * CELLS).div_ceil(100).min(CELLS);
     let bar: String = "█".repeat(filled) + &"░".repeat(CELLS - filled);
     format!(
         "firmware更新中 ({version})\n[{bar}] {percent}%  {}KB / {}KB",
@@ -346,7 +346,7 @@ impl VersionOrder {
     /// `false` のとき呼び出し側はnonceを発行しないこと
     /// (使われないnonceを残さない)。
     pub const fn shows_confirm_button(self) -> bool {
-        !matches!(self, VersionOrder::Same)
+        !matches!(self, Self::Same)
     }
 }
 
@@ -453,27 +453,23 @@ pub enum PowerAction {
 }
 
 impl PowerAction {
-    pub const ALL: [PowerAction; 3] = [
-        PowerAction::Reboot,
-        PowerAction::Shutdown,
-        PowerAction::Sleep,
-    ];
+    pub const ALL: [Self; 3] = [Self::Reboot, Self::Shutdown, Self::Sleep];
 
     /// callback_dataや監査ログで使う識別子(`:` 区切りで解析するため小文字)。
     pub const fn slug(self) -> &'static str {
         match self {
-            PowerAction::Reboot => "reboot",
-            PowerAction::Shutdown => "shutdown",
-            PowerAction::Sleep => "sleep",
+            Self::Reboot => "reboot",
+            Self::Shutdown => "shutdown",
+            Self::Sleep => "sleep",
         }
     }
 
     /// 署名対象になるHTTPパス。slugへ `/` を付けたものと必ず一致する。
     pub const fn path(self) -> &'static str {
         match self {
-            PowerAction::Reboot => "/reboot",
-            PowerAction::Shutdown => "/shutdown",
-            PowerAction::Sleep => "/sleep",
+            Self::Reboot => "/reboot",
+            Self::Shutdown => "/shutdown",
+            Self::Sleep => "/sleep",
         }
     }
 
@@ -500,7 +496,7 @@ pub fn bridge_status_online(body: &[u8]) -> bool {
     };
     value
         .get("agent_online")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
 }
 
@@ -1350,7 +1346,7 @@ mod ota_progress_tests {
         let mut steps = 0u32;
         while percent < 100 {
             percent = percent.saturating_add(OTA_PROGRESS_STEP_PERCENT);
-            let received = percent as u64 * total / 100;
+            let received = u64::from(percent) * total / 100;
             // 刻み通りに進んでいることの sanity (受信量の計算ミス検出用)。
             assert_eq!(ota_progress_percent(received, total), percent.min(100));
             let text = ota_progress_text("v", received, total);
@@ -1358,7 +1354,7 @@ mod ota_progress_tests {
             previous = text;
             steps += 1;
         }
-        assert_eq!(steps, (100 / OTA_PROGRESS_STEP_PERCENT) as u32);
+        assert_eq!(steps, u32::from(100 / OTA_PROGRESS_STEP_PERCENT));
     }
 
     #[test]

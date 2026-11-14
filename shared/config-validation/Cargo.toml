@@ -9,4 +9,5 @@ publish = false
 unused_dependencies = "warn"
 
 [lints.clippy]
+cast_lossless = "warn"
 missing_const_for_fn = "warn"
