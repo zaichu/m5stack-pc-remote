@@ -124,7 +124,8 @@ pub const BRIGHTNESS_DCDC3_MIN_MV: u16 = 2500;
 pub fn brightness_percent_to_dcdc3_mv(percent: u8) -> u16 {
     let clamped = percent.min(BRIGHTNESS_MAX_PERCENT);
     let range = BRIGHTNESS_DCDC3_MAX_MV - BRIGHTNESS_DCDC3_MIN_MV;
-    let mv = BRIGHTNESS_DCDC3_MIN_MV + range * clamped as u16 / BRIGHTNESS_MAX_PERCENT as u16;
+    let mv =
+        BRIGHTNESS_DCDC3_MIN_MV + range * u16::from(clamped) / u16::from(BRIGHTNESS_MAX_PERCENT);
     mv - (mv % 25)
 }
 
