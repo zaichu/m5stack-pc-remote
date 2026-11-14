@@ -10,3 +10,5 @@ unused_dependencies = "warn"
 
 [lints.clippy]
 missing_const_for_fn = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
