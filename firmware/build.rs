@@ -2,13 +2,13 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = partition_defaults::GENERATED;
     if env::var("TARGET").is_ok_and(|target| target.contains("espidf")) {
         embuild::espidf::sysenv::output();
     }
 
-    generate_config();
+    generate_config()
 }
 
 /// config.tomlのkeyと、生成するRust定数の対応。新しい設定はここへ1行足す。
@@ -213,20 +213,21 @@ impl Key {
 /// `src/main.rs` はこれを `build_config` moduleとして取り込む。secretを `src/` 配下の
 /// Rustソースに置かないことで、コンパイラ警告に実値が出る事故を避ける。
 /// 生成する定数には `#[allow(dead_code)]` を付け、未使用警告自体も出さない。
-fn generate_config() {
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+fn generate_config() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
+        .expect("Cargo always sets CARGO_MANIFEST_DIR for build scripts");
     let config_path = Path::new(&manifest_dir).join("config.toml");
     println!("cargo:rerun-if-changed={}", config_path.display());
 
     if !config_path.exists() {
-        panic!(
-            "firmware/config.toml が見つかりません。config.example.toml を同じ \
-             ディレクトリの config.toml へコピーし、実際の値を設定してください。詳細は \
-             firmware/README.md を参照してください。"
-        );
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "firmware/config.toml が見つかりません。config.example.toml を同じディレクトリの config.toml へコピーし、実際の値を設定してください。詳細は firmware/README.md を参照してください。",
+        )
+        .into());
     }
 
-    let raw = fs::read_to_string(&config_path).expect("config.toml の読み込みに失敗しました");
+    let raw = fs::read_to_string(&config_path)?;
     // parse失敗時のエラーはDebug出力に config.toml の全文(`input`)を含むため、
     // エラーそのものをpanicメッセージへ載せない。行番号すら出さない代わりに、
     // secretがビルドログへ流れないことを優先する。
@@ -264,9 +265,10 @@ fn generate_config() {
         ));
     }
 
-    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+    let out_dir = env::var("OUT_DIR").expect("Cargo always sets OUT_DIR for build scripts");
     let dest = Path::new(&out_dir).join("generated_config.rs");
-    fs::write(&dest, out).expect("failed to write generated_config.rs");
+    fs::write(&dest, out)?;
+    Ok(())
 }
 
 /// `key`、無ければ `alias` を引く。
