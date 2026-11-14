@@ -22,7 +22,7 @@ pub enum PowerState {
 
 /// 充電・給電の有無から3状態へ分類する。両方trueの矛盾した入力では充電を優先する
 /// (流れている事実のほうが確度が高く、充電表示を落とす側へは倒さない)。
-pub fn classify(charging: bool, powered: bool) -> PowerState {
+pub const fn classify(charging: bool, powered: bool) -> PowerState {
     if charging {
         PowerState::Charging
     } else if powered {
@@ -120,7 +120,7 @@ impl PowerNotify {
 
     /// 今回の給電観測(`powered`)を与え、次の内部状態と通知要否を返す。
     /// 通知は1回の変化につき1回だけ(バッテリー駆動中は電力が有限なため繰り返さない)。
-    pub fn poll(self, observed: bool) -> (Self, bool) {
+    pub const fn poll(self, observed: bool) -> (Self, bool) {
         match self.notified {
             // 最初の観測は通知せず基準値として取り込む。
             None => (
@@ -211,7 +211,7 @@ pub mod power_irq {
 
     /// IRQラッチ(REG 0x44,0x45)に電源系イベントが残っているか。
     /// ラッチはエッジの記憶なので短い抜き挿しも残る。falseならI2Cを触らずに終えられる。
-    pub fn is_pending(status44: u8, status45: u8) -> bool {
+    pub const fn is_pending(status44: u8, status45: u8) -> bool {
         (status44 & STATUS_MASK[0].1) != 0 || (status45 & STATUS_MASK[1].1) != 0
     }
 }

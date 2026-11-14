@@ -35,7 +35,12 @@ impl StableNotify {
     ///   飛ばないようにする)。
     ///
     /// 通知は1回の変化につき1回だけ(連続観測で確定したとき)。
-    pub fn poll(self, now_online: bool, wake_succeeded: bool, suppress_off: bool) -> (Self, bool) {
+    pub const fn poll(
+        self,
+        now_online: bool,
+        wake_succeeded: bool,
+        suppress_off: bool,
+    ) -> (Self, bool) {
         if wake_succeeded {
             return (self, false);
         }

@@ -70,7 +70,7 @@ impl NonceStore {
         // (例: i64::MAX)が入ると差がi64::MINへ飽和し、release buildでは
         // `.abs()` がオーバーフローチェック無効でi64::MIN(負値)のまま返り、
         // 「期限切れ」判定が意図せず反転する余地があった。
-        let ttl_seconds = ttl_seconds.max(0) as u64;
+        let ttl_seconds = ttl_seconds.max(0).unsigned_abs();
         self.seen
             .retain(|_, timestamp| now.abs_diff(*timestamp) <= ttl_seconds);
     }
@@ -94,7 +94,7 @@ pub fn verify_request(
     // `.abs()` がオーバーフローチェック無効でi64::MIN(負値)のまま返るため、
     // `skew > allowed_skew_seconds` が常に偽になりチェックを迂回できた。
     let skew = now.unix_timestamp().abs_diff(timestamp);
-    if skew > config.allowed_skew_seconds.max(0) as u64 {
+    if skew > config.allowed_skew_seconds.max(0).unsigned_abs() {
         return Err(AuthError::TimestampSkew);
     }
 

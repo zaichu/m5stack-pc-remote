@@ -55,7 +55,7 @@ pub fn resolve_status_addr_with(
 /// `Key::int("pc_status_port", ...).default(80)` と同じ値にすること。
 pub const DEFAULT_STATUS_PORT: u16 = 80;
 
-pub fn normalize_status_port(port: u16) -> u16 {
+pub const fn normalize_status_port(port: u16) -> u16 {
     if port == 0 { DEFAULT_STATUS_PORT } else { port }
 }
 
@@ -88,7 +88,7 @@ pub fn is_valid_daily_report_hour(hour: i64) -> bool {
 pub const BRIGHTNESS_MAX_PERCENT: u8 = 100;
 
 /// 明るさ(%)として有効な値か。下限の0はu8の型範囲が担保する。
-pub fn is_valid_brightness_percent(percent: u8) -> bool {
+pub const fn is_valid_brightness_percent(percent: u8) -> bool {
     percent <= BRIGHTNESS_MAX_PERCENT
 }
 
@@ -155,7 +155,7 @@ pub fn parse_telegram_user_id(config_value: &str) -> Option<i64> {
 /// 超えた時点で正規imageになり得ないため、呼び出し側はflashへ書かず即座に打ち切る
 /// (Issue #130-2。最後まで書いてから落とすと無駄な消去・書き込みが続く)。
 /// 早期return時はOTAハンドルのDropがabortするためboot切替は起きない。
-pub fn ota_received_too_large(received: u64, manifest_size: u64) -> bool {
+pub const fn ota_received_too_large(received: u64, manifest_size: u64) -> bool {
     received > manifest_size
 }
 
