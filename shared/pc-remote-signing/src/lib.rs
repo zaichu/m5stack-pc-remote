@@ -322,7 +322,7 @@ pub struct BootChecks {
 /// 「main loop到達+画面+Wi-Fi」で十分。bridge到達性は健全性信号ではない(PC OFFは
 /// 正常状態であり、要求すると正常firmwareが戻ってしまう)。一部不調が残るリスクは
 /// 次回OTAで修復できるため、厳しすぎて正常firmwareを戻す実害の方が大きい。
-pub fn boot_self_test_passed(checks: &BootChecks) -> bool {
+pub const fn boot_self_test_passed(checks: &BootChecks) -> bool {
     checks.display_ok && checks.wifi_connected
 }
 
@@ -345,7 +345,7 @@ impl VersionOrder {
     /// 確認ボタン付きの確認画面を出すか。「同じ」のときだけ出さない。
     /// `false` のとき呼び出し側はnonceを発行しないこと
     /// (使われないnonceを残さない)。
-    pub fn shows_confirm_button(self) -> bool {
+    pub const fn shows_confirm_button(self) -> bool {
         !matches!(self, VersionOrder::Same)
     }
 }
@@ -460,7 +460,7 @@ impl PowerAction {
     ];
 
     /// callback_dataや監査ログで使う識別子(`:` 区切りで解析するため小文字)。
-    pub fn slug(self) -> &'static str {
+    pub const fn slug(self) -> &'static str {
         match self {
             PowerAction::Reboot => "reboot",
             PowerAction::Shutdown => "shutdown",
@@ -469,7 +469,7 @@ impl PowerAction {
     }
 
     /// 署名対象になるHTTPパス。slugへ `/` を付けたものと必ず一致する。
-    pub fn path(self) -> &'static str {
+    pub const fn path(self) -> &'static str {
         match self {
             PowerAction::Reboot => "/reboot",
             PowerAction::Shutdown => "/shutdown",
@@ -637,7 +637,7 @@ impl AlertThrottle {
     /// 発火後、次に鳴らせるまでの時間(スキャンや連投で通知が埋まらないようにする)。
     pub const DEFAULT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
 
-    pub fn new(threshold: u32, interval: std::time::Duration) -> Self {
+    pub const fn new(threshold: u32, interval: std::time::Duration) -> Self {
         Self {
             threshold,
             interval,

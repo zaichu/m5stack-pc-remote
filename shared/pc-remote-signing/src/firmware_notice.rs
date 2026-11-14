@@ -41,7 +41,7 @@ impl Default for FirmwareCheckSchedule {
 }
 
 impl FirmwareCheckSchedule {
-    pub fn poll(self, elapsed_secs: u64) -> (Self, bool) {
+    pub const fn poll(self, elapsed_secs: u64) -> (Self, bool) {
         if elapsed_secs < self.next_check_secs {
             return (self, false);
         }

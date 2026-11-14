@@ -19,3 +19,6 @@ battery = { path = "../battery" }
 
 [lints.cargo]
 unused_dependencies = "warn"
+
+[lints.clippy]
+missing_const_for_fn = "warn"
