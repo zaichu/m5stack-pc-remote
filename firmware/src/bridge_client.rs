@@ -7,8 +7,8 @@
 use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use embedded_svc::http::client::Client as HttpClient;
 use embedded_svc::http::Method;
+use embedded_svc::http::client::Client as HttpClient;
 use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
 use esp_idf_svc::io::Write;
 

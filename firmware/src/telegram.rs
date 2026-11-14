@@ -14,10 +14,10 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use embedded_svc::http::client::Client as HttpClient;
 use embedded_svc::http::Method;
+use embedded_svc::http::client::Client as HttpClient;
 use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use pc_remote_signing::AlertThrottle;
 use telegram_cursor::UpdateCursor;
@@ -757,14 +757,14 @@ impl Api {
                 }
             };
         }
-        if chat_id != 0 {
-            if let Err(e) = self.post_via(
+        if chat_id != 0
+            && let Err(e) = self.post_via(
                 &mut client,
                 "sendMessage",
                 &json!({ "chat_id": chat_id, "text": send_text }),
-            ) {
-                println!("telegram: sendMessage failed: {e}");
-            }
+            )
+        {
+            println!("telegram: sendMessage failed: {e}");
         }
     }
 }
@@ -894,13 +894,11 @@ pub fn start_notifier(
                     let offered = manifest.as_ref().ok().map(|value| value.version.as_str());
                     let (next_notice, notify) = firmware_notice.observe(FIRMWARE_VERSION, offered);
                     firmware_notice = next_notice;
-                    if notify {
-                        if let (Some(tx), Some(version)) = (weak_tx.upgrade(), offered) {
-                            Notifier { tx }.notify(pc_remote_signing::firmware_available_text(
-                                FIRMWARE_VERSION,
-                                version,
-                            ));
-                        }
+                    if notify && let (Some(tx), Some(version)) = (weak_tx.upgrade(), offered) {
+                        Notifier { tx }.notify(pc_remote_signing::firmware_available_text(
+                            FIRMWARE_VERSION,
+                            version,
+                        ));
                     }
                 }
 
@@ -922,10 +920,10 @@ pub fn start_notifier(
                 }
                 // 送信できた日だけ既済にする。失敗した場合は次のループで
                 // 再送する(送信時刻のうちは何度でも試す)。
-                if let Some((day, text)) = schedule.due_report(&api.config, &settings) {
-                    if api.send_message(chat_id, &text) {
-                        schedule.mark_sent(day);
-                    }
+                if let Some((day, text)) = schedule.due_report(&api.config, &settings)
+                    && api.send_message(chat_id, &text)
+                {
+                    schedule.mark_sent(day);
                 }
             }
         });
@@ -940,6 +938,7 @@ pub fn start_notifier(
 }
 
 impl Client {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         power_lock: PowerLock,
         operation_lock: OperationLock,
@@ -1839,16 +1838,16 @@ impl Client {
                 }
             );
 
-            if let Some(callback) = item.get("callback_query") {
-                if !callback.is_null() {
-                    self.handle_callback_query(callback);
-                    continue;
-                }
+            if let Some(callback) = item.get("callback_query")
+                && !callback.is_null()
+            {
+                self.handle_callback_query(callback);
+                continue;
             }
-            if let Some(message) = item.get("message") {
-                if !message.is_null() {
-                    self.handle_message(message);
-                }
+            if let Some(message) = item.get("message")
+                && !message.is_null()
+            {
+                self.handle_message(message);
             }
         }
     }

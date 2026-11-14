@@ -30,11 +30,7 @@ pub const NTP_SYNC_WAIT: Duration = Duration::from_secs(2);
 /// PCの死活状態の日本語表記。用語は `docs/glossary.md` が正本
 /// (状態は「オン/オフ」と書き、「オンライン/オフライン」は使わない)。
 pub fn pc_online_label_ja(online: bool) -> &'static str {
-    if online {
-        "オン"
-    } else {
-        "オフ"
-    }
+    if online { "オン" } else { "オフ" }
 }
 
 /// PCの状態変化の通知文。出来事(起動/停止)で書く(状態表示は `pc_online_label_ja`)。
@@ -48,11 +44,7 @@ pub fn pc_state_notification_ja(online: bool) -> &'static str {
 
 /// 画面表示用のASCII表記(`mono_font::ascii` は非ASCIIを `?` へ落とすため)。
 pub fn pc_online_label_ascii(online: bool) -> &'static str {
-    if online {
-        "ONLINE"
-    } else {
-        "OFFLINE"
-    }
+    if online { "ONLINE" } else { "OFFLINE" }
 }
 
 /// Wi-Fi stationハンドル。接続維持のためプログラム中で保持し続ける。

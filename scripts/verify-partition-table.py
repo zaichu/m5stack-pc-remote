@@ -2,10 +2,8 @@
 """ビルド後、実際に生成されたパーティションテーブルが firmware/partitions.csv と
 一致することを確認する。
 
-`firmware/sdkconfig.defaults` の `CONFIG_PARTITION_TABLE_CUSTOM_FILENAME` は、
-embuildがesp-idf-sysのビルド時に生成する合成CMakeプロジェクト(target/配下の
-一時ディレクトリ)を基準にした相対パスで `partitions.csv` を指す(詳細は
-sdkconfig.defaultsのコメントを参照)。この解決に失敗しても、ESP-IDFのビルドは
+`build.rs` が `CARGO_MANIFEST_DIR` から `partitions.csv` の絶対パスを生成済み
+`sdkconfig.defaults` へ追加する。設定の解決に失敗しても、ESP-IDFのビルドは
 致命的エラーにはならず、空のダミーpartition_tableへ静かにfallbackする。
 つまり「ビルドが成功する」ことは「意図したOTA用パーティション構成が実際に
 使われている」ことを保証しない。このスクリプトはビルド成果物を直接検証して
@@ -27,9 +25,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE_DIR = REPO_ROOT / "firmware"
 PARTITIONS_CSV = FIRMWARE_DIR / "partitions.csv"
-# embuildがビルドのたびに `target/<triple>/<profile>/` 直下へコピーする、
-# hashディレクトリに依存しない固定パス。
-PARTITION_TABLE_BIN = FIRMWARE_DIR / "target" / "xtensa-esp32-espidf" / "release" / "partition-table.bin"
+PARTITION_TABLE_BINS = sorted(
+    (FIRMWARE_DIR / "target" / "xtensa-esp32-espidf" / "release" / "build" / "esp-idf-sys").glob(
+        "*/out/build/partition_table/partition-table.bin"
+    )
+)
 
 
 def parse_csv_rows(text: str) -> list[tuple[str, int]]:
@@ -81,9 +81,9 @@ def main() -> int:
     if not PARTITIONS_CSV.exists():
         print(f"ERROR: {PARTITIONS_CSV} が見つかりません。", file=sys.stderr)
         return 2
-    if not PARTITION_TABLE_BIN.exists():
+    if not PARTITION_TABLE_BINS:
         print(
-            f"ERROR: {PARTITION_TABLE_BIN} が見つかりません。"
+            "ERROR: esp-idf-sysの生成物partition-table.binが見つかりません。"
             "先に `cargo +esp build --release --target xtensa-esp32-espidf` を実行してください。",
             file=sys.stderr,
         )
@@ -96,7 +96,7 @@ def main() -> int:
         return 0
 
     result = subprocess.run(
-        [sys.executable, str(gen_tool), str(PARTITION_TABLE_BIN)],
+        [sys.executable, str(gen_tool), str(PARTITION_TABLE_BINS[-1])],
         capture_output=True,
         text=True,
         check=False,
@@ -113,14 +113,14 @@ def main() -> int:
         print(f"  期待値 (partitions.csv): {expected}", file=sys.stderr)
         print(f"  実際値 (partition-table.bin): {actual}", file=sys.stderr)
         print(
-            "  CONFIG_PARTITION_TABLE_CUSTOM_FILENAMEの相対パス解決に失敗し、"
+            "  CONFIG_PARTITION_TABLE_CUSTOM_FILENAMEのパス解決に失敗し、"
             "ダミーのpartition_tableにfallbackした可能性があります。"
             "firmware/sdkconfig.defaultsのコメントを確認してください。",
             file=sys.stderr,
         )
         return 1
 
-    print(f"partition table OK ({len(expected)} partitions, {PARTITION_TABLE_BIN})")
+    print(f"partition table OK ({len(expected)} partitions, {PARTITION_TABLE_BINS[-1]})")
     return 0
 
 

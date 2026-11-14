@@ -1080,6 +1080,7 @@ dependencies = [
  "mipidsi",
  "notify-stable",
  "online-state",
+ "partition-defaults",
  "pc-remote-signing",
  "serde",
  "serde_json",
@@ -1207,6 +1208,10 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "online-state"
+version = "0.1.0"
+
+[[package]]
+name = "partition-defaults"
 version = "0.1.0"
 
 [[package]]

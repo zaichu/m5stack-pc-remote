@@ -1,5 +1,5 @@
 .PHONY: install install-hooks fmt fmt-check clippy test agent-windows-build agent-check \
-	firmware-build firmware-nvs-image firmware-package ota-readiness-check \
+	firmware-build firmware-rust-src-fix firmware-nvs-image firmware-package ota-readiness-check \
 	config-key-check agent-roles-check docs-consistency-check pr-issue-link-check secret-path-check secret-scan shell-syntax-check diff-check check git-pre-commit git-pre-push
 
 install: install-hooks
@@ -11,6 +11,7 @@ install-hooks:
 fmt:
 	cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml
 	cargo fmt --manifest-path firmware/Cargo.toml
+	cargo fmt --manifest-path firmware/partition-defaults/Cargo.toml
 	cargo fmt --manifest-path shared/pc-remote-signing/Cargo.toml
 	cargo fmt --manifest-path shared/config-validation/Cargo.toml
 	cargo fmt --manifest-path shared/battery/Cargo.toml
@@ -25,6 +26,7 @@ fmt:
 fmt-check:
 	cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml --check
 	cargo fmt --manifest-path firmware/Cargo.toml --check
+	cargo fmt --manifest-path firmware/partition-defaults/Cargo.toml --check
 	cargo fmt --manifest-path shared/pc-remote-signing/Cargo.toml --check
 	cargo fmt --manifest-path shared/config-validation/Cargo.toml --check
 	cargo fmt --manifest-path shared/battery/Cargo.toml --check
@@ -78,6 +80,9 @@ agent-check: fmt-check clippy test agent-windows-build
 # どちらかが無い環境では警告だけ出してskipする。
 firmware-build:
 	bash ./scripts/build-firmware.sh
+
+firmware-rust-src-fix:
+	bash ./scripts/fix-esp-rust-src.sh
 
 firmware-nvs-image:
 	python3 ./scripts/provision-firmware-nvs.py

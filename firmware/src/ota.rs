@@ -17,14 +17,14 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
-use embedded_svc::http::client::{Client as HttpClient, Response as HttpResponse};
 use embedded_svc::http::Method;
+use embedded_svc::http::client::{Client as HttpClient, Response as HttpResponse};
 use esp_idf_svc::http::client::{Configuration as HttpConfiguration, EspHttpConnection};
 use esp_idf_svc::ota::EspOta;
 
 use pc_remote_signing::{
-    parse_manifest_json, verify_manifest, verify_ota_image, BootChecks, OtaImageError, OtaManifest,
-    OtaManifestError, StreamingSha256,
+    BootChecks, OtaImageError, OtaManifest, OtaManifestError, StreamingSha256, parse_manifest_json,
+    verify_manifest, verify_ota_image,
 };
 
 use crate::app_config::AppConfig;

@@ -12,16 +12,16 @@ use std::cell::RefCell;
 use axp192::Axp192;
 use embedded_hal_bus::i2c::RefCellDevice;
 use esp_idf_hal::delay::{Delay, FreeRtos};
-use esp_idf_hal::gpio::{AnyIOPin, Gpio15, Gpio18, Gpio23, Gpio5, Output, PinDriver};
-use esp_idf_hal::i2c::{I2cConfig, I2cDriver, I2C0};
+use esp_idf_hal::gpio::{AnyIOPin, Gpio5, Gpio15, Gpio18, Gpio23, Output, PinDriver};
+use esp_idf_hal::i2c::{I2C0, I2cConfig, I2cDriver};
 use esp_idf_hal::prelude::*;
 use esp_idf_hal::spi::config::{Config as SpiConfig, DriverConfig, Duplex};
-use esp_idf_hal::spi::{Dma, SpiDeviceDriver, SpiDriver, SPI2};
+use esp_idf_hal::spi::{Dma, SPI2, SpiDeviceDriver, SpiDriver};
 use ft6x36::Ft6x36;
+use mipidsi::Builder;
 use mipidsi::interface::SpiInterface;
 use mipidsi::models::ILI9342CRgb565;
 use mipidsi::options::{ColorInversion, Orientation, Rotation};
-use mipidsi::Builder;
 
 /// mipidsiのSPI転送バッファ。小さいと全画面描画が数千トランザクションに分割される
 /// (Issue #160)。4096Bなら38回程度で、これ以上は転送時間が支配的で効果が薄い。
@@ -33,11 +33,11 @@ const SPI_DMA_MAX_TRANSFER_SIZE: usize = 4096;
 
 // DMA契約違反を実行時panicや実機でのDMA失敗ではなくビルド時に検出する。
 const _: () = assert!(
-    SPI_BUFFER_SIZE % 4 == 0,
+    SPI_BUFFER_SIZE.is_multiple_of(4),
     "SPI_BUFFER_SIZE must be a multiple of 4 for DMA"
 );
 const _: () = assert!(
-    SPI_DMA_MAX_TRANSFER_SIZE % 4 == 0,
+    SPI_DMA_MAX_TRANSFER_SIZE.is_multiple_of(4),
     "SPI_DMA_MAX_TRANSFER_SIZE must be a multiple of 4 (Dma::max_transfer_size)"
 );
 const _: () = assert!(
