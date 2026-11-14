@@ -1,5 +1,9 @@
 [package]
 name = "toast-expiry"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.100"
 publish = false
+
+[lints.cargo]
+unused_dependencies = "warn"

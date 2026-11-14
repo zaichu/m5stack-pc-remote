@@ -2,6 +2,7 @@
 name = "m5remote-rust"
 version = "0.17.0"
 edition = "2021"
+rust-version = "1.97"
 resolver = "2"
 publish = false
 
@@ -63,3 +64,6 @@ opt-level = "s"
 [profile.dev]
 debug = true
 opt-level = "z"
+
+[lints.cargo]
+unused_dependencies = "warn"

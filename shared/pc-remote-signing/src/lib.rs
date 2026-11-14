@@ -9,7 +9,7 @@
 //! ```
 
 mod firmware_notice;
-pub use firmware_notice::{firmware_available_text, FirmwareCheckSchedule, FirmwareNotice};
+pub use firmware_notice::{FirmwareCheckSchedule, FirmwareNotice, firmware_available_text};
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
@@ -652,10 +652,10 @@ impl AlertThrottle {
         if self.failures < self.threshold {
             return None;
         }
-        if let Some(fired) = self.last_fired {
-            if now.duration_since(fired) < self.interval {
-                return None;
-            }
+        if let Some(fired) = self.last_fired
+            && now.duration_since(fired) < self.interval
+        {
+            return None;
         }
 
         let count = self.failures;
@@ -872,9 +872,9 @@ mod alert_throttle_tests {
 #[cfg(test)]
 mod ota_tests {
     use super::{
+        BootChecks, OtaImageError, OtaManifest, OtaManifestError, StreamingSha256,
         boot_self_test_passed, ota_confirm_text, parse_manifest_json, sign_manifest,
-        verify_manifest, verify_ota_image, BootChecks, OtaImageError, OtaManifest,
-        OtaManifestError, StreamingSha256,
+        verify_manifest, verify_ota_image,
     };
 
     const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
@@ -1188,7 +1188,7 @@ mod ota_tests {
 
 #[cfg(test)]
 mod version_order_tests {
-    use super::{compare_versions, VersionOrder};
+    use super::{VersionOrder, compare_versions};
 
     #[test]
     fn accident_case_0_8_0_is_older_than_0_11_0() {
@@ -1284,7 +1284,7 @@ mod version_order_tests {
 #[cfg(test)]
 mod ota_progress_tests {
     use super::{
-        ota_applying_text, ota_progress_percent, ota_progress_text, OTA_PROGRESS_STEP_PERCENT,
+        OTA_PROGRESS_STEP_PERCENT, ota_applying_text, ota_progress_percent, ota_progress_text,
     };
 
     #[test]
@@ -1391,7 +1391,7 @@ mod ota_progress_tests {
 
 #[cfg(test)]
 mod bridge_status_tests {
-    use super::{bridge_status_online, BRIDGE_STATUS_PATH};
+    use super::{BRIDGE_STATUS_PATH, bridge_status_online};
 
     #[test]
     fn status_path_is_slash_status() {
@@ -1450,8 +1450,8 @@ mod bridge_status_tests {
 #[cfg(test)]
 mod status_text_tests {
     use super::{
-        status_buttons, status_message_html, PcControlStatus, PcStatusSnapshot, STATUS_CB_REBOOT,
-        STATUS_CB_REFRESH, STATUS_CB_SHUTDOWN, STATUS_CB_UNLOCK, STATUS_CB_WAKE,
+        PcControlStatus, PcStatusSnapshot, STATUS_CB_REBOOT, STATUS_CB_REFRESH, STATUS_CB_SHUTDOWN,
+        STATUS_CB_UNLOCK, STATUS_CB_WAKE, status_buttons, status_message_html,
     };
 
     fn status(pc_online: bool, bridge_online: bool, locked: bool) -> PcControlStatus {
@@ -1488,7 +1488,13 @@ mod status_text_tests {
     #[test]
     fn a_pc_on_ready() {
         assert_eq!(
-            render(true, true, false, "オン", &battery::status_ja(100, battery::PowerState::Powered)),
+            render(
+                true,
+                true,
+                false,
+                "オン",
+                &battery::status_ja(100, battery::PowerState::Powered)
+            ),
             "🖥️ <b>PC ・ オン</b>\n再起動・シャットダウンができます\n\n📱 <b>M5Stack</b>\n🔋 100% 満充電・給電中\n🏷️ v0.13.0"
         );
         assert_eq!(
@@ -1504,7 +1510,13 @@ mod status_text_tests {
     fn b_pc_off() {
         for bridge_online in [false, true] {
             assert_eq!(
-                render(false, bridge_online, false, "オフ", &battery::status_ja(78, battery::PowerState::OnBattery)),
+                render(
+                    false,
+                    bridge_online,
+                    false,
+                    "オフ",
+                    &battery::status_ja(78, battery::PowerState::OnBattery)
+                ),
                 "🖥️ <b>PC ・ オフ</b>\n起動できます\n\n📱 <b>M5Stack</b>\n🔋 78% 電池駆動\n🏷️ v0.13.0"
             );
             assert_eq!(
@@ -1517,7 +1529,13 @@ mod status_text_tests {
     #[test]
     fn c_bridge_unavailable() {
         assert_eq!(
-            render(true, false, false, "オン", &battery::status_ja(100, battery::PowerState::Powered)),
+            render(
+                true,
+                false,
+                false,
+                "オン",
+                &battery::status_ja(100, battery::PowerState::Powered)
+            ),
             "🖥️ <b>PC ・ オン</b>\n⚠️ 再起動・シャットダウンはできません\nPC側の操作サービスが応答していません\n\n📱 <b>M5Stack</b>\n🔋 100% 満充電・給電中\n🏷️ v0.13.0"
         );
         // 電源操作が通らない状態なので、押せるのは更新だけ。
@@ -1530,7 +1548,13 @@ mod status_text_tests {
     #[test]
     fn d_locked() {
         assert_eq!(
-            render(true, true, true, "オン", &battery::status_ja(100, battery::PowerState::Powered)),
+            render(
+                true,
+                true,
+                true,
+                "オン",
+                &battery::status_ja(100, battery::PowerState::Powered)
+            ),
             "🖥️ <b>PC ・ オン</b>\n🔒 操作をロック中\n解除するまで起動・再起動・シャットダウンはできません\n\n📱 <b>M5Stack</b>\n🔋 100% 満充電・給電中\n🏷️ v0.13.0"
         );
         assert_eq!(

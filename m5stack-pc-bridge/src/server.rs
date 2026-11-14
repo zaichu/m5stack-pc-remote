@@ -1,12 +1,12 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
+    Json, Router,
     body::Bytes,
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -15,9 +15,9 @@ use crate::{
     alert::AlertNotifier,
     app_config::AgentConfig,
     audit_log,
-    auth::{verify_request, AuthConfig, AuthError, NonceStore},
+    auth::{AuthConfig, AuthError, NonceStore, verify_request},
     firmware::{self, FirmwarePaths},
-    power::{accepted_sleep_result, run_power_action, PowerAction, PowerResult},
+    power::{PowerAction, PowerResult, accepted_sleep_result, run_power_action},
 };
 use pc_remote_signing::PowerAction as SharedPowerAction;
 

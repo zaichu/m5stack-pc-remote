@@ -58,8 +58,7 @@ impl AgentConfig {
             Some(span) => {
                 let line = input
                     .get(..span.start)
-                    .map(|head| head.matches('\n').count() + 1)
-                    .unwrap_or(1);
+                    .map_or(1, |head| head.matches('\n').count() + 1);
                 anyhow::anyhow!("config.tomlを解析できません({line}行目付近)")
             }
             None => anyhow::anyhow!("config.tomlを解析できません"),

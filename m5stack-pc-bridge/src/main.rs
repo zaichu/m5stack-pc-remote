@@ -9,7 +9,7 @@ fn main() -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     use clap::Parser;
-    use m5stack_pc_bridge::{server, Cli};
+    use m5stack_pc_bridge::{Cli, server};
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

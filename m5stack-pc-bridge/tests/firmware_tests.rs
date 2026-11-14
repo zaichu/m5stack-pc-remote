@@ -4,7 +4,7 @@
 //! 直接叩き、配信ファイルは一時ディレクトリに置く。秘密情報はダミー値のみ。
 
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use m5stack_pc_bridge::{

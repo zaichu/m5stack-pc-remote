@@ -1,5 +1,5 @@
 use axum::{
-    body::{to_bytes, Body},
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use m5stack_pc_bridge::{app_config::AgentConfig, audit_log, server::router};

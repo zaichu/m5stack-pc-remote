@@ -56,11 +56,7 @@ pub fn resolve_status_addr_with(
 pub const DEFAULT_STATUS_PORT: u16 = 80;
 
 pub fn normalize_status_port(port: u16) -> u16 {
-    if port == 0 {
-        DEFAULT_STATUS_PORT
-    } else {
-        port
-    }
+    if port == 0 { DEFAULT_STATUS_PORT } else { port }
 }
 
 pub fn validate_wol_port(input: &str) -> Result<u16, String> {

@@ -1,7 +1,8 @@
 [package]
 name = "m5stack-pc-bridge"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.100"
 license = "MIT"
 
 [dependencies]
@@ -38,3 +39,6 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 tempfile = "3.10"
 tower = "0.5"
+
+[lints.cargo]
+unused_dependencies = "warn"

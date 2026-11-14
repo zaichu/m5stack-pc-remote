@@ -100,7 +100,7 @@ STATUS周期・20msの待機は維持する。判定の全分岐と2回の境界
 
 ```bash
 cargo install espup ldproxy espflash
-espup install -v 1.98.1.0 --targets esp32
+espup install --toolchain-version 1.98.1.0 --targets esp32
 . ~/export-esp.sh   # 新しいターミナルを開くたびに必要
 ```
 
