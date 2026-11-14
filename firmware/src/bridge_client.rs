@@ -116,7 +116,7 @@ pub fn send_command(
         timestamp as i64,
         &request_nonce,
         BODY.as_bytes(),
-    );
+    )?;
 
     let url = format!("http://{pc_ip_address}:{}{path}", config.bridge_port);
 

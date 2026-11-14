@@ -1,7 +1,19 @@
 use m5stack_pc_bridge::auth::{AuthConfig, AuthError, NonceStore, verify_request};
-use pc_remote_signing::sign_request;
+use pc_remote_signing::sign_request as sign_request_result;
 use serde_json::json;
 use time::OffsetDateTime;
+
+fn sign_request(
+    secret: &[u8],
+    method: &str,
+    path: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &[u8],
+) -> String {
+    sign_request_result(secret, method, path, timestamp, nonce, body)
+        .expect("test HMAC initialization succeeds")
+}
 
 fn config() -> AuthConfig {
     AuthConfig {

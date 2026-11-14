@@ -15,6 +15,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
+pub type SigningError = hmac::digest::InvalidLength;
 
 pub fn body_sha256_hex(body: &[u8]) -> String {
     hex::encode(Sha256::digest(body))
@@ -45,12 +46,11 @@ pub fn sign_request(
     timestamp: i64,
     nonce: &str,
     body: &[u8],
-) -> String {
+) -> Result<String, SigningError> {
     let canonical = canonical_string(method, path, timestamp, nonce, body);
-    let mut mac =
-        HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any size for SHA-256");
+    let mut mac = HmacSha256::new_from_slice(secret)?;
     mac.update(canonical.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
+    Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
 /// m5stack-pc-bridge側(検証する側)が使う。
@@ -101,12 +101,11 @@ pub fn sign_manifest(
     size: u64,
     sha256_hex: &str,
     created_at: &str,
-) -> String {
+) -> Result<String, SigningError> {
     let canonical = manifest_canonical_string(version, size, sha256_hex, created_at);
-    let mut mac =
-        HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any size for SHA-256");
+    let mut mac = HmacSha256::new_from_slice(secret)?;
     mac.update(canonical.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
+    Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
 /// M5Stack firmware側(検証する側)が使う。
@@ -671,8 +670,36 @@ impl Default for AlertThrottle {
     }
 }
 #[cfg(test)]
+mod test_support {
+    use super::{sign_manifest as sign_manifest_result, sign_request as sign_request_result};
+
+    pub fn sign_request(
+        secret: &[u8],
+        method: &str,
+        path: &str,
+        timestamp: i64,
+        nonce: &str,
+        body: &[u8],
+    ) -> String {
+        sign_request_result(secret, method, path, timestamp, nonce, body)
+            .expect("test HMAC initialization succeeds")
+    }
+
+    pub fn sign_manifest(
+        secret: &[u8],
+        version: &str,
+        size: u64,
+        sha256_hex: &str,
+        created_at: &str,
+    ) -> String {
+        sign_manifest_result(secret, version, size, sha256_hex, created_at)
+            .expect("test HMAC initialization succeeds")
+    }
+}
+
+#[cfg(test)]
 mod request_binding_tests {
-    use super::{canonical_string, sign_request, verify_signature};
+    use super::{canonical_string, test_support::sign_request, verify_signature};
 
     const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
     const TIMESTAMP: i64 = 1_700_000_000;
@@ -729,7 +756,9 @@ mod request_binding_tests {
 #[cfg(test)]
 mod manifest_tests {
 
-    use super::{manifest_canonical_string, sign_manifest, verify_manifest_signature};
+    use super::{
+        manifest_canonical_string, test_support::sign_manifest, verify_manifest_signature,
+    };
 
     const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
 
@@ -873,7 +902,7 @@ mod alert_throttle_tests {
 mod ota_tests {
     use super::{
         BootChecks, OtaImageError, OtaManifest, OtaManifestError, StreamingSha256,
-        boot_self_test_passed, ota_confirm_text, parse_manifest_json, sign_manifest,
+        boot_self_test_passed, ota_confirm_text, parse_manifest_json, test_support::sign_manifest,
         verify_manifest, verify_ota_image,
     };
 

@@ -161,6 +161,14 @@ async fn firmware_manifest(
             )
                 .into_response()
         }
+        Ok(Err(firmware::ManifestError::Signing(err))) => {
+            tracing::error!("failed to sign firmware manifest: {err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to build firmware manifest",
+            )
+                .into_response()
+        }
         Err(join_err) => {
             tracing::error!("firmware manifest task failed: {join_err}");
             (

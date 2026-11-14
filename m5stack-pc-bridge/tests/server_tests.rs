@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use m5stack_pc_bridge::{app_config::AgentConfig, audit_log, server::router};
-use pc_remote_signing::sign_request;
+use pc_remote_signing::sign_request as sign_request_result;
 use serde_json::Value;
 use time::OffsetDateTime;
 use tower::ServiceExt;
@@ -13,6 +13,18 @@ use tower::ServiceExt;
 /// 同じファイルへ追記する他のテストと並行すると互いを壊す。
 /// リクエスト跨ぎで保持するため、stdではなくtokioのMutexを使う。
 static AUDIT_PATH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn sign_request(
+    secret: &[u8],
+    method: &str,
+    path: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &[u8],
+) -> String {
+    sign_request_result(secret, method, path, timestamp, nonce, body)
+        .expect("test HMAC initialization succeeds")
+}
 
 fn config() -> AgentConfig {
     AgentConfig {

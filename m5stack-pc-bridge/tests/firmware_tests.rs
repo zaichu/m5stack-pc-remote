@@ -12,7 +12,10 @@ use m5stack_pc_bridge::{
     firmware::FirmwarePaths,
     server::{router, router_with_firmware_paths},
 };
-use pc_remote_signing::{body_sha256_hex, sign_manifest, sign_request, verify_manifest_signature};
+use pc_remote_signing::{
+    body_sha256_hex, sign_manifest as sign_manifest_result, sign_request as sign_request_result,
+    verify_manifest_signature,
+};
 use serde_json::Value;
 use time::OffsetDateTime;
 use tower::ServiceExt;
@@ -20,6 +23,29 @@ use tower::ServiceExt;
 const SECRET: &[u8] = b"local-development-secret";
 const FIRMWARE_BYTES: &[u8] = b"fake-firmware-image-for-ota-phase2";
 const FIRMWARE_VERSION: &str = "0.2.0";
+
+fn sign_request(
+    secret: &[u8],
+    method: &str,
+    path: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &[u8],
+) -> String {
+    sign_request_result(secret, method, path, timestamp, nonce, body)
+        .expect("test HMAC initialization succeeds")
+}
+
+fn sign_manifest(
+    secret: &[u8],
+    version: &str,
+    size: u64,
+    sha256_hex: &str,
+    created_at: &str,
+) -> String {
+    sign_manifest_result(secret, version, size, sha256_hex, created_at)
+        .expect("test HMAC initialization succeeds")
+}
 
 fn config() -> AgentConfig {
     AgentConfig {
