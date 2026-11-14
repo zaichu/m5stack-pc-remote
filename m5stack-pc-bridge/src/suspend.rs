@@ -56,7 +56,7 @@ fn enable_shutdown_privilege() -> anyhow::Result<()> {
 fn grant_enable(token: windows_sys::Win32::Foundation::HANDLE) -> anyhow::Result<()> {
     use windows_sys::Win32::Foundation::{GetLastError, LUID};
     use windows_sys::Win32::Security::{
-        AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
+        AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED,
         SE_SHUTDOWN_NAME, TOKEN_PRIVILEGES,
     };
 

@@ -24,7 +24,7 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
 use app_config::AppConfig;
 use backlight::{Action as BacklightAction, SLEEP_TIMEOUT};
-use board::{DisplayPins, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use board::{DISPLAY_HEIGHT, DISPLAY_WIDTH, DisplayPins};
 use bridge_client::PowerAction;
 use settings::RuntimeSettings;
 use ui::{Status, TelegramState};
@@ -499,14 +499,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(known) = status.battery {
                 let (next_power, should_notify) = power_notify.poll(known.powered);
                 power_notify = next_power;
-                if should_notify {
-                    if let Some(notifier) = notifier.as_ref() {
-                        // 文言の正本は `battery::power_state_notification_ja`。
-                        notifier.notify(battery::power_state_notification_ja(
-                            known.powered,
-                            known.percent,
-                        ));
-                    }
+                if should_notify && let Some(notifier) = notifier.as_ref() {
+                    // 文言の正本は `battery::power_state_notification_ja`。
+                    notifier.notify(battery::power_state_notification_ja(
+                        known.powered,
+                        known.percent,
+                    ));
                 }
             }
         }
@@ -585,12 +583,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let (next_stable, should_notify) =
                 stable_notify.poll(now_online, wake_succeeded, suppress_off);
             stable_notify = next_stable;
-            if should_notify {
-                if let Some(notifier) = notifier.as_ref() {
-                    // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
-                    // 文言の正本は `net::pc_state_notification_ja`。
-                    notifier.notify(net::pc_state_notification_ja(now_online).to_string());
-                }
+            if should_notify && let Some(notifier) = notifier.as_ref() {
+                // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
+                // 文言の正本は `net::pc_state_notification_ja`。
+                notifier.notify(net::pc_state_notification_ja(now_online).to_string());
             }
             // 表示内容が変わったときだけ描き直す。`draw_main`は全画面消去から
             // 始まるため、10秒ごとに無条件で呼ぶとその周期で画面がちらつく。
@@ -717,182 +713,177 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        if let Some((x, y)) = touch_point {
-            if !touch_was_down {
-                // 判定対象は今表示している画面のボタンだけにする。全画面分を見ると
-                // Main画面の空白(OK_BUTTONの領域)をタップしただけでトーストが出る。
-                // CANCELは電源操作ではないため
-                // ロック中でも通す(でないと確認画面から戻れない)。
-                let power_button_tapped = match screen {
-                    Screen::Main | Screen::Calendar => {
-                        ui::WAKE_BUTTON.contains(x, y)
-                            || ui::REBOOT_BUTTON.contains(x, y)
-                            || ui::SHUTDOWN_BUTTON.contains(x, y)
-                    }
-                    Screen::Confirm(_) => ui::OK_BUTTON.contains(x, y),
-                };
-                if power_button_tapped && operation_lock.is_locked() {
-                    reject_locked(
-                        &mut display,
-                        &status,
-                        &mut toast_text,
-                        &mut toast_at,
-                        &mut screen,
-                        &app_config,
-                        &mut clock_minute,
-                    )?;
-                    touch_was_down = touch_down;
-                    std::thread::sleep(TOUCH_POLL_INTERVAL);
-                    continue;
+        if let Some((x, y)) = touch_point
+            && !touch_was_down
+        {
+            // 判定対象は今表示している画面のボタンだけにする。全画面分を見ると
+            // Main画面の空白(OK_BUTTONの領域)をタップしただけでトーストが出る。
+            // CANCELは電源操作ではないため
+            // ロック中でも通す(でないと確認画面から戻れない)。
+            let power_button_tapped = match screen {
+                Screen::Main | Screen::Calendar => {
+                    ui::WAKE_BUTTON.contains(x, y)
+                        || ui::REBOOT_BUTTON.contains(x, y)
+                        || ui::SHUTDOWN_BUTTON.contains(x, y)
                 }
+                Screen::Confirm(_) => ui::OK_BUTTON.contains(x, y),
+            };
+            if power_button_tapped && operation_lock.is_locked() {
+                reject_locked(
+                    &mut display,
+                    &status,
+                    &mut toast_text,
+                    &mut toast_at,
+                    &mut screen,
+                    &app_config,
+                    &mut clock_minute,
+                )?;
+                touch_was_down = touch_down;
+                std::thread::sleep(TOUCH_POLL_INTERVAL);
+                continue;
+            }
 
-                match screen {
-                    // 電源ボタン行はMain/Calendarで共通のため、電源操作はまとめて
-                    // 処理し、画面固有の遷移(時計帯・BACK)だけ分ける。
-                    Screen::Main | Screen::Calendar => {
-                        if ui::WAKE_BUTTON.contains(x, y) {
-                            println!("WAKE tapped at x={x} y={y}");
-                            let _guard = telegram::lock_power(&power_lock);
-                            // status.lockedはループ先頭で読んだ値なので、判定から
-                            // ここまでの間にTelegramの/lockが通っている可能性がある。
-                            // 実行直前に共有状態を直接見る。
-                            if operation_lock.is_locked() {
-                                reject_locked(
-                                    &mut display,
-                                    &status,
-                                    &mut toast_text,
-                                    &mut toast_at,
-                                    &mut screen,
-                                    &app_config,
-                                    &mut clock_minute,
-                                )?;
-                                touch_was_down = touch_down;
-                                std::thread::sleep(TOUCH_POLL_INTERVAL);
-                                continue;
-                            }
-                            let (toast, report) = match net::send_wake_on_lan(
-                                &app_config.pc_mac_address,
-                                settings.wol_port(),
-                            ) {
-                                Ok(()) => {
-                                    println!("WOL sent");
-                                    // 画面のトーストはASCIIフォントのため英語のまま。
-                                    telegram::begin_wake_watch(
-                                        &wake_watch_shared,
-                                        status.pc_online,
-                                    );
-                                    ("Magic packet sent", wake_check::wake_request_text())
-                                }
-                                Err(e) => {
-                                    println!("WOL failed: {e}");
-                                    ("WOL failed", wake_check::wake_request_failed_text())
-                                }
-                            };
-                            notify_panel_action(notifier.as_ref(), report);
-                            toast_text = Some(toast.to_string());
-                            toast_at = Instant::now();
-                            refresh_current_screen(
+            match screen {
+                // 電源ボタン行はMain/Calendarで共通のため、電源操作はまとめて
+                // 処理し、画面固有の遷移(時計帯・BACK)だけ分ける。
+                Screen::Main | Screen::Calendar => {
+                    if ui::WAKE_BUTTON.contains(x, y) {
+                        println!("WAKE tapped at x={x} y={y}");
+                        let _guard = telegram::lock_power(&power_lock);
+                        // status.lockedはループ先頭で読んだ値なので、判定から
+                        // ここまでの間にTelegramの/lockが通っている可能性がある。
+                        // 実行直前に共有状態を直接見る。
+                        if operation_lock.is_locked() {
+                            reject_locked(
                                 &mut display,
-                                &with_toast(&status, &toast_text),
-                                &screen,
-                                &app_config,
-                                &mut clock_minute,
-                                &mut calendar_day,
-                            )?;
-                        } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
-                            screen = Screen::Confirm(PowerAction::Reboot);
-                            ui::draw_confirm(&mut display, PowerAction::Reboot)?;
-                        } else if status.pc_online && ui::SHUTDOWN_BUTTON.contains(x, y) {
-                            screen = Screen::Confirm(PowerAction::Shutdown);
-                            ui::draw_confirm(&mut display, PowerAction::Shutdown)?;
-                        } else if matches!(screen, Screen::Main)
-                            && ui::CLOCK_TAP_ZONE.contains(x, y)
-                        {
-                            // 時計帯タップでCalendar画面へ(Issue #173)。
-                            // 電源操作ではないためLOCK中でも許可する。
-                            // タップ領域は電源ボタン行と重ならない内側に絞ってある。
-                            println!("clock tapped at x={x} y={y}");
-                            screen = Screen::Calendar;
-                            refresh_calendar(
-                                &mut display,
-                                &with_toast(&status, &toast_text),
-                                &app_config,
-                                &mut calendar_day,
-                            )?;
-                        } else if matches!(screen, Screen::Calendar)
-                            && ui::CALENDAR_BACK_BUTTON.contains(x, y)
-                        {
-                            // BACKボタン。電源ボタン行と重ならない専用座標のため、
-                            // 電源ボタン判定の後に置いても見た目と結果が一致する。
-                            // LOCK中でも表示切替は許可する。
-                            println!("calendar BACK tapped at x={x} y={y}");
-                            screen = Screen::Main;
-                            refresh_main(
-                                &mut display,
-                                &with_toast(&status, &toast_text),
+                                &status,
+                                &mut toast_text,
+                                &mut toast_at,
+                                &mut screen,
                                 &app_config,
                                 &mut clock_minute,
                             )?;
+                            touch_was_down = touch_down;
+                            std::thread::sleep(TOUCH_POLL_INTERVAL);
+                            continue;
                         }
-                        // カレンダーグリッド等の空白タップは何も起こさない。
+                        let (toast, report) = match net::send_wake_on_lan(
+                            &app_config.pc_mac_address,
+                            settings.wol_port(),
+                        ) {
+                            Ok(()) => {
+                                println!("WOL sent");
+                                // 画面のトーストはASCIIフォントのため英語のまま。
+                                telegram::begin_wake_watch(&wake_watch_shared, status.pc_online);
+                                ("Magic packet sent", wake_check::wake_request_text())
+                            }
+                            Err(e) => {
+                                println!("WOL failed: {e}");
+                                ("WOL failed", wake_check::wake_request_failed_text())
+                            }
+                        };
+                        notify_panel_action(notifier.as_ref(), report);
+                        toast_text = Some(toast.to_string());
+                        toast_at = Instant::now();
+                        refresh_current_screen(
+                            &mut display,
+                            &with_toast(&status, &toast_text),
+                            &screen,
+                            &app_config,
+                            &mut clock_minute,
+                            &mut calendar_day,
+                        )?;
+                    } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
+                        screen = Screen::Confirm(PowerAction::Reboot);
+                        ui::draw_confirm(&mut display, PowerAction::Reboot)?;
+                    } else if status.pc_online && ui::SHUTDOWN_BUTTON.contains(x, y) {
+                        screen = Screen::Confirm(PowerAction::Shutdown);
+                        ui::draw_confirm(&mut display, PowerAction::Shutdown)?;
+                    } else if matches!(screen, Screen::Main) && ui::CLOCK_TAP_ZONE.contains(x, y) {
+                        // 時計帯タップでCalendar画面へ(Issue #173)。
+                        // 電源操作ではないためLOCK中でも許可する。
+                        // タップ領域は電源ボタン行と重ならない内側に絞ってある。
+                        println!("clock tapped at x={x} y={y}");
+                        screen = Screen::Calendar;
+                        refresh_calendar(
+                            &mut display,
+                            &with_toast(&status, &toast_text),
+                            &app_config,
+                            &mut calendar_day,
+                        )?;
+                    } else if matches!(screen, Screen::Calendar)
+                        && ui::CALENDAR_BACK_BUTTON.contains(x, y)
+                    {
+                        // BACKボタン。電源ボタン行と重ならない専用座標のため、
+                        // 電源ボタン判定の後に置いても見た目と結果が一致する。
+                        // LOCK中でも表示切替は許可する。
+                        println!("calendar BACK tapped at x={x} y={y}");
+                        screen = Screen::Main;
+                        refresh_main(
+                            &mut display,
+                            &with_toast(&status, &toast_text),
+                            &app_config,
+                            &mut clock_minute,
+                        )?;
                     }
-                    Screen::Confirm(action) => {
-                        if ui::CANCEL_BUTTON.contains(x, y) {
-                            println!("{} cancelled", action.slug());
-                            screen = Screen::Main;
-                            toast_text = None;
-                            refresh_main(&mut display, &status, &app_config, &mut clock_minute)?;
-                        } else if ui::OK_BUTTON.contains(x, y) {
-                            println!("{} confirmed", action.slug());
-                            let _guard = telegram::lock_power(&power_lock);
-                            // WAKEと同じ理由で、実行直前にロックを再確認する。
-                            if operation_lock.is_locked() {
-                                reject_locked(
-                                    &mut display,
-                                    &status,
-                                    &mut toast_text,
-                                    &mut toast_at,
-                                    &mut screen,
-                                    &app_config,
-                                    &mut clock_minute,
-                                )?;
-                                touch_was_down = touch_down;
-                                std::thread::sleep(TOUCH_POLL_INTERVAL);
-                                continue;
-                            }
-                            let pc_ip_address = settings.pc_ip_address();
-                            let (toast, report) = match bridge_client::send_command(
-                                action,
-                                app_config.as_ref(),
-                                &pc_ip_address,
-                            ) {
-                                Ok(code) if bridge_client::is_accepted(code) => (
-                                    "Command accepted".to_string(),
-                                    bridge_client::accepted_text(action),
-                                ),
-                                Ok(code) => (
-                                    format!("Command rejected ({code})"),
-                                    bridge_client::rejected_text(action, code),
-                                ),
-                                Err(e) => {
-                                    println!("bridge command failed: {e}");
-                                    (
-                                        "Command failed".to_string(),
-                                        bridge_client::failed_text(action),
-                                    )
-                                }
-                            };
-                            notify_panel_action(notifier.as_ref(), &report);
-                            toast_text = Some(toast);
-                            toast_at = Instant::now();
-                            screen = Screen::Main;
-                            refresh_main(
+                    // カレンダーグリッド等の空白タップは何も起こさない。
+                }
+                Screen::Confirm(action) => {
+                    if ui::CANCEL_BUTTON.contains(x, y) {
+                        println!("{} cancelled", action.slug());
+                        screen = Screen::Main;
+                        toast_text = None;
+                        refresh_main(&mut display, &status, &app_config, &mut clock_minute)?;
+                    } else if ui::OK_BUTTON.contains(x, y) {
+                        println!("{} confirmed", action.slug());
+                        let _guard = telegram::lock_power(&power_lock);
+                        // WAKEと同じ理由で、実行直前にロックを再確認する。
+                        if operation_lock.is_locked() {
+                            reject_locked(
                                 &mut display,
-                                &with_toast(&status, &toast_text),
+                                &status,
+                                &mut toast_text,
+                                &mut toast_at,
+                                &mut screen,
                                 &app_config,
                                 &mut clock_minute,
                             )?;
+                            touch_was_down = touch_down;
+                            std::thread::sleep(TOUCH_POLL_INTERVAL);
+                            continue;
                         }
+                        let pc_ip_address = settings.pc_ip_address();
+                        let (toast, report) = match bridge_client::send_command(
+                            action,
+                            app_config.as_ref(),
+                            &pc_ip_address,
+                        ) {
+                            Ok(code) if bridge_client::is_accepted(code) => (
+                                "Command accepted".to_string(),
+                                bridge_client::accepted_text(action),
+                            ),
+                            Ok(code) => (
+                                format!("Command rejected ({code})"),
+                                bridge_client::rejected_text(action, code),
+                            ),
+                            Err(e) => {
+                                println!("bridge command failed: {e}");
+                                (
+                                    "Command failed".to_string(),
+                                    bridge_client::failed_text(action),
+                                )
+                            }
+                        };
+                        notify_panel_action(notifier.as_ref(), &report);
+                        toast_text = Some(toast);
+                        toast_at = Instant::now();
+                        screen = Screen::Main;
+                        refresh_main(
+                            &mut display,
+                            &with_toast(&status, &toast_text),
+                            &app_config,
+                            &mut clock_minute,
+                        )?;
                     }
                 }
             }

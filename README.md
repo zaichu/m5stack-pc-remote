@@ -47,11 +47,16 @@ m5stack-pc-bridge のポートをインターネットへ直接公開しませ�
 
 Rust版はWi-Fi / WOL / STATUS / タッチUI / REBOOT / SHUTDOWN / Telegram経由操作（Phase 5D: `/status` `/wake` `/reboot` `/shutdown` のコマンド実行まで確認済み、Phase 5E インラインボタンは実装済み・実機確認待ち）まで実機確認済みです。
 
+## Rust toolchain
+
+bridge と shared は Rust 1.100 / edition 2024 を使います。事前に `rustup toolchain install 1.100.0` してください。
+
 ## セットアップ: Rust firmware
 
-firmware の `esp` toolchain は 1.98.1.0 を使用します。事前に
-`cargo install espup ldproxy espflash && espup install -v 1.98.1.0 --targets esp32`
-で導入または既存の `esp` を入れ替えてください（詳細は `firmware/README.md` 参照）。
+firmware の `esp` toolchain は Rust 1.100.0.0 を使用します。事前に
+`cargo install espup ldproxy espflash && espup install -v 1.100.0.0 --targets esp32`
+で導入または既存の `esp` を入れ替え、`make firmware-rust-src-fix` を実行してください
+（公式rust-srcにある2つの標準ライブラリディレクトリを補完します。詳細は `firmware/README.md` 参照）。
 
 ```bash
 cd firmware

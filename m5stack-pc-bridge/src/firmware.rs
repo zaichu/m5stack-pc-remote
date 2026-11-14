@@ -84,7 +84,7 @@ fn read_version(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_manifest, read_bin, FirmwarePaths, ManifestError, UNKNOWN_VERSION};
+    use super::{FirmwarePaths, ManifestError, UNKNOWN_VERSION, build_manifest, read_bin};
     use std::io::Write;
 
     const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";

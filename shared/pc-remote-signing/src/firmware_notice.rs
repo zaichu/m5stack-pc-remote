@@ -1,4 +1,4 @@
-use crate::{compare_versions, VersionOrder};
+use crate::{VersionOrder, compare_versions};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FirmwareNotice {
@@ -13,10 +13,10 @@ impl FirmwareNotice {
         if compare_versions(current, offered) != VersionOrder::Newer {
             return (self, false);
         }
-        if let Some(previous) = &self.last_notified {
-            if compare_versions(previous, offered) != VersionOrder::Newer {
-                return (self, false);
-            }
+        if let Some(previous) = &self.last_notified
+            && compare_versions(previous, offered) != VersionOrder::Newer
+        {
+            return (self, false);
         }
         (
             Self {

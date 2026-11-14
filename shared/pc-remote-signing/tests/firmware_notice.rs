@@ -1,4 +1,4 @@
-use pc_remote_signing::{firmware_available_text, FirmwareCheckSchedule, FirmwareNotice};
+use pc_remote_signing::{FirmwareCheckSchedule, FirmwareNotice, firmware_available_text};
 
 #[test]
 fn first_check_transition_table() {

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
+    let _ = partition_defaults::GENERATED;
     if env::var("TARGET").is_ok_and(|target| target.contains("espidf")) {
         embuild::espidf::sysenv::output();
     }
@@ -325,13 +326,13 @@ fn int_value(
     }
     // 型の範囲内でも意味上の有効範囲(正本はconfig-validation)の外は拒否する。
     // 書き込み側で止めないと、保存値が起動時のclampで別の値になる(Issue #228)。
-    if let Some((min, max)) = range {
-        if !(min..=max).contains(&value) {
-            panic!(
-                "config.toml: `{}` は{min}〜{max}で指定してください。指定値: {value}",
-                spec.key
-            );
-        }
+    if let Some((min, max)) = range
+        && !(min..=max).contains(&value)
+    {
+        panic!(
+            "config.toml: `{}` は{min}〜{max}で指定してください。指定値: {value}",
+            spec.key
+        );
     }
     value
 }

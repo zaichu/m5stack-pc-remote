@@ -100,12 +100,17 @@ STATUS周期・20msの待機は維持する。判定の全分岐と2回の境界
 
 ```bash
 cargo install espup ldproxy espflash
-espup install -v 1.98.1.0 --targets esp32
+espup install --toolchain-version 1.100.0.0 --targets esp32
+cd ..
+make firmware-rust-src-fix
+cd firmware
 . ~/export-esp.sh   # 新しいターミナルを開くたびに必要
 ```
 
-firmware の `rust-toolchain.toml` は channel `esp` を参照する。上記コマンドは、
-既存の `esp` toolchain がある場合も 1.98.1.0 へ入れ替える。
+firmware の `rust-toolchain.toml` は channel `esp` を参照する。espup 1.100.0.0 の
+rust-srcでは `library/windows-sys` と `library/windows_link` が欠けているため、通常版
+Rust 1.100.0 のrust-srcからこれらを補います。`make firmware-rust-src-fix` は両toolchainを
+確認して不足分だけコピーするため、繰り返し実行できます。
 
 ## セットアップ
 
@@ -113,6 +118,9 @@ firmware の `rust-toolchain.toml` は channel `esp` を参照する。上記コ
 cd firmware
 cp config.example.toml config.toml   # Git管理外。実際の値に書き換える
 . ~/export-esp.sh
+# partitions.csv の絶対パスを sdkconfig.partition-table.defaults に生成する
+# (build-dependency の実行順序に依存しないよう、Cargo 起動前に生成する)。
+printf 'CONFIG_PARTITION_TABLE_CUSTOM=y\nCONFIG_PARTITION_TABLE_CUSTOM_FILENAME="%s/partitions.csv"\n' "$PWD" > sdkconfig.partition-table.defaults
 cargo build --release --target xtensa-esp32-espidf
 ```
 
@@ -231,6 +239,9 @@ espflash erase-flash --port /dev/ttyUSB0
 
 # 3) 新しいpartition tableとfirmwareを書き込む(--partition-table 必須)
 cd firmware
+# partitions.csv の絶対パスを sdkconfig.partition-table.defaults に生成する
+# (build-dependency の実行順序に依存しないよう、Cargo 起動前に生成する)。
+printf 'CONFIG_PARTITION_TABLE_CUSTOM=y\nCONFIG_PARTITION_TABLE_CUSTOM_FILENAME="%s/partitions.csv"\n' "$PWD" > sdkconfig.partition-table.defaults
 cargo +esp build --release --target xtensa-esp32-espidf
 python3 ../scripts/verify-partition-table.py   # ビルド成果物の構成を確認
 espflash flash --port /dev/ttyUSB0 \

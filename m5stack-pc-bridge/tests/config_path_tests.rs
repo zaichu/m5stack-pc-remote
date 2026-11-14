@@ -5,7 +5,7 @@
 //! 既定パス解決をここで固定する(Linux `main` も同じ `Cli` を使う)。
 
 use clap::Parser;
-use m5stack_pc_bridge::{default_config_path, Cli};
+use m5stack_pc_bridge::{Cli, default_config_path};
 use std::path::PathBuf;
 
 #[test]
@@ -46,7 +46,7 @@ fn env_and_fallback_resolution() {
     // 同じテスト内へ閉じ込めれば他テストとの並行実行で競合しない。
     const ENV_VAR: &str = "M5STACK_PC_BRIDGE_CONFIG";
 
-    std::env::set_var(ENV_VAR, "/tmp/env.toml");
+    unsafe { std::env::set_var(ENV_VAR, "/tmp/env.toml") };
     let cli = Cli::try_parse_from(["m5stack-pc-bridge"]).unwrap();
     assert_eq!(cli.config_path(), PathBuf::from("/tmp/env.toml"));
 
@@ -56,11 +56,11 @@ fn env_and_fallback_resolution() {
 
     // 空の値(`--config=`、空の環境変数)はclapがエラーにする(手書きパーサの
     // 「無視して既定パスへフォールバック」から挙動が変わる点)。
-    std::env::set_var(ENV_VAR, "");
+    unsafe { std::env::set_var(ENV_VAR, "") };
     assert!(Cli::try_parse_from(["m5stack-pc-bridge"]).is_err());
     assert!(Cli::try_parse_from(["m5stack-pc-bridge", "--config="]).is_err());
 
-    std::env::remove_var(ENV_VAR);
+    unsafe { std::env::remove_var(ENV_VAR) };
     let cli = Cli::try_parse_from(["m5stack-pc-bridge"]).unwrap();
     assert_eq!(cli.config_path(), default_config_path());
 }

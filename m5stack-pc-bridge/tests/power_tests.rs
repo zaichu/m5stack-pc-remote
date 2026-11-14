@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use m5stack_pc_bridge::power::{
-    accepted_sleep_result, run_power_action_with_executor, run_power_action_with_executors,
-    PowerAction,
+    PowerAction, accepted_sleep_result, run_power_action_with_executor,
+    run_power_action_with_executors,
 };
 
 #[test]
@@ -95,9 +95,10 @@ fn sleep_reports_suspend_executor_failure() {
     )
     .unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("simulated SetSuspendState failure"));
+    assert!(
+        err.to_string()
+            .contains("simulated SetSuspendState failure")
+    );
 }
 
 #[test]

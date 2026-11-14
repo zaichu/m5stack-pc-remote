@@ -2,10 +2,8 @@
 """ビルド後、実際に生成されたパーティションテーブルが firmware/partitions.csv と
 一致することを確認する。
 
-`firmware/sdkconfig.defaults` の `CONFIG_PARTITION_TABLE_CUSTOM_FILENAME` は、
-embuildがesp-idf-sysのビルド時に生成する合成CMakeプロジェクト(target/配下の
-一時ディレクトリ)を基準にした相対パスで `partitions.csv` を指す(詳細は
-sdkconfig.defaultsのコメントを参照)。この解決に失敗しても、ESP-IDFのビルドは
+`build.rs` が `CARGO_MANIFEST_DIR` から `partitions.csv` の絶対パスを生成済み
+`sdkconfig.defaults` へ追加する。設定の解決に失敗しても、ESP-IDFのビルドは
 致命的エラーにはならず、空のダミーpartition_tableへ静かにfallbackする。
 つまり「ビルドが成功する」ことは「意図したOTA用パーティション構成が実際に
 使われている」ことを保証しない。このスクリプトはビルド成果物を直接検証して
@@ -27,9 +25,44 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE_DIR = REPO_ROOT / "firmware"
 PARTITIONS_CSV = FIRMWARE_DIR / "partitions.csv"
-# embuildがビルドのたびに `target/<triple>/<profile>/` 直下へコピーする、
-# hashディレクトリに依存しない固定パス。
-PARTITION_TABLE_BIN = FIRMWARE_DIR / "target" / "xtensa-esp32-espidf" / "release" / "partition-table.bin"
+PARTITION_TABLE_BIN_GLOB = (
+    FIRMWARE_DIR / "target" / "xtensa-esp32-espidf" / "release" / "build" / "esp-idf-sys"
+)
+
+
+def find_partition_table_bins() -> list[Path]:
+    return sorted(
+        PARTITION_TABLE_BIN_GLOB.glob("*/out/build/partition_table/partition-table.bin")
+    )
+
+
+def select_partition_table_bin(argv: list[str]) -> Path:
+    """検証対象の partition-table.bin を選ぶ。
+
+    明示パス(ファイルまたは OUT_DIR)が与えられればそれを使う。無ければ
+    ビルド成果物のうち更新時刻が最新のものを選び、辞書順の最後に依存しない。
+
+    成果物が見つからない場合は FileNotFoundError を送出する(呼び出し側で
+    失敗として扱う)。明示パスが存在しない場合も自動検索へは切り替えず、
+    そのまま FileNotFoundError を送出する。
+    """
+    if argv:
+        candidate = Path(argv[0])
+        if candidate.is_dir():
+            matches = sorted(candidate.rglob("partition-table.bin"))
+            if not matches:
+                raise FileNotFoundError(f"partition-table.bin が見つかりません: {candidate}")
+            # 更新時刻が最新のものを優先する。
+            return max(matches, key=lambda p: p.stat().st_mtime)
+        if not candidate.exists():
+            raise FileNotFoundError(f"partition-table.bin が見つかりません: {candidate}")
+        return candidate
+    bins = find_partition_table_bins()
+    if not bins:
+        raise FileNotFoundError(
+            "partition-table.bin が見つかりません。先に firmware をビルドしてください。"
+        )
+    return max(bins, key=lambda p: p.stat().st_mtime)
 
 
 def parse_csv_rows(text: str) -> list[tuple[str, int]]:
@@ -77,13 +110,22 @@ def find_gen_esp32part() -> Path:
     return Path(candidates[0])
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+
     if not PARTITIONS_CSV.exists():
         print(f"ERROR: {PARTITIONS_CSV} が見つかりません。", file=sys.stderr)
         return 2
-    if not PARTITION_TABLE_BIN.exists():
+
+    try:
+        selected = select_partition_table_bin(argv)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    if not selected.exists():
         print(
-            f"ERROR: {PARTITION_TABLE_BIN} が見つかりません。"
+            "ERROR: esp-idf-sysの生成物partition-table.binが見つかりません。"
             "先に `cargo +esp build --release --target xtensa-esp32-espidf` を実行してください。",
             file=sys.stderr,
         )
@@ -92,11 +134,14 @@ def main() -> int:
     try:
         gen_tool = find_gen_esp32part()
     except FileNotFoundError as e:
-        print(f"WARNING: {e} パーティションテーブル検証をskipします。", file=sys.stderr)
-        return 0
+        print(
+            f"ERROR: {e} パーティションテーブルを検証できませんでした。",
+            file=sys.stderr,
+        )
+        return 3
 
     result = subprocess.run(
-        [sys.executable, str(gen_tool), str(PARTITION_TABLE_BIN)],
+        [sys.executable, str(gen_tool), str(selected)],
         capture_output=True,
         text=True,
         check=False,
@@ -113,14 +158,14 @@ def main() -> int:
         print(f"  期待値 (partitions.csv): {expected}", file=sys.stderr)
         print(f"  実際値 (partition-table.bin): {actual}", file=sys.stderr)
         print(
-            "  CONFIG_PARTITION_TABLE_CUSTOM_FILENAMEの相対パス解決に失敗し、"
+            "  CONFIG_PARTITION_TABLE_CUSTOM_FILENAMEのパス解決に失敗し、"
             "ダミーのpartition_tableにfallbackした可能性があります。"
             "firmware/sdkconfig.defaultsのコメントを確認してください。",
             file=sys.stderr,
         )
         return 1
 
-    print(f"partition table OK ({len(expected)} partitions, {PARTITION_TABLE_BIN})")
+    print(f"partition table OK ({len(expected)} partitions, {selected})")
     return 0
 
 

@@ -18,6 +18,7 @@ shared/*/Cargo.lock
 firmware/.embuild/
 firmware/.nvs-provisioning/
 firmware/sdkconfig
+firmware/sdkconfig.partition-table.defaults
 firmware/managed_components/
 firmware/dependencies.lock
 
