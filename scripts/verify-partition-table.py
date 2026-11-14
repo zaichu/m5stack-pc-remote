@@ -41,6 +41,10 @@ def select_partition_table_bin(argv: list[str]) -> Path:
 
     明示パス(ファイルまたは OUT_DIR)が与えられればそれを使う。無ければ
     ビルド成果物のうち更新時刻が最新のものを選び、辞書順の最後に依存しない。
+
+    成果物が見つからない場合は FileNotFoundError を送出する(呼び出し側で
+    失敗として扱う)。明示パスが存在しない場合も自動検索へは切り替えず、
+    そのまま FileNotFoundError を送出する。
     """
     if argv:
         candidate = Path(argv[0])
@@ -50,10 +54,14 @@ def select_partition_table_bin(argv: list[str]) -> Path:
                 raise FileNotFoundError(f"partition-table.bin が見つかりません: {candidate}")
             # 更新時刻が最新のものを優先する。
             return max(matches, key=lambda p: p.stat().st_mtime)
+        if not candidate.exists():
+            raise FileNotFoundError(f"partition-table.bin が見つかりません: {candidate}")
         return candidate
     bins = find_partition_table_bins()
     if not bins:
-        return Path()  # caller handles empty
+        raise FileNotFoundError(
+            "partition-table.bin が見つかりません。先に firmware をビルドしてください。"
+        )
     return max(bins, key=lambda p: p.stat().st_mtime)
 
 
@@ -102,32 +110,35 @@ def find_gen_esp32part() -> Path:
     return Path(candidates[0])
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+
     if not PARTITIONS_CSV.exists():
         print(f"ERROR: {PARTITIONS_CSV} が見つかりません。", file=sys.stderr)
         return 2
 
     try:
-        selected = select_partition_table_bin(sys.argv[1:])
+        selected = select_partition_table_bin(argv)
     except FileNotFoundError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
     if not selected.exists():
-        bins = find_partition_table_bins()
-        if not bins:
-            print(
-                "ERROR: esp-idf-sysの生成物partition-table.binが見つかりません。"
-                "先に `cargo +esp build --release --target xtensa-esp32-espidf` を実行してください。",
-                file=sys.stderr,
-            )
-            return 2
-        selected = max(bins, key=lambda p: p.stat().st_mtime)
+        print(
+            "ERROR: esp-idf-sysの生成物partition-table.binが見つかりません。"
+            "先に `cargo +esp build --release --target xtensa-esp32-espidf` を実行してください。",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         gen_tool = find_gen_esp32part()
     except FileNotFoundError as e:
-        print(f"WARNING: {e} パーティションテーブル検証をskipします。", file=sys.stderr)
-        return 0
+        print(
+            f"ERROR: {e} パーティションテーブルを検証できませんでした。",
+            file=sys.stderr,
+        )
+        return 3
 
     result = subprocess.run(
         [sys.executable, str(gen_tool), str(selected)],
