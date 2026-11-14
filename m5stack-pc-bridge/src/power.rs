@@ -89,7 +89,7 @@ pub fn accepted_sleep_result(dry_run: bool) -> PowerResult {
     // の引数をそのまま残す(何を呼ぶかの監査用)。
     let command = ["SetSuspendState", "false", "false", "false"]
         .into_iter()
-        .map(|s| s.to_string())
+        .map(str::to_string)
         .collect::<Vec<_>>();
 
     PowerResult {

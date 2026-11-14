@@ -42,3 +42,15 @@ tower = "0.5"
 
 [lints.cargo]
 unused_dependencies = "warn"
+
+[lints.clippy]
+use_self = "warn"
+missing_const_for_fn = "warn"
+manual_let_else = "warn"
+uninlined_format_args = "warn"
+map_unwrap_or = "warn"
+redundant_closure_for_method_calls = "warn"
+option_if_let_else = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_lossless = "warn"
