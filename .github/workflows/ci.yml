@@ -30,6 +30,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: x86_64-pc-windows-gnu
+          components: rustfmt, clippy
 
       # Cargo依存のビルドキャッシュ。無しだと1行変更でも全依存を再コンパイルし
       # `make check` が毎回~96秒かかる。workspacesを明示するのは、このリポジトリ
