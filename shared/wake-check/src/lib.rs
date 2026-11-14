@@ -25,7 +25,7 @@ pub enum WakeNotice {
 }
 
 impl WakeWatch {
-    pub fn idle() -> Self {
+    pub const fn idle() -> Self {
         Self { waiting: false }
     }
 
@@ -33,7 +33,7 @@ impl WakeWatch {
     /// オンなら待機しない(残っていた待機は終わらせる)。オフなら待機開始。
     /// 再指示時の期限更新(開始時刻の置き換え)は呼び出し側が行うため、ここでは待機継続を返す。
     /// 戻り値は(次の状態, 待機を開始したか)。
-    pub fn begin(self, pc_online: bool) -> (Self, bool) {
+    pub const fn begin(self, pc_online: bool) -> (Self, bool) {
         if pc_online {
             (Self { waiting: false }, false)
         } else {
@@ -45,7 +45,7 @@ impl WakeWatch {
     /// 戻り値は(次の状態, 通知の要否と種別)。
     /// 待機なしでは何も送らない(既存の状態変化通知と二重になるため)。
     /// 成功・期限到達のどちらでも待機を終わらせる(期限通知は1回だけ)。
-    pub fn poll(self, pc_online: bool, elapsed_secs: u64) -> (Self, Option<WakeNotice>) {
+    pub const fn poll(self, pc_online: bool, elapsed_secs: u64) -> (Self, Option<WakeNotice>) {
         if !self.waiting {
             return (self, None);
         }
@@ -92,7 +92,7 @@ enum SleepPhase {
 }
 
 impl SleepWatch {
-    pub fn idle() -> Self {
+    pub const fn idle() -> Self {
         Self {
             phase: SleepPhase::Idle,
         }
@@ -100,7 +100,7 @@ impl SleepWatch {
 
     /// スリープ指示を受け付けたときの更新。bridgeが受理した呼び出し側だけが呼ぶ
     /// (拒否・送信失敗ではPCは起きたままのはずで、後の本物のオフを抑止しない)。
-    pub fn begin(self) -> Self {
+    pub const fn begin(self) -> Self {
         Self {
             phase: SleepPhase::Armed { polls: 0 },
         }
@@ -112,7 +112,7 @@ impl SleepWatch {
     /// - `Armed`/`Suppressing` + offline は `Suppressing` へ進み/留まり抑止する。
     /// - `Suppressing` + online は `Idle` に戻し、そのpoll自体は抑止しない。
     /// - `Armed` のまま上限を超えたら `Idle` に戻す。
-    pub fn poll(self, pc_online: bool) -> (Self, bool) {
+    pub const fn poll(self, pc_online: bool) -> (Self, bool) {
         match self.phase {
             SleepPhase::Idle => (self, false),
             SleepPhase::Armed { polls } => {
@@ -146,12 +146,12 @@ impl SleepWatch {
 }
 /// 起動指示を受け付けたときの応答文(日本語)。用語は `docs/glossary.md` が正本。
 /// WOLは内部手段のため文言に使わない。
-pub fn wake_request_text() -> &'static str {
+pub const fn wake_request_text() -> &'static str {
     "PCの起動を指示しました。"
 }
 
 /// 起動指示自体に失敗したときの応答文(日本語)。成功文と対になる書き出しにする。
-pub fn wake_request_failed_text() -> &'static str {
+pub const fn wake_request_failed_text() -> &'static str {
     "PCの起動の指示に失敗しました。"
 }
 
