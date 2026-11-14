@@ -57,7 +57,9 @@ impl RuntimeSettings {
     fn lock(&self) -> MutexGuard<'_, State> {
         // poisonしても排他を維持したまま使い続ける(守るのはNVS書き込みと値の
         // 同期だけ。telegram::lock_powerと同じ考え方)。
-        self.state.lock().unwrap_or_else(|e| e.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn pc_ip_address(&self) -> String {

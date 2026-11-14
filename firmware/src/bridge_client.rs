@@ -46,17 +46,17 @@ pub trait PowerActionLabel {
 impl PowerActionLabel for PowerAction {
     fn label_ja(self) -> &'static str {
         match self {
-            PowerAction::Reboot => "再起動",
-            PowerAction::Shutdown => "シャットダウン",
-            PowerAction::Sleep => "スリープ",
+            Self::Reboot => "再起動",
+            Self::Shutdown => "シャットダウン",
+            Self::Sleep => "スリープ",
         }
     }
 
     fn subject_label_ja(self) -> &'static str {
         match self {
-            PowerAction::Reboot => "PCの再起動",
-            PowerAction::Shutdown => "PCのシャットダウン",
-            PowerAction::Sleep => "PCのスリープ",
+            Self::Reboot => "PCの再起動",
+            Self::Shutdown => "PCのシャットダウン",
+            Self::Sleep => "PCのスリープ",
         }
     }
 }

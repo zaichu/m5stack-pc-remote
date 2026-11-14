@@ -94,18 +94,18 @@ enum IntTy {
 impl IntTy {
     const fn rust_name(self) -> &'static str {
         match self {
-            IntTy::U8 => "u8",
-            IntTy::U16 => "u16",
-            IntTy::U32 => "u32",
-            IntTy::U64 => "u64",
-            IntTy::I64 => "i64",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::I64 => "i64",
         }
     }
 
     const fn min_value(self) -> i64 {
         match self {
-            IntTy::U8 | IntTy::U16 | IntTy::U32 | IntTy::U64 => 0,
-            IntTy::I64 => i64::MIN,
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 => 0,
+            Self::I64 => i64::MIN,
         }
     }
 
@@ -114,10 +114,10 @@ impl IntTy {
     /// `i64::MAX` を上限として問題ない。
     const fn max_value(self) -> i64 {
         match self {
-            IntTy::U8 => u8::MAX as i64,
-            IntTy::U16 => u16::MAX as i64,
-            IntTy::U32 => u32::MAX as i64,
-            IntTy::U64 | IntTy::I64 => i64::MAX,
+            Self::U8 => u8::MAX as i64,
+            Self::U16 => u16::MAX as i64,
+            Self::U32 => u32::MAX as i64,
+            Self::U64 | Self::I64 => i64::MAX,
         }
     }
 }
