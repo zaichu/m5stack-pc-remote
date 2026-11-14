@@ -25,11 +25,36 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE_DIR = REPO_ROOT / "firmware"
 PARTITIONS_CSV = FIRMWARE_DIR / "partitions.csv"
-PARTITION_TABLE_BINS = sorted(
-    (FIRMWARE_DIR / "target" / "xtensa-esp32-espidf" / "release" / "build" / "esp-idf-sys").glob(
-        "*/out/build/partition_table/partition-table.bin"
-    )
+PARTITION_TABLE_BIN_GLOB = (
+    FIRMWARE_DIR / "target" / "xtensa-esp32-espidf" / "release" / "build" / "esp-idf-sys"
 )
+
+
+def find_partition_table_bins() -> list[Path]:
+    return sorted(
+        PARTITION_TABLE_BIN_GLOB.glob("*/out/build/partition_table/partition-table.bin")
+    )
+
+
+def select_partition_table_bin(argv: list[str]) -> Path:
+    """検証対象の partition-table.bin を選ぶ。
+
+    明示パス(ファイルまたは OUT_DIR)が与えられればそれを使う。無ければ
+    ビルド成果物のうち更新時刻が最新のものを選び、辞書順の最後に依存しない。
+    """
+    if argv:
+        candidate = Path(argv[0])
+        if candidate.is_dir():
+            matches = sorted(candidate.rglob("partition-table.bin"))
+            if not matches:
+                raise FileNotFoundError(f"partition-table.bin が見つかりません: {candidate}")
+            # 更新時刻が最新のものを優先する。
+            return max(matches, key=lambda p: p.stat().st_mtime)
+        return candidate
+    bins = find_partition_table_bins()
+    if not bins:
+        return Path()  # caller handles empty
+    return max(bins, key=lambda p: p.stat().st_mtime)
 
 
 def parse_csv_rows(text: str) -> list[tuple[str, int]]:
@@ -81,13 +106,22 @@ def main() -> int:
     if not PARTITIONS_CSV.exists():
         print(f"ERROR: {PARTITIONS_CSV} が見つかりません。", file=sys.stderr)
         return 2
-    if not PARTITION_TABLE_BINS:
-        print(
-            "ERROR: esp-idf-sysの生成物partition-table.binが見つかりません。"
-            "先に `cargo +esp build --release --target xtensa-esp32-espidf` を実行してください。",
-            file=sys.stderr,
-        )
+
+    try:
+        selected = select_partition_table_bin(sys.argv[1:])
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         return 2
+    if not selected.exists():
+        bins = find_partition_table_bins()
+        if not bins:
+            print(
+                "ERROR: esp-idf-sysの生成物partition-table.binが見つかりません。"
+                "先に `cargo +esp build --release --target xtensa-esp32-espidf` を実行してください。",
+                file=sys.stderr,
+            )
+            return 2
+        selected = max(bins, key=lambda p: p.stat().st_mtime)
 
     try:
         gen_tool = find_gen_esp32part()
@@ -96,7 +130,7 @@ def main() -> int:
         return 0
 
     result = subprocess.run(
-        [sys.executable, str(gen_tool), str(PARTITION_TABLE_BINS[-1])],
+        [sys.executable, str(gen_tool), str(selected)],
         capture_output=True,
         text=True,
         check=False,
@@ -120,7 +154,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"partition table OK ({len(expected)} partitions, {PARTITION_TABLE_BINS[-1]})")
+    print(f"partition table OK ({len(expected)} partitions, {selected})")
     return 0
 
 

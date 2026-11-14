@@ -38,6 +38,13 @@ if [[ ! -f "$firmware_dir/config.toml" ]]; then
   exit 0
 fi
 
+# partitions.csv の絶対パスを sdkconfig.partition-table.defaults に生成する。
+# build-dependency(partition-defaults) の実行順序に依存せず、Cargo 起動前に
+# 必ず存在するようにする(Issue #213/#267)。Cargo の並列ビルドで生成より先に
+# esp-idf-sys が読んでも問題ない。
+printf 'CONFIG_PARTITION_TABLE_CUSTOM=y\nCONFIG_PARTITION_TABLE_CUSTOM_FILENAME="%s/partitions.csv"\n' \
+  "$firmware_dir" > "$firmware_dir/sdkconfig.partition-table.defaults"
+
 # espupが出力する環境変数を読み、esp-idf-sys build scriptからXtensa toolchainを見えるようにする。
 if [[ -f "$HOME/export-esp.sh" ]]; then
   # shellcheck disable=SC1091

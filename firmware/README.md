@@ -118,6 +118,9 @@ Rust 1.100.0 のrust-srcからこれらを補います。`make firmware-rust-src
 cd firmware
 cp config.example.toml config.toml   # Git管理外。実際の値に書き換える
 . ~/export-esp.sh
+# partitions.csv の絶対パスを sdkconfig.partition-table.defaults に生成する
+# (build-dependency の実行順序に依存しないよう、Cargo 起動前に生成する)。
+printf 'CONFIG_PARTITION_TABLE_CUSTOM=y\nCONFIG_PARTITION_TABLE_CUSTOM_FILENAME="%s/partitions.csv"\n' "$PWD" > sdkconfig.partition-table.defaults
 cargo build --release --target xtensa-esp32-espidf
 ```
 
@@ -236,6 +239,9 @@ espflash erase-flash --port /dev/ttyUSB0
 
 # 3) 新しいpartition tableとfirmwareを書き込む(--partition-table 必須)
 cd firmware
+# partitions.csv の絶対パスを sdkconfig.partition-table.defaults に生成する
+# (build-dependency の実行順序に依存しないよう、Cargo 起動前に生成する)。
+printf 'CONFIG_PARTITION_TABLE_CUSTOM=y\nCONFIG_PARTITION_TABLE_CUSTOM_FILENAME="%s/partitions.csv"\n' "$PWD" > sdkconfig.partition-table.defaults
 cargo +esp build --release --target xtensa-esp32-espidf
 python3 ../scripts/verify-partition-table.py   # ビルド成果物の構成を確認
 espflash flash --port /dev/ttyUSB0 \
