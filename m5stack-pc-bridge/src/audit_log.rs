@@ -22,7 +22,9 @@ pub fn append(action: &str, dry_run: bool, result: &str) -> std::io::Result<()> 
     // poisonしても排他は維持したまま処理を続ける。この排他が守るのはファイルへの
     // 追記1回分だけで、panicが残せる最悪の状態は行の途中までの書き込みにとどまる。
     // 一方でここでエラーを返すと fail-closed により電源操作が以後ずっと通らなくなる。
-    let _guard = AUDIT_LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = AUDIT_LOG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = path();
     rotate_if_too_large(&path)?;
 
@@ -138,7 +140,7 @@ mod tests {
     fn rotates_log_at_max_size() {
         let dir = temp_case_dir("at-max");
         let target = dir.join("audit.log");
-        write_sized_file(&target, AUDIT_LOG_MAX_BYTES as usize);
+        write_sized_file(&target, usize::try_from(AUDIT_LOG_MAX_BYTES).unwrap());
 
         rotate_if_too_large(&target).unwrap();
 
@@ -155,7 +157,7 @@ mod tests {
     fn rotation_replaces_stale_backup() {
         let dir = temp_case_dir("replace");
         let target = dir.join("audit.log");
-        write_sized_file(&target, AUDIT_LOG_MAX_BYTES as usize + 1);
+        write_sized_file(&target, usize::try_from(AUDIT_LOG_MAX_BYTES).unwrap() + 1);
         let rotated = target.with_extension("log.1");
         std::fs::write(&rotated, b"stale").unwrap();
 
@@ -174,7 +176,7 @@ mod tests {
     fn rotation_failure_is_returned_not_swallowed() {
         let dir = temp_case_dir("failure");
         let target = dir.join("audit.log");
-        write_sized_file(&target, AUDIT_LOG_MAX_BYTES as usize + 1);
+        write_sized_file(&target, usize::try_from(AUDIT_LOG_MAX_BYTES).unwrap() + 1);
         std::fs::create_dir(target.with_extension("log.1")).unwrap();
 
         let err = rotate_if_too_large(&target).unwrap_err();
