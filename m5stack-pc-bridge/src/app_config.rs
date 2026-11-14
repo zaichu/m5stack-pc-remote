@@ -41,11 +41,11 @@ impl std::fmt::Debug for AgentConfig {
     }
 }
 
-fn default_allowed_skew_seconds() -> i64 {
+const fn default_allowed_skew_seconds() -> i64 {
     60
 }
 
-fn default_dry_run() -> bool {
+const fn default_dry_run() -> bool {
     true
 }
 
@@ -54,14 +54,16 @@ impl AgentConfig {
         // toml::de::Error の Display は問題箇所の行を引用し、serdeの型不一致
         // メッセージは値そのものを含む。どちらもconfig.tomlのsecretがログへ出る
         // ため、エラーは伝播させず行番号だけを取り出す。値は一切含めない。
-        let config: Self = toml::from_str(input).map_err(|err| match err.span() {
-            Some(span) => {
-                let line = input
-                    .get(..span.start)
-                    .map_or(1, |head| head.matches('\n').count() + 1);
-                anyhow::anyhow!("config.tomlを解析できません({line}行目付近)")
-            }
-            None => anyhow::anyhow!("config.tomlを解析できません"),
+        let config: Self = toml::from_str(input).map_err(|err| {
+            err.span().map_or_else(
+                || anyhow::anyhow!("config.tomlを解析できません"),
+                |span| {
+                    let line = input
+                        .get(..span.start)
+                        .map_or(1, |head| head.matches('\n').count() + 1);
+                    anyhow::anyhow!("config.tomlを解析できません({line}行目付近)")
+                },
+            )
         })?;
         config.validate()?;
         Ok(config)

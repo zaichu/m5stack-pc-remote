@@ -415,7 +415,7 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, AuthErr
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
-        .map(|v| v.trim())
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or(AuthError::MissingHeader)
 }

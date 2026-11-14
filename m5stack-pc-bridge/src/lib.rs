@@ -14,18 +14,16 @@ pub mod windows_service;
 /// Windows ServiceはSCMから起動されるとCWDがSystem32になるため、CWD相対だと
 /// 設定やログの場所を見失う。
 pub fn exe_dir_file(name: &str) -> std::path::PathBuf {
-    if let Some(path) = std::env::current_exe()
+    std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
-    {
-        path
-    } else {
-        tracing::warn!(
-            "current_exe() が取得できず CWD 相対パスへフォールバックします: {}",
-            name
-        );
-        std::path::PathBuf::from(name)
-    }
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "current_exe() が取得できず CWD 相対パスへフォールバックします: {}",
+                name
+            );
+            std::path::PathBuf::from(name)
+        })
 }
 
 /// `--config` / `M5STACK_PC_BRIDGE_CONFIG` を解釈するCLI引数。Linux `main` と
