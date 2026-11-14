@@ -47,6 +47,8 @@ pub enum ManifestError {
     /// `created_at` のRFC3339整形に失敗した。
     #[error(transparent)]
     Format(#[from] time::error::Format),
+    #[error(transparent)]
+    Signing(#[from] pc_remote_signing::SigningError),
 }
 
 /// `GET /firmware/manifest` 用にmanifestを組み立ててHMAC-SHA256署名を付ける
@@ -62,7 +64,7 @@ pub fn build_manifest(paths: &FirmwarePaths, secret: &[u8]) -> Result<OtaManifes
     let version = read_version(&paths.version);
     let modified = std::fs::metadata(&paths.bin)?.modified()?;
     let created_at = time::OffsetDateTime::from(modified).format(&Rfc3339)?;
-    let signature = pc_remote_signing::sign_manifest(secret, &version, size, &sha256, &created_at);
+    let signature = pc_remote_signing::sign_manifest(secret, &version, size, &sha256, &created_at)?;
     Ok(OtaManifest {
         version,
         size,

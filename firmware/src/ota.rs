@@ -57,6 +57,7 @@ pub enum OtaError {
         status: u16,
     },
     ResponseTooLarge,
+    Signing(pc_remote_signing::SigningError),
     Manifest(OtaManifestError),
     Image(OtaImageError),
     /// OTA slot操作 (`EspOta`) の失敗。値はespのエラー文言のみ。
@@ -80,6 +81,7 @@ impl OtaError {
                 format!("PCが {endpoint} に {status} を返しました。")
             }
             OtaError::ResponseTooLarge => "manifestが大きすぎます。".to_string(),
+            OtaError::Signing(_) => "署名を生成できませんでした。".to_string(),
             OtaError::Manifest(_) => {
                 "manifestの検証に失敗しました。配信中のfirmwareを確認してください。".to_string()
             }
@@ -102,6 +104,7 @@ impl fmt::Display for OtaError {
                 write!(f, "firmware {endpoint} returned {status}")
             }
             OtaError::ResponseTooLarge => write!(f, "firmware manifest is too large"),
+            OtaError::Signing(e) => write!(f, "firmware signature failed: {e}"),
             OtaError::Manifest(e) => write!(f, "{e}"),
             OtaError::Image(e) => write!(f, "{e}"),
             OtaError::Ota(reason) => write!(f, "OTA write failed: {reason}"),
@@ -120,6 +123,12 @@ impl From<OtaManifestError> for OtaError {
 impl From<OtaImageError> for OtaError {
     fn from(e: OtaImageError) -> Self {
         OtaError::Image(e)
+    }
+}
+
+impl From<pc_remote_signing::SigningError> for OtaError {
+    fn from(e: pc_remote_signing::SigningError) -> Self {
+        OtaError::Signing(e)
     }
 }
 
@@ -324,7 +333,7 @@ fn with_signed_get<T>(
         timestamp as i64,
         &request_nonce,
         b"",
-    );
+    )?;
 
     // URL全体はログへ出さない (IPを含むため)。エラー時はendpointラベルだけ使う。
     let url = format!("http://{pc_ip_address}:{}{path}", config.bridge_port);
