@@ -215,7 +215,7 @@ fn draw_lamp(
 fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<(), Box<dyn Error>> {
     Rectangle::new(
         Point::zero(),
-        Size::new(DISPLAY_WIDTH as u32, HEADER_HEIGHT),
+        Size::new(u32::from(DISPLAY_WIDTH), HEADER_HEIGHT),
     )
     .into_styled(PrimitiveStyle::with_fill(palette::HEADER))
     .draw(display)
@@ -232,7 +232,7 @@ fn draw_header(display: &mut Core2Display<'_>, status: &Status<'_>) -> Result<()
     // 右端から左へ順に積む。
     let next = draw_lamp(
         display,
-        DISPLAY_WIDTH as i32 - 10,
+        i32::from(DISPLAY_WIDTH) - 10,
         "TG",
         status.telegram.color(),
     )?;
@@ -297,7 +297,7 @@ fn draw_status_card(
 
     Text::with_alignment(
         "TARGET PC",
-        Point::new(DISPLAY_WIDTH as i32 / 2, 76),
+        Point::new(i32::from(DISPLAY_WIDTH) / 2, 76),
         MonoTextStyle::new(&FONT_6X10, palette::TEXT_DIM),
         Alignment::Center,
     )
@@ -306,7 +306,7 @@ fn draw_status_card(
 
     Text::with_alignment(
         crate::net::pc_online_label_ascii(status.pc_online),
-        Point::new(DISPLAY_WIDTH as i32 / 2, 110),
+        Point::new(i32::from(DISPLAY_WIDTH) / 2, 110),
         MonoTextStyle::new(&FONT_10X20, accent),
         Alignment::Center,
     )
@@ -382,7 +382,7 @@ pub fn redraw_clock(
 ) -> Result<(), Box<dyn Error>> {
     Rectangle::new(
         Point::new(0, CLOCK_TOP),
-        Size::new(DISPLAY_WIDTH as u32, CLOCK_HEIGHT),
+        Size::new(u32::from(DISPLAY_WIDTH), CLOCK_HEIGHT),
     )
     .into_styled(PrimitiveStyle::with_fill(palette::BG))
     .draw(display)
@@ -390,7 +390,7 @@ pub fn redraw_clock(
 
     Text::with_alignment(
         clock.time.as_str(),
-        Point::new(DISPLAY_WIDTH as i32 / 2, CLOCK_TIME_BASELINE),
+        Point::new(i32::from(DISPLAY_WIDTH) / 2, CLOCK_TIME_BASELINE),
         MonoTextStyle::new(&FONT_10X20, palette::TEXT),
         Alignment::Center,
     )
@@ -399,7 +399,7 @@ pub fn redraw_clock(
 
     Text::with_alignment(
         clock.date.as_str(),
-        Point::new(DISPLAY_WIDTH as i32 / 2, CLOCK_DATE_BASELINE),
+        Point::new(i32::from(DISPLAY_WIDTH) / 2, CLOCK_DATE_BASELINE),
         MonoTextStyle::new(&FONT_6X10, palette::TEXT_DIM),
         Alignment::Center,
     )
@@ -463,7 +463,7 @@ pub fn calendar_view(unix_secs: i64, tz_offset_hours: i64) -> CalendarView {
     };
     let local = unix_secs + tz_offset_hours * 3600;
     let days = local.div_euclid(86_400);
-    let first_days = days - (today.day as i64 - 1);
+    let first_days = days - (i64::from(today.day) - 1);
     // 0=日曜。`clock_strings` と同じ式で、1970-01-01(木曜)=4になる。
     let first_weekday = (first_days + 4).rem_euclid(7) as usize;
     let month_len = days_in_month(today.year, today.month);
@@ -509,7 +509,7 @@ pub fn draw_calendar(
 
     Text::with_alignment(
         view.title.as_str(),
-        Point::new(DISPLAY_WIDTH as i32 / 2, CAL_TITLE_BASELINE),
+        Point::new(i32::from(DISPLAY_WIDTH) / 2, CAL_TITLE_BASELINE),
         MonoTextStyle::new(&FONT_8X13_BOLD, palette::TEXT),
         Alignment::Center,
     )
@@ -520,7 +520,7 @@ pub fn draw_calendar(
         // 未同期時はグリッドを出さず、誤った1970年カレンダーを見せない。
         Text::with_alignment(
             "NO CLOCK",
-            Point::new(DISPLAY_WIDTH as i32 / 2, CAL_NO_CLOCK_BASELINE),
+            Point::new(i32::from(DISPLAY_WIDTH) / 2, CAL_NO_CLOCK_BASELINE),
             MonoTextStyle::new(&FONT_10X20, palette::TEXT),
             Alignment::Center,
         )
@@ -579,10 +579,10 @@ fn draw_banner(
     text: &str,
     color: Rgb565,
 ) -> Result<(), Box<dyn Error>> {
-    let top = DISPLAY_HEIGHT as i32 - BANNER_HEIGHT as i32;
+    let top = i32::from(DISPLAY_HEIGHT) - BANNER_HEIGHT as i32;
     Rectangle::new(
         Point::new(0, top),
-        Size::new(DISPLAY_WIDTH as u32, BANNER_HEIGHT),
+        Size::new(u32::from(DISPLAY_WIDTH), BANNER_HEIGHT),
     )
     .into_styled(PrimitiveStyle::with_fill(color))
     .draw(display)
@@ -590,7 +590,7 @@ fn draw_banner(
 
     Text::with_alignment(
         text,
-        Point::new(DISPLAY_WIDTH as i32 / 2, top + 14),
+        Point::new(i32::from(DISPLAY_WIDTH) / 2, top + 14),
         MonoTextStyle::new(&FONT_6X10, palette::TEXT),
         Alignment::Center,
     )
@@ -668,7 +668,7 @@ pub fn draw_confirm(
     // 危険操作の確認画面。赤い帯で通常画面と明確に区別する。
     Rectangle::new(
         Point::zero(),
-        Size::new(DISPLAY_WIDTH as u32, HEADER_HEIGHT),
+        Size::new(u32::from(DISPLAY_WIDTH), HEADER_HEIGHT),
     )
     .into_styled(PrimitiveStyle::with_fill(palette::DANGER))
     .draw(display)
@@ -676,7 +676,7 @@ pub fn draw_confirm(
 
     Text::with_alignment(
         "CONFIRM",
-        Point::new(DISPLAY_WIDTH as i32 / 2, 18),
+        Point::new(i32::from(DISPLAY_WIDTH) / 2, 18),
         MonoTextStyle::new(&FONT_8X13_BOLD, palette::TEXT),
         Alignment::Center,
     )
@@ -692,7 +692,7 @@ pub fn draw_confirm(
     };
     Text::with_alignment(
         title,
-        Point::new(DISPLAY_WIDTH as i32 / 2, 82),
+        Point::new(i32::from(DISPLAY_WIDTH) / 2, 82),
         MonoTextStyle::new(&FONT_10X20, palette::TEXT),
         Alignment::Center,
     )
@@ -701,7 +701,7 @@ pub fn draw_confirm(
 
     Text::with_alignment(
         "OK sends a signed command",
-        Point::new(DISPLAY_WIDTH as i32 / 2, 108),
+        Point::new(i32::from(DISPLAY_WIDTH) / 2, 108),
         MonoTextStyle::new(&FONT_6X10, palette::TEXT_DIM),
         Alignment::Center,
     )

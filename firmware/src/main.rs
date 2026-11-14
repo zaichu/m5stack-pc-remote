@@ -367,30 +367,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Wi-Fi切断時は一定間隔で再接続を試す。
         if wifi_check_at.elapsed() >= WIFI_RECONNECT_INTERVAL {
             wifi_check_at = Instant::now();
-            match wifi.as_mut() {
-                Some(w) => {
-                    if !w.is_up() {
-                        println!("Wi-Fi down; reconnecting");
-                        match w.reconnect() {
-                            Ok(()) => println!("Wi-Fi reconnected"),
-                            Err(e) => println!("Wi-Fi reconnect failed: {e}"),
-                        }
+            if let Some(w) = wifi.as_mut() {
+                if !w.is_up() {
+                    println!("Wi-Fi down; reconnecting");
+                    match w.reconnect() {
+                        Ok(()) => println!("Wi-Fi reconnected"),
+                        Err(e) => println!("Wi-Fi reconnect failed: {e}"),
                     }
                 }
-                None => {
-                    // 初回接続失敗時はModemも破棄されるため、再取得して接続を試す。
-                    println!("Wi-Fi never connected; retrying");
-                    match net::Wifi::connect_retry(
-                        nvs_partition.clone(),
-                        &app_config.wifi_ssid,
-                        &app_config.wifi_password,
-                    ) {
-                        Ok(w) => {
-                            println!("Wi-Fi connected");
-                            wifi = Some(w);
-                        }
-                        Err(e) => println!("Wi-Fi connect retry failed: {e}"),
+            } else {
+                // 初回接続失敗時はModemも破棄されるため、再取得して接続を試す。
+                println!("Wi-Fi never connected; retrying");
+                match net::Wifi::connect_retry(
+                    nvs_partition.clone(),
+                    &app_config.wifi_ssid,
+                    &app_config.wifi_password,
+                ) {
+                    Ok(w) => {
+                        println!("Wi-Fi connected");
+                        wifi = Some(w);
                     }
+                    Err(e) => println!("Wi-Fi connect retry failed: {e}"),
                 }
             }
 
@@ -658,7 +655,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // タッチの立ち上がりだけを見ることで、1回のタップで1回だけ実行する。
         let touch_point = match touch.get_touch_event() {
-            Ok(event) => event.p1.map(|p| (p.x as i32, p.y as i32)),
+            Ok(event) => event.p1.map(|p| (i32::from(p.x), i32::from(p.y))),
             Err(_) => None,
         };
         let touch_down = touch_point.is_some();

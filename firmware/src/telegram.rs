@@ -494,7 +494,7 @@ impl Api {
             &HttpConfiguration {
                 use_global_ca_store: true,
                 timeout: Some(Duration::from_secs(
-                    self.config.telegram_long_poll_timeout_seconds as u64 + 10,
+                    u64::from(self.config.telegram_long_poll_timeout_seconds) + 10,
                 )),
                 buffer_size: Some(RESPONSE_BUFFER),
                 ..Default::default()

@@ -89,8 +89,8 @@ impl Wifi {
             BlockingWifi::wrap(EspWifi::new(modem, sys_loop.clone(), Some(nvs))?, sys_loop)?;
 
         inner.set_configuration(&Configuration::Client(ClientConfiguration {
-            ssid: ssid.try_into().map_err(|_| "WIFI_SSID too long")?,
-            password: password.try_into().map_err(|_| "WIFI_PASSWORD too long")?,
+            ssid: ssid.try_into().map_err(|()| "WIFI_SSID too long")?,
+            password: password.try_into().map_err(|()| "WIFI_PASSWORD too long")?,
             auth_method: AuthMethod::WPA2Personal,
             ..Default::default()
         }))?;
