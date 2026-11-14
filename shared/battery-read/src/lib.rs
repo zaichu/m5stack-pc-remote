@@ -61,9 +61,7 @@ mod tests {
         // 期限ちょうどで読む(`>=`。`>` だと1周期遅れる)。
         assert!(!should_read(
             false,
-            FULL_READ_INTERVAL
-                .checked_sub(Duration::from_nanos(1))
-                .unwrap()
+            FULL_READ_INTERVAL.saturating_sub(Duration::from_nanos(1))
         ));
         assert!(should_read(false, FULL_READ_INTERVAL));
     }
