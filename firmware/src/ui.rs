@@ -422,7 +422,8 @@ pub fn calendar_date(unix_secs: i64, tz_offset_hours: i64) -> Option<CalendarDay
 
 /// うるう年判定。`civil_from_days` と同じグレゴリオ暦を前提にする。
 fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    let year = year.unsigned_abs();
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 /// 月の日数。呼び出し元は `civil_from_days` 由来の1..=12だけを渡す。
