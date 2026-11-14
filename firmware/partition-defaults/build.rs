@@ -1,12 +1,18 @@
 use std::env;
 use std::fs;
+use std::io;
 use std::path::Path;
 
-fn main() {
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR")?;
     let manifest_dir = Path::new(&manifest_dir);
     // manifest_dir is firmware/partition-defaults; parent is firmware/
-    let firmware_dir = manifest_dir.parent().expect("firmware dir");
+    let firmware_dir = manifest_dir.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CARGO_MANIFEST_DIR has no parent directory",
+        )
+    })?;
     let partition_table = firmware_dir.join("partitions.csv");
     println!("cargo:rerun-if-changed={}", partition_table.display());
 
@@ -16,7 +22,7 @@ fn main() {
     defaults.push_str("\"\n");
 
     let generated = firmware_dir.join("sdkconfig.partition-table.defaults");
-    fs::write(&generated, defaults)
-        .expect("sdkconfig.partition-table.defaultsの書き込みに失敗しました");
+    fs::write(&generated, defaults)?;
     println!("cargo:rerun-if-changed={}", generated.display());
+    Ok(())
 }
