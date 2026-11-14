@@ -16,7 +16,7 @@ const MIN_VALID_UNIX_TIME: u64 = 1_700_000_000;
 
 /// NTP同期済みとみなせる時刻か。判定式を1関数へ寄せる(分散すると閾値変更の
 /// 更新漏れや `<`/`>=`・符号の取り違えが起きる)。
-pub fn is_ntp_synced(unix_seconds: i64) -> bool {
+pub const fn is_ntp_synced(unix_seconds: i64) -> bool {
     unix_seconds >= MIN_VALID_UNIX_TIME as i64
 }
 
@@ -29,12 +29,12 @@ pub const NTP_SYNC_WAIT: Duration = Duration::from_secs(2);
 
 /// PCの死活状態の日本語表記。用語は `docs/glossary.md` が正本
 /// (状態は「オン/オフ」と書き、「オンライン/オフライン」は使わない)。
-pub fn pc_online_label_ja(online: bool) -> &'static str {
+pub const fn pc_online_label_ja(online: bool) -> &'static str {
     if online { "オン" } else { "オフ" }
 }
 
 /// PCの状態変化の通知文。出来事(起動/停止)で書く(状態表示は `pc_online_label_ja`)。
-pub fn pc_state_notification_ja(online: bool) -> &'static str {
+pub const fn pc_state_notification_ja(online: bool) -> &'static str {
     if online {
         "PCが起動しました。"
     } else {
@@ -43,7 +43,7 @@ pub fn pc_state_notification_ja(online: bool) -> &'static str {
 }
 
 /// 画面表示用のASCII表記(`mono_font::ascii` は非ASCIIを `?` へ落とすため)。
-pub fn pc_online_label_ascii(online: bool) -> &'static str {
+pub const fn pc_online_label_ascii(online: bool) -> &'static str {
     if online { "ONLINE" } else { "OFFLINE" }
 }
 
@@ -182,8 +182,7 @@ pub fn resolve_status_addr_once(addr_text: &str) -> Vec<SocketAddr> {
     config_validation::resolve_status_addr_with(addr_text, |trimmed| {
         trimmed
             .to_socket_addrs()
-            .map(|addrs| addrs.collect())
-            .unwrap_or_default()
+            .map_or_default(std::iter::Iterator::collect)
     })
 }
 
@@ -216,8 +215,7 @@ pub fn wait_for_time_sync(timeout: Duration) -> bool {
     loop {
         let synced = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| is_ntp_synced(d.as_secs() as i64))
-            .unwrap_or(false);
+            .is_ok_and(|d| is_ntp_synced(d.as_secs() as i64));
         if synced {
             return true;
         }

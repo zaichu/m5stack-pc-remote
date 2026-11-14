@@ -154,7 +154,7 @@ where
 }
 
 impl Battery {
-    pub fn display_state(&self) -> battery::DisplayState {
+    pub const fn display_state(&self) -> battery::DisplayState {
         battery::DisplayState {
             percent: self.percent,
             powered: self.powered,

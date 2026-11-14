@@ -72,4 +72,8 @@ opt-level = "z"
 unused_dependencies = "warn"
 
 [lints.clippy]
+use_self = "warn"
+missing_const_for_fn = "warn"
+redundant_closure_for_method_calls = "warn"
+map_unwrap_or = "warn"
 manual_is_multiple_of = "warn"

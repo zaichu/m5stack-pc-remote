@@ -70,7 +70,9 @@ pub type HttpsLock = Arc<Mutex<()>>;
 
 /// Telegram HTTPSの排他を取る。poisonしていても排他は維持する。
 pub fn lock_https(https_lock: &HttpsLock) -> std::sync::MutexGuard<'_, ()> {
-    https_lock.lock().unwrap_or_else(|e| e.into_inner())
+    https_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// 電源操作の排他を取る。poisonしていても排他は維持する。
@@ -79,12 +81,16 @@ pub fn lock_https(https_lock: &HttpsLock) -> std::sync::MutexGuard<'_, ()> {
 /// 値型だけで壊れた状態を引き継ぐ心配がないため `into_inner()` で回復してよい
 /// (このファイルの `lock_*` はすべて同じ扱い)。
 pub fn lock_power(power_lock: &PowerLock) -> std::sync::MutexGuard<'_, ()> {
-    power_lock.lock().unwrap_or_else(|e| e.into_inner())
+    power_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// UIスレッドへ共有するTelegram状態の排他を取る。poisonしていても排他は維持する。
 pub fn lock_state(state: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
-    state.lock().unwrap_or_else(|e| e.into_inner())
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// UIループが読んだ最新のバッテリー状態。pollingスレッドはI2Cドライバを持たない
@@ -95,7 +101,9 @@ pub type SharedBattery = Arc<Mutex<Option<Battery>>>;
 pub fn lock_battery(
     battery: &Mutex<Option<Battery>>,
 ) -> std::sync::MutexGuard<'_, Option<Battery>> {
-    battery.lock().unwrap_or_else(|e| e.into_inner())
+    battery
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// PCの起動指示後の待機開始時刻。`None`=待機なし。画面ボタンはUIループ、`/wake` は
@@ -108,7 +116,9 @@ pub type SharedWakeWatch = Arc<Mutex<Option<Instant>>>;
 fn lock_wake_watch(
     wake_watch: &Mutex<Option<Instant>>,
 ) -> std::sync::MutexGuard<'_, Option<Instant>> {
-    wake_watch.lock().unwrap_or_else(|e| e.into_inner())
+    wake_watch
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// 起動指示後の待機の有無と開始時刻を読む。ガードはこの関数内で手放すため、
@@ -147,7 +157,9 @@ pub type SharedSleepWatch = Arc<Mutex<wake_check::SleepWatch>>;
 fn lock_sleep_watch(
     sleep_watch: &Mutex<wake_check::SleepWatch>,
 ) -> std::sync::MutexGuard<'_, wake_check::SleepWatch> {
-    sleep_watch.lock().unwrap_or_else(|e| e.into_inner())
+    sleep_watch
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// スリープ指示を受け付けて抑止を始める。bridgeが受理した呼び出し側だけが呼ぶ。
@@ -222,7 +234,9 @@ static ROOT_CA_INSTALLED: AtomicBool = AtomicBool::new(false);
 static ROOT_CA_LOCK: Mutex<()> = Mutex::new(());
 
 fn ensure_root_ca() -> Result<(), Box<dyn Error>> {
-    let _guard = ROOT_CA_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = ROOT_CA_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if ROOT_CA_INSTALLED.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -261,9 +275,9 @@ enum PendingKind {
 impl PendingKind {
     fn label_ja(&self) -> String {
         match self {
-            PendingKind::Power(action) => action.label_ja().to_string(),
-            PendingKind::Config(change) => change.label_ja().to_string(),
-            PendingKind::FirmwareUpdate { .. } => "firmware更新".to_string(),
+            Self::Power(action) => action.label_ja().to_string(),
+            Self::Config(change) => change.label_ja().to_string(),
+            Self::FirmwareUpdate { .. } => "firmware更新".to_string(),
         }
     }
 }
@@ -295,17 +309,17 @@ enum StatusAction {
 
 impl Callback {
     /// ログ用の種別名。nonceや値は含めない。
-    fn log_label(&self) -> &'static str {
+    const fn log_label(&self) -> &'static str {
         match self {
-            Callback::Decision { confirm: true, .. } => "confirm",
-            Callback::Decision { confirm: false, .. } => "cancel",
-            Callback::EditSetting(_) => "setedit",
-            Callback::SetLock(true) => "lock:on",
-            Callback::SetLock(false) => "lock:off",
-            Callback::Status(StatusAction::Refresh) => "status:refresh",
-            Callback::Status(StatusAction::Wake) => "status:wake",
-            Callback::Status(StatusAction::Reboot) => "status:reboot",
-            Callback::Status(StatusAction::Shutdown) => "status:shutdown",
+            Self::Decision { confirm: true, .. } => "confirm",
+            Self::Decision { confirm: false, .. } => "cancel",
+            Self::EditSetting(_) => "setedit",
+            Self::SetLock(true) => "lock:on",
+            Self::SetLock(false) => "lock:off",
+            Self::Status(StatusAction::Refresh) => "status:refresh",
+            Self::Status(StatusAction::Wake) => "status:wake",
+            Self::Status(StatusAction::Reboot) => "status:reboot",
+            Self::Status(StatusAction::Shutdown) => "status:shutdown",
         }
     }
 }
@@ -323,9 +337,9 @@ impl CallbackTarget {
     /// 一致しないボタン(古いメッセージ、別種類の保留との衝突)は無効として扱う。
     fn matches(&self, kind: &PendingKind) -> bool {
         match (self, kind) {
-            (CallbackTarget::Power(a), PendingKind::Power(b)) => a == b,
-            (CallbackTarget::Config, PendingKind::Config(_)) => true,
-            (CallbackTarget::FirmwareUpdate, PendingKind::FirmwareUpdate { .. }) => true,
+            (Self::Power(a), PendingKind::Power(b)) => a == b,
+            (Self::Config, PendingKind::Config(_)) => true,
+            (Self::FirmwareUpdate, PendingKind::FirmwareUpdate { .. }) => true,
             _ => false,
         }
     }
@@ -341,17 +355,13 @@ enum SettingKind {
 }
 
 impl SettingKind {
-    const ALL: [SettingKind; 3] = [
-        SettingKind::PcIp,
-        SettingKind::WolPort,
-        SettingKind::Brightness,
-    ];
+    const ALL: [Self; 3] = [Self::PcIp, Self::WolPort, Self::Brightness];
 
-    fn slug(self) -> &'static str {
+    const fn slug(self) -> &'static str {
         match self {
-            SettingKind::PcIp => "pc_ip",
-            SettingKind::WolPort => "wol_port",
-            SettingKind::Brightness => "brightness",
+            Self::PcIp => "pc_ip",
+            Self::WolPort => "wol_port",
+            Self::Brightness => "brightness",
         }
     }
 
@@ -359,41 +369,37 @@ impl SettingKind {
         Self::ALL.into_iter().find(|kind| kind.slug() == slug)
     }
 
-    fn label_ja(self) -> &'static str {
+    const fn label_ja(self) -> &'static str {
         match self {
-            SettingKind::PcIp => "PC IPアドレス",
-            SettingKind::WolPort => "WOLポート",
-            SettingKind::Brightness => "画面の明るさ",
+            Self::PcIp => "PC IPアドレス",
+            Self::WolPort => "WOLポート",
+            Self::Brightness => "画面の明るさ",
         }
     }
 
     /// 入力例。入力欄のplaceholderと案内文へ出す。
-    fn example(self) -> &'static str {
+    const fn example(self) -> &'static str {
         match self {
-            SettingKind::PcIp => "192.168.1.50",
-            SettingKind::WolPort => "9",
-            SettingKind::Brightness => "80",
+            Self::PcIp => "192.168.1.50",
+            Self::WolPort => "9",
+            Self::Brightness => "80",
         }
     }
 
     fn current(self, settings: &RuntimeSettings) -> String {
         match self {
-            SettingKind::PcIp => settings.pc_ip_address(),
-            SettingKind::WolPort => settings.wol_port().to_string(),
-            SettingKind::Brightness => settings.brightness_percent().to_string(),
+            Self::PcIp => settings.pc_ip_address(),
+            Self::WolPort => settings.wol_port().to_string(),
+            Self::Brightness => settings.brightness_percent().to_string(),
         }
     }
 
     /// 入力値を検証し、確認待ちの変更内容へ変換する。
     fn parse(self, raw: &str) -> Result<ConfigChange, String> {
         match self {
-            SettingKind::PcIp => {
-                config_validation::validate_ipv4(raw).map(ConfigChange::PcIpAddress)
-            }
-            SettingKind::WolPort => {
-                config_validation::validate_wol_port(raw).map(ConfigChange::WolPort)
-            }
-            SettingKind::Brightness => {
+            Self::PcIp => config_validation::validate_ipv4(raw).map(ConfigChange::PcIpAddress),
+            Self::WolPort => config_validation::validate_wol_port(raw).map(ConfigChange::WolPort),
+            Self::Brightness => {
                 config_validation::validate_brightness_percent(raw).map(ConfigChange::Brightness)
             }
         }
@@ -416,19 +422,19 @@ enum ConfigChange {
 }
 
 impl ConfigChange {
-    fn label_ja(&self) -> &'static str {
+    const fn label_ja(&self) -> &'static str {
         match self {
-            ConfigChange::PcIpAddress(_) => "PC IPアドレス",
-            ConfigChange::WolPort(_) => "WOLポート",
-            ConfigChange::Brightness(_) => "画面の明るさ",
+            Self::PcIpAddress(_) => "PC IPアドレス",
+            Self::WolPort(_) => "WOLポート",
+            Self::Brightness(_) => "画面の明るさ",
         }
     }
 
     fn display_value(&self) -> String {
         match self {
-            ConfigChange::PcIpAddress(value) => value.clone(),
-            ConfigChange::WolPort(value) => value.to_string(),
-            ConfigChange::Brightness(value) => value.to_string(),
+            Self::PcIpAddress(value) => value.clone(),
+            Self::WolPort(value) => value.to_string(),
+            Self::Brightness(value) => value.to_string(),
         }
     }
 
@@ -436,9 +442,9 @@ impl ConfigChange {
     /// 明るさの画面への反映はUIループ側(pollingスレッドはI2Cドライバを持たない)。
     fn apply(&self, settings: &RuntimeSettings) -> Result<(), esp_idf_sys::EspError> {
         match self {
-            ConfigChange::PcIpAddress(value) => settings.set_pc_ip_address(value.clone()),
-            ConfigChange::WolPort(value) => settings.set_wol_port(*value),
-            ConfigChange::Brightness(value) => settings.set_brightness_percent(*value),
+            Self::PcIpAddress(value) => settings.set_pc_ip_address(value.clone()),
+            Self::WolPort(value) => settings.set_wol_port(*value),
+            Self::Brightness(value) => settings.set_brightness_percent(*value),
         }
     }
 }
@@ -829,7 +835,7 @@ impl DailyReport {
     }
 
     /// 送信に成功した日を記録する。以降その日は送らない。
-    fn mark_sent(&mut self, day: i64) {
+    const fn mark_sent(&mut self, day: i64) {
         self.last_sent_day = Some(day);
     }
 }

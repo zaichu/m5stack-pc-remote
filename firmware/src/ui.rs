@@ -52,7 +52,7 @@ pub struct Button {
 impl Button {
     /// 当たり判定。右端・下端は含めない(`Rectangle::new` と同じ上限排他。
     /// `<=` にすると描画より1px広くなる)。
-    pub fn contains(&self, x: i32, y: i32) -> bool {
+    pub const fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.x && x < self.x + self.w as i32 && y >= self.y && y < self.y + self.h as i32
     }
 
@@ -177,11 +177,11 @@ pub enum TelegramState {
 }
 
 impl TelegramState {
-    fn color(self) -> Rgb565 {
+    const fn color(self) -> Rgb565 {
         match self {
-            TelegramState::Disabled => palette::TEXT_DIM,
-            TelegramState::Polling => palette::OK,
-            TelegramState::Error => palette::NG,
+            Self::Disabled => palette::TEXT_DIM,
+            Self::Polling => palette::OK,
+            Self::Error => palette::NG,
         }
     }
 }
@@ -361,7 +361,7 @@ pub fn clock_strings(unix_secs: i64, tz_offset_hours: i64) -> ClockStrings {
 
 /// UNIX epochからの日数を(year, month, day)へ変換する(Howard Hinnantの
 /// `civil_from_days`)。UTCオフセットは呼び出し側で適用済みとする。
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+const fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -410,7 +410,7 @@ pub fn redraw_clock(
 }
 
 /// 当日の日付を求める。SNTP未同期時はNone(1970年などの誤った日付を作らない)。
-pub fn calendar_date(unix_secs: i64, tz_offset_hours: i64) -> Option<CalendarDay> {
+pub const fn calendar_date(unix_secs: i64, tz_offset_hours: i64) -> Option<CalendarDay> {
     if !crate::net::is_ntp_synced(unix_secs) {
         return None;
     }
@@ -421,13 +421,13 @@ pub fn calendar_date(unix_secs: i64, tz_offset_hours: i64) -> Option<CalendarDay
 }
 
 /// うるう年判定。`civil_from_days` と同じグレゴリオ暦を前提にする。
-fn is_leap_year(year: i64) -> bool {
+const fn is_leap_year(year: i64) -> bool {
     let year = year.unsigned_abs();
     (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 /// 月の日数。呼び出し元は `civil_from_days` 由来の1..=12だけを渡す。
-fn days_in_month(year: i64, month: u32) -> u32 {
+const fn days_in_month(year: i64, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -490,7 +490,7 @@ const CAL_ROW_H: i32 = 13;
 const CAL_NO_CLOCK_BASELINE: i32 = 112;
 const CAL_WEEKDAY_NAMES: [&str; 7] = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
 
-fn calendar_cell_center_x(col: usize) -> i32 {
+const fn calendar_cell_center_x(col: usize) -> i32 {
     CAL_GRID_LEFT + col as i32 * CAL_COL_W + CAL_COL_W / 2
 }
 

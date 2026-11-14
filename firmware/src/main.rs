@@ -975,8 +975,7 @@ fn reject_locked(
 fn now_unix_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// メイン画面へ表示する時計文字列(Issue #172)。

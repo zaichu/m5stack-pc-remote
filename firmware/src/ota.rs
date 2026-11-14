@@ -70,27 +70,25 @@ impl OtaError {
     /// `endpoint` のような固定ラベルと `status` の数値だけ。
     pub fn user_message(&self) -> String {
         match self {
-            OtaError::ClockNotSynced => {
+            Self::ClockNotSynced => {
                 "時刻同期がまだ完了していません。少し待ってからやり直してください。".to_string()
             }
-            OtaError::Transport(_) => {
+            Self::Transport(_) => {
                 "PCへの接続に失敗しました。PCがオンでbridgeが動いているか確認してください。"
                     .to_string()
             }
-            OtaError::UnexpectedStatus { endpoint, status } => {
+            Self::UnexpectedStatus { endpoint, status } => {
                 format!("PCが {endpoint} に {status} を返しました。")
             }
-            OtaError::ResponseTooLarge => "manifestが大きすぎます。".to_string(),
-            OtaError::Signing(_) => "署名を生成できませんでした。".to_string(),
-            OtaError::Manifest(_) => {
+            Self::ResponseTooLarge => "manifestが大きすぎます。".to_string(),
+            Self::Signing(_) => "署名を生成できませんでした。".to_string(),
+            Self::Manifest(_) => {
                 "manifestの検証に失敗しました。配信中のfirmwareを確認してください。".to_string()
             }
-            OtaError::Image(_) => {
+            Self::Image(_) => {
                 "ダウンロードしたfirmwareが壊れています。更新は中止しました。".to_string()
             }
-            OtaError::Ota(_) => {
-                "firmwareの書き込みに失敗しました。更新は中止しました。".to_string()
-            }
+            Self::Ota(_) => "firmwareの書き込みに失敗しました。更新は中止しました。".to_string(),
         }
     }
 }
@@ -98,16 +96,16 @@ impl OtaError {
 impl fmt::Display for OtaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OtaError::ClockNotSynced => write!(f, "system clock is not NTP-synced yet"),
-            OtaError::Transport(reason) => write!(f, "firmware fetch failed: {reason}"),
-            OtaError::UnexpectedStatus { endpoint, status } => {
+            Self::ClockNotSynced => write!(f, "system clock is not NTP-synced yet"),
+            Self::Transport(reason) => write!(f, "firmware fetch failed: {reason}"),
+            Self::UnexpectedStatus { endpoint, status } => {
                 write!(f, "firmware {endpoint} returned {status}")
             }
-            OtaError::ResponseTooLarge => write!(f, "firmware manifest is too large"),
-            OtaError::Signing(e) => write!(f, "firmware signature failed: {e}"),
-            OtaError::Manifest(e) => write!(f, "{e}"),
-            OtaError::Image(e) => write!(f, "{e}"),
-            OtaError::Ota(reason) => write!(f, "OTA write failed: {reason}"),
+            Self::ResponseTooLarge => write!(f, "firmware manifest is too large"),
+            Self::Signing(e) => write!(f, "firmware signature failed: {e}"),
+            Self::Manifest(e) => write!(f, "{e}"),
+            Self::Image(e) => write!(f, "{e}"),
+            Self::Ota(reason) => write!(f, "OTA write failed: {reason}"),
         }
     }
 }
@@ -116,19 +114,19 @@ impl Error for OtaError {}
 
 impl From<OtaManifestError> for OtaError {
     fn from(e: OtaManifestError) -> Self {
-        OtaError::Manifest(e)
+        Self::Manifest(e)
     }
 }
 
 impl From<OtaImageError> for OtaError {
     fn from(e: OtaImageError) -> Self {
-        OtaError::Image(e)
+        Self::Image(e)
     }
 }
 
 impl From<pc_remote_signing::SigningError> for OtaError {
     fn from(e: pc_remote_signing::SigningError) -> Self {
-        OtaError::Signing(e)
+        Self::Signing(e)
     }
 }
 
