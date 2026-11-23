@@ -9,14 +9,16 @@ fn fill_until_full(
     prefix: &str,
 ) -> usize {
     let mut count = 0;
+    let mut reached_full = false;
     for i in 0..1_000_000 {
         let nonce = format!("{prefix}-{i:06}");
         if !store.insert_once(&nonce, base.unix_timestamp(), base, ttl_seconds) {
+            reached_full = true;
             break;
         }
         count += 1;
     }
-    assert!(count > 0, "store should accept entries before filling up");
+    assert!(reached_full, "store should reach capacity within bound");
     count
 }
 
@@ -143,16 +145,23 @@ fn mixed_capacity_recovery_keeps_unexpired() {
     let mid = base + time::Duration::seconds(30);
 
     let mut kept_mid_nonce = String::new();
+    let mut reached_full = false;
     for i in 0..1_000_000 {
         let at = if i % 2 == 0 { base } else { mid };
         let nonce = format!("mix-{i:06}");
         if !store.insert_once(&nonce, at.unix_timestamp(), at, ttl_seconds) {
+            reached_full = true;
             break;
         }
         if kept_mid_nonce.is_empty() && i % 2 == 1 {
             kept_mid_nonce = nonce;
         }
     }
+    assert!(reached_full, "mixed fill should reach capacity");
+    assert!(
+        !kept_mid_nonce.is_empty(),
+        "mixed fill should include unexpired entries"
+    );
     assert!(
         !kept_mid_nonce.is_empty(),
         "mixed fill should reach capacity"
@@ -176,11 +185,16 @@ fn overfull_store_with_expired_entries_recovers() {
     let ttl_seconds: i64 = 60;
     let base = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
 
-    for i in 0..1_000_000 {
+    let capacity = {
+        let probe = NonceStore::default();
+        fill_until_full(&probe, base, ttl_seconds, "cap-probe")
+    };
+    for i in 0..capacity.saturating_sub(1) {
         let nonce = format!("p-{i:06}");
-        if !store.insert_once(&nonce, base.unix_timestamp(), base, ttl_seconds) {
-            break;
-        }
+        assert!(
+            store.insert_once(&nonce, base.unix_timestamp(), base, ttl_seconds),
+            "prefill {i} should succeed"
+        );
     }
 
     let threads: usize = 8;

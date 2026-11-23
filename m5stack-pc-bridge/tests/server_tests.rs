@@ -497,7 +497,11 @@ async fn reboot_returns_500_when_audit_log_is_unwritable() {
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
-    assert!(!bytes.is_empty(), "fail-closed response has error body");
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(
+        body.contains("failed to write audit log"),
+        "fail-closed response should mention audit log: {body:?}"
+    );
 }
 
 /// audit.logの場所をディレクトリで塞ぎ、`append` を必ず失敗させる仕掛け。
