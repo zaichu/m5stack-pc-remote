@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use embedded_svc::http::Method;
@@ -15,8 +15,9 @@ use crate::settings::RuntimeSettings;
 
 use super::{
     ALLOWED_WHILE_LOCKED, Api, BACKOFF_MAX, BACKOFF_MIN, FIRMWARE_VERSION, HttpsLock,
-    OperationLock, PowerLock, SharedBattery, SharedSleepWatch, SharedWakeWatch, allowed_chat_id,
-    begin_sleep_watch, begin_wake_watch, ensure_root_ca, lock_battery, lock_power, lock_state,
+    OperationLock, PowerLock, SharedBattery, SharedSleepWatch, SharedWakeWatch, State,
+    allowed_chat_id, begin_sleep_watch, begin_wake_watch, ensure_root_ca, lock_battery, lock_https,
+    lock_power, lock_state,
 };
 
 /// 確認待ちの操作。電源操作(REBOOT/SHUTDOWN)と設定変更(/set_*)とfirmware更新
