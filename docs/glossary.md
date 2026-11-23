@@ -45,8 +45,7 @@
   `wake_succeeded_text` / `wake_timed_out_text` が正本。電源操作の結果文は
    `firmware/src/bridge_client.rs` の `accepted_text` / `rejected_text` /
    `failed_text` が正本。firmware更新の確認・適用文は
-   `shared/notify-stable` の `ota_confirm_text` / `firmware_available_text` と
-   `shared/pc-remote-signing` の `ota_applying_text` が正本。
+   `shared/notify-stable` の `ota_confirm_text` / `ota_applying_text` / `firmware_available_text` が正本。
    `/status` の全文とボタンは `shared/online-state` の `status_message_html` / `status_buttons` が正本
    (`/status` の応答だけ `parse_mode=HTML` で送る。他の送信経路へは付けない)。
    給電変化の通知文は `shared/battery` の `power_state_notification_ja` が正本。
