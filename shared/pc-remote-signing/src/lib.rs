@@ -393,6 +393,28 @@ mod request_binding_tests {
             &signature,
         ));
     }
+
+    #[test]
+    fn accepts_post_command_shape() {
+        let signature = sign_request(SECRET, "POST", "/reboot", TIMESTAMP, NONCE, BODY);
+        assert!(verify_signature(
+            SECRET, "POST", "/reboot", TIMESTAMP, NONCE, BODY, &signature,
+        ));
+    }
+
+    #[test]
+    fn accepts_signed_get_shape() {
+        let signature = sign_request(SECRET, "GET", "/firmware/manifest", TIMESTAMP, NONCE, b"");
+        assert!(verify_signature(
+            SECRET,
+            "GET",
+            "/firmware/manifest",
+            TIMESTAMP,
+            NONCE,
+            b"",
+            &signature,
+        ));
+    }
 }
 
 #[cfg(test)]

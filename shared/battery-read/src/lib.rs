@@ -9,7 +9,7 @@
 use core::time::Duration;
 
 /// ラッチ無しでもフル読み出しを行う間隔。取りこぼしの保険。
-/// `firmware/src/main.rs` の `STATUS_INTERVAL`(10秒)と等価。
+/// PC状態確認周期の正本も兼ねる(`STATUS_INTERVAL` が参照する)。
 pub const FULL_READ_INTERVAL: Duration = Duration::from_secs(10);
 
 /// フル読み出しが必要かを返す。
@@ -26,7 +26,7 @@ mod tests {
     #[test]
     fn interval_is_ten_seconds() {
         // 保険間隔の変更は読み頻度・I2C負荷に直結するため値を固定する。
-        // `main.rs` の `STATUS_INTERVAL` と等価。
+        // PC状態確認周期の正本でもあるため、変えるとSTATUS確認の周期も変わる。
         assert_eq!(FULL_READ_INTERVAL, Duration::from_secs(10));
     }
 

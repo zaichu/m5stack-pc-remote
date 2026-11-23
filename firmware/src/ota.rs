@@ -28,6 +28,7 @@ use pc_remote_signing::{
 };
 
 use crate::app_config::AppConfig;
+use crate::bridge_client;
 
 /// 署名付きリクエスト対象のパス。wire protocol上は `pc-remote-signing` の
 /// canonical文字列へ入るため、bridge側 (`server.rs`) と一致させること。
@@ -322,13 +323,13 @@ fn with_signed_get<T>(
     timeout: Duration,
     f: impl FnOnce(&mut HttpResponse<&mut EspHttpConnection>) -> Result<T, OtaError>,
 ) -> Result<T, OtaError> {
-    let timestamp = crate::bridge_client::unix_now().map_err(|_| OtaError::ClockNotSynced)?;
-    let request_nonce = crate::bridge_client::nonce();
-    let signature = pc_remote_signing::sign_request(
+    let timestamp = bridge_client::unix_now().map_err(|_| OtaError::ClockNotSynced)?;
+    let request_nonce = bridge_client::nonce();
+    let signature = bridge_client::request_signature(
         config.bridge_shared_secret.as_bytes(),
         "GET",
         path,
-        timestamp as i64,
+        timestamp,
         &request_nonce,
         b"",
     )?;
@@ -345,9 +346,9 @@ fn with_signed_get<T>(
 
     let timestamp_text = timestamp.to_string();
     let headers = [
-        ("X-Timestamp", timestamp_text.as_str()),
-        ("X-Nonce", request_nonce.as_str()),
-        ("X-Signature", signature.as_str()),
+        (bridge_client::HEADER_TIMESTAMP, timestamp_text.as_str()),
+        (bridge_client::HEADER_NONCE, request_nonce.as_str()),
+        (bridge_client::HEADER_SIGNATURE, signature.as_str()),
     ];
     let request = client
         .request(Method::Get, &url, &headers)
