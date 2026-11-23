@@ -352,7 +352,8 @@ async fn reboot_returns_401_when_signature_and_body_are_both_bad() {
 
 /// nonceの使い回し拒否が電源操作とfirmware配信で共有されることを固定する。
 /// 片方で使ったnonceはもう片方でも401になる。認証に使うnonce storeが
-/// 両経路で同じものであることを経路越しに守る。
+/// 両経路で同じものであることを経路越しに守る。firmware配信はmanifestと
+/// バイナリの両方を見る(片方だけが別storeになっても落ちるようにする)。
 #[tokio::test]
 async fn nonce_reuse_across_power_and_firmware_is_rejected() {
     use m5stack_pc_bridge::{firmware::FirmwarePaths, server::router_with_firmware_paths};
@@ -364,45 +365,38 @@ async fn nonce_reuse_across_power_and_firmware_is_rejected() {
         version: dir.path().join("firmware.version"),
     };
     let app = router_with_firmware_paths(config(), paths);
-
-    let nonce = "server-nonce-shared-reuse";
-    let body = r#"{"confirm":true}"#;
-    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
     let secret = b"local-development-secret";
-    let signature = sign_request(secret, "POST", "/reboot", timestamp, nonce, body.as_bytes());
-    let first = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/reboot")
-                .header("content-type", "application/json")
-                .header("x-timestamp", timestamp.to_string())
-                .header("x-nonce", nonce)
-                .header("x-signature", signature)
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(first.status(), StatusCode::OK);
 
-    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
-    let signature = sign_request(secret, "GET", "/firmware/manifest", timestamp, nonce, b"");
-    let second = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/firmware/manifest")
-                .header("x-timestamp", timestamp.to_string())
-                .header("x-nonce", nonce)
-                .header("x-signature", signature)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(second.status(), StatusCode::UNAUTHORIZED);
+    for (path, nonce) in [
+        ("/firmware/manifest", "server-nonce-shared-reuse-manifest"),
+        ("/firmware", "server-nonce-shared-reuse-binary"),
+    ] {
+        let body = r#"{"confirm":true}"#;
+        let first = app
+            .clone()
+            .oneshot(signed_post("/reboot", nonce, body))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK, "{path}");
+
+        let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+        let signature = sign_request(secret, "GET", path, timestamp, nonce, b"");
+        let second = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .header("x-timestamp", timestamp.to_string())
+                    .header("x-nonce", nonce)
+                    .header("x-signature", signature)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::UNAUTHORIZED, "{path}");
+    }
 }
 
 /// `CommandRequest` の `#[serde(deny_unknown_fields)]` を固定する。

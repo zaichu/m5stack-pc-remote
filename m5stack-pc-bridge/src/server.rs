@@ -57,10 +57,10 @@ impl AppState {
         }
     }
 
+    // request_auth() と意図的に同じsecretを指す。
     fn firmware_signing_key(&self) -> &[u8] {
         &self.auth.secret
     }
-    // NOTE: 上2つは意図的に同じsecretを指す。鍵の分離は別途行う。
 }
 
 #[derive(Debug, Serialize)]
