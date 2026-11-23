@@ -77,7 +77,7 @@ def test_mid_list_failure_propagates_through_real_makefile(tmp_path):
         encoding="utf-8",
     )
     proc = subprocess.run(
-        ["make", "fmt-check", "--no-print-directory"],
+        ["make", "-s", "fmt-check", "--no-print-directory"],
         capture_output=True,
         text=True,
         cwd=root,
@@ -85,5 +85,6 @@ def test_mid_list_failure_propagates_through_real_makefile(tmp_path):
     out = proc.stdout + proc.stderr
     assert proc.returncode != 0, out
     # 終了コードだけでなく途中crateでの失敗であることを確かめる。
-    # cargo未導入などでループ前に落ちた場合はこの文字列が出ない。
-    assert "zzz-bogus" in out, out
+    # -s でレシピ表示を抑え、cargoのエラー文のパスで見る。レシピ行の表示や
+    # ループ前失敗ではこの文字列は出ない。
+    assert "shared/zzz-bogus/Cargo.toml" in out, out
