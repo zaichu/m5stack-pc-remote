@@ -313,6 +313,98 @@ async fn firmware_rejects_post_signature_for_get() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// 認証→検証の順序を固定する: 署名もbodyも壊れているときは401になる。
+/// `command` を認証/検証/実行に分けても認証を先に行う順序は変えない。
+#[tokio::test]
+async fn reboot_returns_401_when_signature_and_body_are_both_bad() {
+    let app = router(config());
+    let body = "not-json";
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+    let nonce = "server-nonce-auth-first";
+    let mut signature = sign_request(
+        b"local-development-secret",
+        "POST",
+        "/reboot",
+        timestamp,
+        nonce,
+        body.as_bytes(),
+    );
+    let last = signature.pop().expect("signature is not empty");
+    signature.push(if last == '0' { '1' } else { '0' });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/reboot")
+                .header("content-type", "application/json")
+                .header("x-timestamp", timestamp.to_string())
+                .header("x-nonce", nonce)
+                .header("x-signature", signature)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// nonceの使い回し拒否が電源操作とfirmware配信で共有されることを固定する。
+/// 片方で使ったnonceはもう片方でも401になる。認証に使うnonce storeが
+/// 両経路で同じものであることを経路越しに守る。
+#[tokio::test]
+async fn nonce_reuse_across_power_and_firmware_is_rejected() {
+    use m5stack_pc_bridge::{firmware::FirmwarePaths, server::router_with_firmware_paths};
+    let _audit_guard = AUDIT_PATH_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("firmware.bin"), b"fake-firmware-image").unwrap();
+    let paths = FirmwarePaths {
+        bin: dir.path().join("firmware.bin"),
+        version: dir.path().join("firmware.version"),
+    };
+    let app = router_with_firmware_paths(config(), paths);
+
+    let nonce = "server-nonce-shared-reuse";
+    let body = r#"{"confirm":true}"#;
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+    let secret = b"local-development-secret";
+    let signature = sign_request(secret, "POST", "/reboot", timestamp, nonce, body.as_bytes());
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/reboot")
+                .header("content-type", "application/json")
+                .header("x-timestamp", timestamp.to_string())
+                .header("x-nonce", nonce)
+                .header("x-signature", signature)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp();
+    let signature = sign_request(secret, "GET", "/firmware/manifest", timestamp, nonce, b"");
+    let second = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/firmware/manifest")
+                .header("x-timestamp", timestamp.to_string())
+                .header("x-nonce", nonce)
+                .header("x-signature", signature)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// `CommandRequest` の `#[serde(deny_unknown_fields)]` を固定する。
 /// 未知フィールド付きbodyは400になる。denyを外すとdry_run成功(200)に
 /// なってしまい、このテストが落ちる。

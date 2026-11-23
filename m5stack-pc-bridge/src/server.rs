@@ -41,6 +41,28 @@ pub struct AppState {
     firmware: FirmwarePaths,
 }
 
+#[derive(Clone)]
+struct RequestAuth {
+    auth_key: Arc<AuthConfig>,
+    nonces: Arc<NonceStore>,
+    clock: Arc<dyn Fn() -> time::OffsetDateTime + Send + Sync>,
+}
+
+impl AppState {
+    fn request_auth(&self) -> RequestAuth {
+        RequestAuth {
+            auth_key: Arc::clone(&self.auth),
+            nonces: Arc::clone(&self.nonces),
+            clock: Arc::clone(&self.clock),
+        }
+    }
+
+    fn firmware_signing_key(&self) -> &[u8] {
+        &self.auth.secret
+    }
+    // NOTE: 上2つは意図的に同じsecretを指す。鍵の分離は別途行う。
+}
+
 #[derive(Debug, Serialize)]
 struct StatusResponse {
     agent_online: bool,
@@ -129,7 +151,7 @@ async fn firmware_manifest(
     uri: Uri,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(err) = verify_headers(&state, &method, &uri, &headers, b"") {
+    if let Err(err) = verify_headers(&state.request_auth(), &method, &uri, &headers, b"") {
         tracing::warn!("firmware manifest authentication failed: {err}");
         if let Some(alert) = state.alert.as_ref() {
             alert.record_auth_failure();
@@ -140,7 +162,8 @@ async fn firmware_manifest(
     // 読み込みはblocking I/O(数MB級)のためblockingスレッドへ逃がす。
     let outcome = tokio::task::spawn_blocking({
         let state = state.clone();
-        move || firmware::build_manifest(&state.firmware, &state.auth.secret)
+        let signing_key = state.firmware_signing_key().to_owned();
+        move || firmware::build_manifest(&state.firmware, &signing_key)
     })
     .await;
 
@@ -188,7 +211,7 @@ async fn firmware_binary(
     uri: Uri,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(err) = verify_headers(&state, &method, &uri, &headers, b"") {
+    if let Err(err) = verify_headers(&state.request_auth(), &method, &uri, &headers, b"") {
         tracing::warn!("firmware download authentication failed: {err}");
         if let Some(alert) = state.alert.as_ref() {
             alert.record_auth_failure();
@@ -268,74 +291,87 @@ async fn command(
     body: Bytes,
     action: PowerAction,
 ) -> Response {
-    match verify_headers(&state, &method, &uri, &headers, &body) {
-        Ok(()) => {
-            let Ok(request) = serde_json::from_slice::<CommandRequest>(&body) else {
-                return (StatusCode::BAD_REQUEST, "request body must be valid JSON")
-                    .into_response();
-            };
-            if !request.confirm {
-                return (StatusCode::BAD_REQUEST, "confirm must be true").into_response();
-            }
-
-            // `SetSuspendState` はスリープからの復帰まで戻らないため、
-            // sleepだけは受理応答を先に返す(下の `sleep_accepted` 参照)。
-            // reboot/shutdownは従来どおり実行完了後に200を返す。
-            if action == PowerAction::Sleep {
-                return sleep_accepted(state).await;
-            }
-
-            // 監査ログも電源操作(shutdown.exeの起動)もblocking I/Oのため、
-            // asyncワーカーを塞がないようblockingスレッドへ逃がす。fail-closed
-            // (監査ログを残せないなら電源操作しない)の順序はこのクロージャ内で維持する。
-            let dry_run = state.dry_run;
-            let outcome =
-                tokio::task::spawn_blocking(move || -> Result<PowerResult, CommandFailure> {
-                    audit_log::append(action.slug(), dry_run, "accepted")
-                        .map_err(CommandFailure::Audit)?;
-
-                    let result = run_power_action(action, dry_run);
-                    let label = if result.is_ok() { "ok" } else { "failed" };
-                    if let Err(err) = audit_log::append(action.slug(), dry_run, label) {
-                        tracing::error!("failed to write audit log result: {err}");
-                    }
-                    result.map_err(CommandFailure::Power)
-                })
-                .await;
-
-            match outcome {
-                Ok(Ok(result)) => (StatusCode::OK, Json(result)).into_response(),
-                Ok(Err(CommandFailure::Audit(err))) => {
-                    tracing::error!("failed to write audit log: {err}");
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to write audit log",
-                    )
-                        .into_response()
-                }
-                Ok(Err(CommandFailure::Power(err))) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("power command failed: {err}"),
-                )
-                    .into_response(),
-                Err(join_err) => {
-                    // blockingタスクが落ちた場合は電源操作へ到達したか判別できない
-                    // (監査ログを見て判断する)。
-                    tracing::error!("power command task failed: {join_err}");
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "power command task failed",
-                    )
-                        .into_response()
-                }
-            }
+    if let Err(err) = verify_headers(&state.request_auth(), &method, &uri, &headers, &body) {
+        tracing::warn!("power command authentication failed: {err}");
+        if let Some(alert) = state.alert.as_ref() {
+            alert.record_auth_failure();
         }
-        Err(err) => {
-            tracing::warn!("power command authentication failed: {err}");
-            if let Some(alert) = state.alert.as_ref() {
-                alert.record_auth_failure();
-            }
-            (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let _request = match parse_command_body(&body) {
+        Ok(request) => request,
+        Err(CommandBodyError::InvalidJson) => {
+            return (StatusCode::BAD_REQUEST, "request body must be valid JSON").into_response();
+        }
+        Err(CommandBodyError::ConfirmNotTrue) => {
+            return (StatusCode::BAD_REQUEST, "confirm must be true").into_response();
+        }
+    };
+
+    // `SetSuspendState` はスリープからの復帰まで戻らないため、
+    // sleepだけは受理応答を先に返す(下の `sleep_accepted` 参照)。
+    // reboot/shutdownは従来どおり実行完了後に200を返す。
+    if action == PowerAction::Sleep {
+        return sleep_accepted(state.dry_run).await;
+    }
+    execute_power_action(state.dry_run, action).await
+}
+
+enum CommandBodyError {
+    InvalidJson,
+    ConfirmNotTrue,
+}
+
+fn parse_command_body(body: &Bytes) -> Result<CommandRequest, CommandBodyError> {
+    let Ok(request) = serde_json::from_slice::<CommandRequest>(body) else {
+        return Err(CommandBodyError::InvalidJson);
+    };
+    if !request.confirm {
+        return Err(CommandBodyError::ConfirmNotTrue);
+    }
+    Ok(request)
+}
+
+async fn execute_power_action(dry_run: bool, action: PowerAction) -> Response {
+    // 監査ログも電源操作(shutdown.exeの起動)もblocking I/Oのため、
+    // asyncワーカーを塞がないようblockingスレッドへ逃がす。fail-closed
+    // (監査ログを残せないなら電源操作しない)の順序はこのクロージャ内で維持する。
+    let outcome = tokio::task::spawn_blocking(move || -> Result<PowerResult, CommandFailure> {
+        audit_log::append(action.slug(), dry_run, "accepted").map_err(CommandFailure::Audit)?;
+
+        let result = run_power_action(action, dry_run);
+        let label = if result.is_ok() { "ok" } else { "failed" };
+        if let Err(err) = audit_log::append(action.slug(), dry_run, label) {
+            tracing::error!("failed to write audit log result: {err}");
+        }
+        result.map_err(CommandFailure::Power)
+    })
+    .await;
+
+    match outcome {
+        Ok(Ok(result)) => (StatusCode::OK, Json(result)).into_response(),
+        Ok(Err(CommandFailure::Audit(err))) => {
+            tracing::error!("failed to write audit log: {err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to write audit log",
+            )
+                .into_response()
+        }
+        Ok(Err(CommandFailure::Power(err))) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("power command failed: {err}"),
+        )
+            .into_response(),
+        Err(join_err) => {
+            // blockingタスクが落ちた場合は電源操作へ到達したか判別できない
+            // (監査ログを見て判断する)。
+            tracing::error!("power command task failed: {join_err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "power command task failed",
+            )
+                .into_response()
         }
     }
 }
@@ -346,8 +382,7 @@ async fn command(
 /// `"accepted"` にする。実行の成否は応答に含められず、監査ログの追記と
 /// tracingにだけ残る。`dry_run` では実行スレッドを作らない。
 /// 監査ログを残せないときは実行せず500を返す(fail-closed、他actionと同様)。
-async fn sleep_accepted(state: AppState) -> Response {
-    let dry_run = state.dry_run;
+async fn sleep_accepted(dry_run: bool) -> Response {
     let audit =
         tokio::task::spawn_blocking(move || audit_log::append("sleep", dry_run, "accepted")).await;
     match audit {
@@ -394,7 +429,7 @@ async fn sleep_accepted(state: AppState) -> Response {
 }
 
 fn verify_headers(
-    state: &AppState,
+    auth: &RequestAuth,
     method: &Method,
     uri: &Uri,
     headers: &HeaderMap,
@@ -407,15 +442,15 @@ fn verify_headers(
     let signature = header_str(headers, "x-signature")?;
 
     verify_request(
-        &state.auth,
-        &state.nonces,
+        &auth.auth_key,
+        &auth.nonces,
         method.as_str(),
         uri.path(),
         timestamp,
         nonce,
         body,
         signature,
-        (state.clock)(),
+        (auth.clock)(),
     )
 }
 
