@@ -174,6 +174,720 @@ fn apply_online_actions(
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoopAction {
+    Continue,
+    Proceed,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn poll_wifi(
+    wifi_check_at: &mut Instant,
+    wifi: &mut Option<net::Wifi>,
+    nvs_partition: &EspDefaultNvsPartition,
+    app_config: &Arc<AppConfig>,
+    status: &mut Status<'_>,
+    sntp: &mut Option<esp_idf_svc::sntp::EspSntp<'static>>,
+    telegram_started: &mut bool,
+    power_lock: &telegram::PowerLock,
+    operation_lock: &telegram::OperationLock,
+    telegram_state: &Arc<Mutex<telegram::State>>,
+    notifier: &mut Option<telegram::Notifier>,
+    settings: &Arc<RuntimeSettings>,
+    https_lock: &telegram::HttpsLock,
+    battery_shared: &telegram::SharedBattery,
+    wake_watch_shared: &telegram::SharedWakeWatch,
+    sleep_watch_shared: &telegram::SharedSleepWatch,
+    display: &mut board::Core2Display<'_>,
+    toast_text: &Option<String>,
+    screen: &Screen,
+    clock_minute: &mut i64,
+    calendar_day: &mut Option<ui::CalendarDay>,
+) -> Result<(), Box<dyn Error>> {
+    // Wi-Fi切断時は一定間隔で再接続を試す。
+    if wifi_check_at.elapsed() >= WIFI_RECONNECT_INTERVAL {
+        *wifi_check_at = Instant::now();
+        if let Some(w) = wifi.as_mut() {
+            if !w.is_up() {
+                println!("Wi-Fi down; reconnecting");
+                match w.reconnect() {
+                    Ok(()) => println!("Wi-Fi reconnected"),
+                    Err(e) => println!("Wi-Fi reconnect failed: {e}"),
+                }
+            }
+        } else {
+            // 初回接続失敗時はModemも破棄されるため、再取得して接続を試す。
+            println!("Wi-Fi never connected; retrying");
+            match net::Wifi::connect_retry(
+                nvs_partition.clone(),
+                &app_config.wifi_ssid,
+                &app_config.wifi_password,
+            ) {
+                Ok(w) => {
+                    println!("Wi-Fi connected");
+                    *wifi = Some(w);
+                }
+                Err(e) => println!("Wi-Fi connect retry failed: {e}"),
+            }
+        }
+
+        let event = if wifi.as_ref().is_some_and(net::Wifi::is_up) {
+            online_state::OnlineEvent::WifiConnected
+        } else {
+            online_state::OnlineEvent::WifiDisconnected
+        };
+        let (next, actions) = online_state::OnlineState::from_parts(
+            status.wifi_connected,
+            sntp.is_some(),
+            notifier.is_some(),
+            *telegram_started,
+        )
+        .transition(event, telegram::is_configured(app_config.as_ref()));
+        let now_connected = next.is_online();
+        if now_connected != status.wifi_connected {
+            status.wifi_connected = now_connected;
+            if !status.wifi_connected {
+                status.pc_online = false;
+            }
+            // Calendar滞在中もヘッダー(Wi-Fiランプ等)が破綻しないよう追随する。
+            refresh_current_screen(
+                display,
+                &with_toast(status, toast_text),
+                screen,
+                app_config,
+                clock_minute,
+                calendar_day,
+            )?;
+        }
+        if now_connected {
+            apply_online_actions(
+                actions,
+                sntp,
+                telegram_started,
+                power_lock,
+                operation_lock,
+                telegram_state,
+                notifier,
+                app_config,
+                settings,
+                https_lock,
+                battery_shared,
+                wake_watch_shared,
+                sleep_watch_shared,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn sync_telegram_indicator(
+    telegram_state: &Arc<Mutex<telegram::State>>,
+    status: &mut Status<'_>,
+    display: &mut board::Core2Display<'_>,
+    toast_text: &Option<String>,
+    screen: &Screen,
+    app_config: &AppConfig,
+    clock_minute: &mut i64,
+    calendar_day: &mut Option<ui::CalendarDay>,
+) -> Result<(), Box<dyn Error>> {
+    let now_telegram = match *telegram::lock_state(telegram_state) {
+        telegram::State::Disabled => TelegramState::Disabled,
+        telegram::State::Polling => TelegramState::Polling,
+        telegram::State::Error => TelegramState::Error,
+    };
+    if now_telegram != status.telegram {
+        status.telegram = now_telegram;
+        // Calendar滞在中もヘッダー(Telegramランプ)が破綻しないよう追随する。
+        refresh_current_screen(
+            display,
+            &with_toast(status, toast_text),
+            screen,
+            app_config,
+            clock_minute,
+            calendar_day,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn poll_battery(
+    battery_fast_at: &mut Instant,
+    battery_at: &mut Instant,
+    i2c_bus: &RefCell<esp_idf_hal::i2c::I2cDriver<'_>>,
+    axp: &mut axp192::Axp192<
+        embedded_hal_bus::i2c::RefCellDevice<'_, esp_idf_hal::i2c::I2cDriver<'_>>,
+    >,
+    battery_shared: &telegram::SharedBattery,
+    status: &mut Status<'_>,
+    display: &mut board::Core2Display<'_>,
+    toast_text: &Option<String>,
+    screen: &Screen,
+    power_notify: &mut battery::PowerNotify,
+    notifier: &Option<telegram::Notifier>,
+) -> Result<(), Box<dyn Error>> {
+    // Wi-Fi断中も電池表示を止めないため、PC状態の確認とは条件を分ける。
+    // 1秒ごとにIRQラッチだけ見て、立っていればすぐ読む。10秒の無条件読みは
+    // 取りこぼしの保険。量産Core2はIRQピンが未接続なのでISRは使えない。
+    if battery_fast_at.elapsed() >= BATTERY_POLL_INTERVAL {
+        *battery_fast_at = Instant::now();
+        // ラッチ読みに失敗したら安全側に倒して読む側にする。
+        let pending = board::power_event_pending(&mut *i2c_bus.borrow_mut()).unwrap_or(true);
+        if battery_read::should_read(pending, battery_at.elapsed()) {
+            *battery_at = Instant::now();
+            let now_battery = board::read_battery(axp);
+            // ラッチが出っぱなしになると次の抜き挿しを見分けられないため、
+            // 読み出し後は必ずクリアする。失敗しても次の周期で再試行する。
+            if let Err(e) = board::clear_power_irq_status(&mut *i2c_bus.borrow_mut()) {
+                println!("battery: failed to clear AXP192 IRQ status (will retry): {e:?}");
+            }
+            // pollingスレッドはI2Cを持たないため、読み取り結果の値を共有する。
+            // 変化の有無に関わらず毎回書く。1秒に1回のMutex獲得は無視できる。
+            *telegram::lock_battery(battery_shared) = now_battery;
+            // 表示に使う値が変わったときだけ描き直す。毎回描くとちらつく。
+            // 判定式はhostテスト済みの `battery::needs_redraw` を使う。
+            // 描き直しはヘッダー帯だけ(`redraw_header`)にし、全画面clearは
+            // しない。バッテリー表示はヘッダー内にしか無いため(判定自体は
+            // PR #161のまま変えない)。
+            let prev_state = status.battery.map(|b| b.display_state());
+            let next_state = now_battery.map(|b| b.display_state());
+            if battery::needs_redraw(prev_state, next_state) {
+                status.battery = now_battery;
+                // `redraw_header` はヘッダー帯だけ塗り直すため、Mainでも
+                // Calendarでも安全に呼べる。Calendar滞在中も電池表示が固まらない。
+                if matches!(screen, Screen::Main) || matches!(screen, Screen::Calendar) {
+                    ui::redraw_header(display, &with_toast(status, toast_text))?;
+                }
+            }
+        }
+        // 毎秒この判定を回すことで5回=約5秒で確定する。読み取り失敗(None)の間は
+        // 前回値を観測するので、失敗が通知を誘発しない。
+        // 停電ではルーターも落ちるため、復帰後に「戻りました」だけ届くことがある。
+        if let Some(known) = status.battery {
+            let (next_power, should_notify) = power_notify.poll(known.powered);
+            *power_notify = next_power;
+            if should_notify && let Some(notifier) = notifier.as_ref() {
+                // 文言の正本は `battery::power_state_notification_ja`。
+                notifier.notify(battery::power_state_notification_ja(
+                    known.powered,
+                    known.percent,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn poll_pc_status(
+    status: &mut Status<'_>,
+    status_at: &mut Instant,
+    settings: &Arc<RuntimeSettings>,
+    status_target_text: &mut String,
+    status_targets: &mut Vec<std::net::SocketAddr>,
+    status_dns_tried: &mut bool,
+    display: &mut board::Core2Display<'_>,
+    toast_text: &Option<String>,
+    screen: &Screen,
+    app_config: &Arc<AppConfig>,
+    clock_minute: &mut i64,
+    calendar_day: &mut Option<ui::CalendarDay>,
+    wake_watch_shared: &telegram::SharedWakeWatch,
+    sleep_watch_shared: &telegram::SharedSleepWatch,
+    stable_notify: &mut notify_stable::StableNotify,
+    notifier: &Option<telegram::Notifier>,
+    ota_validated: &mut bool,
+    display_ok: bool,
+) -> Result<(), Box<dyn Error>> {
+    if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
+        *status_at = Instant::now();
+        let previous_online = status.pc_online;
+        let addr_text = settings.pc_status_addr();
+        if addr_text != *status_target_text {
+            *status_target_text = addr_text;
+            // 実行時の変更はIPv4検証済みのためparseのみ。DNSは引かない。
+            *status_targets = config_validation::parse_status_socket_addr(status_target_text)
+                .into_iter()
+                .collect();
+            *status_dns_tried = false;
+        }
+        if status_targets.is_empty() && !*status_dns_tried {
+            // 未解決のままなら1回だけ解決を試みる。失敗しても再試行は
+            // せず、設定変更時まで未解決として保持する。
+            *status_dns_tried = true;
+            *status_targets = net::resolve_status_addr_once(status_target_text);
+        }
+        let now_online = net::check_pc_online_cached(status_targets, net::STATUS_PROBE_TIMEOUT);
+        if now_online != status.pc_online {
+            status.pc_online = now_online;
+            println!("PC status changed: online={}", status.pc_online);
+        }
+
+        // 単調時計の経過秒で判定する(NTPに依存しない)。成功時は所要時間付きで
+        // 送り、安定通知側を既済に進める(10秒後の通知と二重にしない)。
+        // **ガードを `match *lock(..)` の対象に置いたまま取り直さない。**
+        // `match` が終わるまで解放されず自己デッドロックする(Issue #182)。
+        let started = telegram::wake_watch_started(wake_watch_shared);
+        let wake_notice = match started {
+            None => None,
+            Some(started_at) => {
+                let elapsed_secs = started_at.elapsed().as_secs();
+                let (next, notice) =
+                    wake_check::WakeWatch { waiting: true }.poll(now_online, elapsed_secs);
+                if !next.waiting {
+                    telegram::clear_wake_watch(wake_watch_shared);
+                }
+                notice.map(|notice| (notice, elapsed_secs))
+            }
+        };
+        let wake_succeeded = matches!(wake_notice, Some((wake_check::WakeNotice::Succeeded, _)));
+        // 成功時は安定通知側を既済に進めたため、下の安定通知は回さない。
+        // そうしないと10秒後に同じオンが「PCが起動しました。」として
+        // もう一度飛ぶ。
+        match wake_notice {
+            Some((wake_check::WakeNotice::Succeeded, elapsed_secs)) => {
+                stable_notify.notified_online = Some(true);
+                stable_notify.notify_streak = 0;
+                if let Some(notifier) = notifier.as_ref() {
+                    // 文言の正本は `wake_check::wake_succeeded_text`。
+                    notifier.notify(wake_check::wake_succeeded_text(elapsed_secs));
+                }
+            }
+            Some((wake_check::WakeNotice::TimedOut, elapsed_secs)) => {
+                if let Some(notifier) = notifier.as_ref() {
+                    // 文言の正本は `wake_check::wake_timed_out_text`。
+                    notifier.notify(wake_check::wake_timed_out_text(elapsed_secs));
+                }
+            }
+            None => {}
+        }
+
+        // 安定通知の判定(`notify_stable::StableNotify::poll`、Issue #217の抑止を含む)は
+        // 純粋ロジックに寄せ、ここでは送信だけ行う。起動成功通知で既済のときは
+        // 同じオンを送らない(上の `wake_succeeded` 判定で既済化済み)。
+        // **ガードは `poll_sleep_watch` の中で一度だけ取り、その中で
+        // `poll`→書き戻しまで行う。**
+        let suppress_off = telegram::poll_sleep_watch(sleep_watch_shared, now_online);
+        let (next_stable, should_notify) =
+            stable_notify.poll(now_online, wake_succeeded, suppress_off);
+        *stable_notify = next_stable;
+        if should_notify && let Some(notifier) = notifier.as_ref() {
+            // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
+            // 文言の正本は `net::pc_state_notification_ja`。
+            notifier.notify(net::pc_state_notification_ja(now_online).to_string());
+        }
+        // 表示内容が変わったときだけ描き直す。`draw_main`は全画面消去から
+        // 始まるため、10秒ごとに無条件で呼ぶとその周期で画面がちらつく。
+        // PC状態の変化はカード・ボタン配置に影響するため全画面描き直す
+        // (Issue #160)。バッテリーの変化はポーリング側でヘッダーだけ描き直す。
+        // Calendar滞在中もPC状態の変化に追随し、REBOOT/SHUTDOWNの
+        // 表示条件をMainと一致させる。
+        if status.pc_online != previous_online {
+            refresh_current_screen(
+                display,
+                &with_toast(status, toast_text),
+                screen,
+                app_config,
+                clock_minute,
+                calendar_day,
+            )?;
+        }
+
+        // 通ったときだけ新slotをvalidにする。通らなければ次回起動で旧slotへ戻る。
+        // 失敗してもpanicしない(戻る方向が安全側)。
+        if !*ota_validated && display_ok {
+            let checks = pc_remote_signing::BootChecks {
+                display_ok,
+                wifi_connected: status.wifi_connected,
+            };
+            match crate::ota::mark_app_valid_after_self_test(&checks) {
+                Ok(true) => {
+                    *ota_validated = true;
+                    println!("ota: boot self-test passed, marked app valid");
+                }
+                // この呼び出し条件(display_ok・wifi_connectedともに真)では
+                // 自己診断は必ず通る。将来条件が変わっても ota_validated を
+                // 立てなければ次周期に再評価されるため、何もしない。
+                Ok(false) => {}
+                Err(e) => println!("ota: mark app valid failed (will retry): {e}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sync_lock_indicator(
+    operation_lock: &telegram::OperationLock,
+    status: &mut Status<'_>,
+    display: &mut board::Core2Display<'_>,
+    toast_text: &Option<String>,
+    screen: &Screen,
+    app_config: &AppConfig,
+    clock_minute: &mut i64,
+    calendar_day: &mut Option<ui::CalendarDay>,
+) -> Result<(), Box<dyn Error>> {
+    // ロック状態はTelegramスレッド側から変わるので、画面表示へ反映する。
+    let now_locked = operation_lock.is_locked();
+    if now_locked != status.locked {
+        status.locked = now_locked;
+        // Calendar滞在中もLOCK表示とボタンの有効・無効表示を追随させる。
+        refresh_current_screen(
+            display,
+            &with_toast(status, toast_text),
+            screen,
+            app_config,
+            clock_minute,
+            calendar_day,
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_brightness_change(
+    settings: &Arc<RuntimeSettings>,
+    applied_brightness: &mut u8,
+    axp: &mut axp192::Axp192<
+        embedded_hal_bus::i2c::RefCellDevice<'_, esp_idf_hal::i2c::I2cDriver<'_>>,
+    >,
+) {
+    // 明るさ設定の即時反映(Issue #167)。Telegramでの変更確定はpollingスレッドが
+    // NVSと共有メモリまで更新するため、I2Cを持つUIループが変化を見てDCDC3へ
+    // 適用する。変化時のみI2Cを触り、通常時はMutex取得1回だけで済ませる。
+    // 値はパーセントでありsecretではないためログへ出してよい。
+    let now_brightness = settings.brightness_percent();
+    if now_brightness != *applied_brightness {
+        match board::apply_brightness(axp, now_brightness) {
+            Ok(()) => {
+                println!("brightness changed: {applied_brightness} -> {now_brightness}");
+                *applied_brightness = now_brightness;
+            }
+            Err(e) => println!("brightness apply failed: {e:?}"),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_backlight(
+    backlight_on: &mut bool,
+    touch_rising_edge: bool,
+    last_touch_activity_at: &mut Instant,
+    axp: &mut axp192::Axp192<
+        embedded_hal_bus::i2c::RefCellDevice<'_, esp_idf_hal::i2c::I2cDriver<'_>>,
+    >,
+    applied_brightness: u8,
+    display: &mut board::Core2Display<'_>,
+    status: &Status<'_>,
+    toast_text: &Option<String>,
+    screen: &Screen,
+    app_config: &AppConfig,
+    clock_minute: &mut i64,
+    calendar_day: &mut Option<ui::CalendarDay>,
+) -> Result<LoopAction, Box<dyn Error>> {
+    // スリープ(Issue #168)。LDO2(LCD+タッチ電源)は触らないため、消灯中も
+    // タッチ検出自体は生きている。復帰用の最初のタッチはここで消費し、
+    // 下のボタン判定へは渡さない(誤操作防止)。
+    match backlight::decide(
+        *backlight_on,
+        touch_rising_edge,
+        last_touch_activity_at.elapsed(),
+    ) {
+        BacklightAction::None => {}
+        BacklightAction::ResetIdle => {
+            *last_touch_activity_at = Instant::now();
+        }
+        BacklightAction::TurnOff => match board::set_backlight_on(axp, false) {
+            Ok(()) => {
+                *backlight_on = false;
+                println!("sleep: backlight off (idle {}s)", SLEEP_TIMEOUT.as_secs());
+            }
+            Err(e) => println!("sleep: backlight off failed: {e:?}"),
+        },
+        BacklightAction::Wake => {
+            match board::apply_brightness(axp, applied_brightness) {
+                Ok(()) => {
+                    *backlight_on = true;
+                    *last_touch_activity_at = Instant::now();
+                    println!("sleep: backlight on (touch)");
+                }
+                Err(e) => println!("sleep: backlight on failed: {e:?}"),
+            }
+            // 復帰時の再描画(Issue #172)。消灯中は描画しないため、ここで現在の
+            // 画面を描き直して時計帯を最新の分へ戻す。`screen` は借用だけにし、
+            // 確認画面を開いたまま消灯した場合も復帰後に確認画面を維持する。
+            if let Screen::Confirm(action) = screen {
+                ui::draw_confirm(display, *action)?;
+            } else {
+                refresh_current_screen(
+                    display,
+                    &with_toast(status, toast_text),
+                    screen,
+                    app_config,
+                    clock_minute,
+                    calendar_day,
+                )?;
+            }
+            return Ok(LoopAction::Continue);
+        }
+    }
+    Ok(LoopAction::Proceed)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_touch_action(
+    touch_point: Option<(i32, i32)>,
+    touch_was_down: bool,
+    screen: &mut Screen,
+    display: &mut board::Core2Display<'_>,
+    status: &Status<'_>,
+    toast_text: &mut Option<String>,
+    toast_at: &mut Instant,
+    app_config: &Arc<AppConfig>,
+    settings: &Arc<RuntimeSettings>,
+    power_lock: &telegram::PowerLock,
+    operation_lock: &telegram::OperationLock,
+    wake_watch_shared: &telegram::SharedWakeWatch,
+    notifier: &Option<telegram::Notifier>,
+    clock_minute: &mut i64,
+    calendar_day: &mut Option<ui::CalendarDay>,
+) -> Result<LoopAction, Box<dyn Error>> {
+    if let Some((x, y)) = touch_point
+        && !touch_was_down
+    {
+        // 判定対象は今表示している画面のボタンだけにする。全画面分を見ると
+        // Main画面の空白(OK_BUTTONの領域)をタップしただけでトーストが出る。
+        // CANCELは電源操作ではないため
+        // ロック中でも通す(でないと確認画面から戻れない)。
+        let power_button_tapped = match screen {
+            Screen::Main | Screen::Calendar => {
+                ui::WAKE_BUTTON.contains(x, y)
+                    || ui::REBOOT_BUTTON.contains(x, y)
+                    || ui::SHUTDOWN_BUTTON.contains(x, y)
+            }
+            Screen::Confirm(_) => ui::OK_BUTTON.contains(x, y),
+        };
+        if power_button_tapped && operation_lock.is_locked() {
+            reject_locked(
+                display,
+                status,
+                toast_text,
+                toast_at,
+                screen,
+                app_config,
+                clock_minute,
+            )?;
+            return Ok(LoopAction::Continue);
+        }
+
+        match screen {
+            // 電源ボタン行はMain/Calendarで共通のため、電源操作はまとめて
+            // 処理し、画面固有の遷移(時計帯・BACK)だけ分ける。
+            Screen::Main | Screen::Calendar => {
+                if ui::WAKE_BUTTON.contains(x, y) {
+                    println!("WAKE tapped at x={x} y={y}");
+                    let _guard = telegram::lock_power(power_lock);
+                    // status.lockedはループ先頭で読んだ値なので、判定から
+                    // ここまでの間にTelegramの/lockが通っている可能性がある。
+                    // 実行直前に共有状態を直接見る。
+                    if operation_lock.is_locked() {
+                        reject_locked(
+                            display,
+                            status,
+                            toast_text,
+                            toast_at,
+                            screen,
+                            app_config,
+                            clock_minute,
+                        )?;
+                        return Ok(LoopAction::Continue);
+                    }
+                    let (toast, report) = match net::send_wake_on_lan(
+                        &app_config.pc_mac_address,
+                        settings.wol_port(),
+                    ) {
+                        Ok(()) => {
+                            println!("WOL sent");
+                            // 画面のトーストはASCIIフォントのため英語のまま。
+                            telegram::begin_wake_watch(wake_watch_shared, status.pc_online);
+                            ("Magic packet sent", wake_check::wake_request_text())
+                        }
+                        Err(e) => {
+                            println!("WOL failed: {e}");
+                            ("WOL failed", wake_check::wake_request_failed_text())
+                        }
+                    };
+                    notify_panel_action(notifier.as_ref(), report);
+                    *toast_text = Some(toast.to_string());
+                    *toast_at = Instant::now();
+                    refresh_current_screen(
+                        display,
+                        &with_toast(status, toast_text),
+                        screen,
+                        app_config,
+                        clock_minute,
+                        calendar_day,
+                    )?;
+                } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
+                    *screen = Screen::Confirm(PowerAction::Reboot);
+                    ui::draw_confirm(display, PowerAction::Reboot)?;
+                } else if status.pc_online && ui::SHUTDOWN_BUTTON.contains(x, y) {
+                    *screen = Screen::Confirm(PowerAction::Shutdown);
+                    ui::draw_confirm(display, PowerAction::Shutdown)?;
+                } else if matches!(screen, Screen::Main) && ui::CLOCK_TAP_ZONE.contains(x, y) {
+                    // 時計帯タップでCalendar画面へ(Issue #173)。
+                    // 電源操作ではないためLOCK中でも許可する。
+                    // タップ領域は電源ボタン行と重ならない内側に絞ってある。
+                    println!("clock tapped at x={x} y={y}");
+                    *screen = Screen::Calendar;
+                    refresh_calendar(
+                        display,
+                        &with_toast(status, toast_text),
+                        app_config,
+                        calendar_day,
+                    )?;
+                } else if matches!(screen, Screen::Calendar)
+                    && ui::CALENDAR_BACK_BUTTON.contains(x, y)
+                {
+                    // BACKボタン。電源ボタン行と重ならない専用座標のため、
+                    // 電源ボタン判定の後に置いても見た目と結果が一致する。
+                    // LOCK中でも表示切替は許可する。
+                    println!("calendar BACK tapped at x={x} y={y}");
+                    *screen = Screen::Main;
+                    refresh_main(
+                        display,
+                        &with_toast(status, toast_text),
+                        app_config,
+                        clock_minute,
+                    )?;
+                }
+                // カレンダーグリッド等の空白タップは何も起こさない。
+            }
+            Screen::Confirm(action) => {
+                let action = *action;
+                if ui::CANCEL_BUTTON.contains(x, y) {
+                    println!("{} cancelled", action.slug());
+                    *screen = Screen::Main;
+                    *toast_text = None;
+                    refresh_main(display, status, app_config, clock_minute)?;
+                } else if ui::OK_BUTTON.contains(x, y) {
+                    println!("{} confirmed", action.slug());
+                    let _guard = telegram::lock_power(power_lock);
+                    // WAKEと同じ理由で、実行直前にロックを再確認する。
+                    if operation_lock.is_locked() {
+                        reject_locked(
+                            display,
+                            status,
+                            toast_text,
+                            toast_at,
+                            screen,
+                            app_config,
+                            clock_minute,
+                        )?;
+                        return Ok(LoopAction::Continue);
+                    }
+                    let pc_ip_address = settings.pc_ip_address();
+                    let (toast, report) = match bridge_client::send_command(
+                        action,
+                        app_config.as_ref(),
+                        &pc_ip_address,
+                    ) {
+                        Ok(code) if bridge_client::is_accepted(code) => (
+                            "Command accepted".to_string(),
+                            bridge_client::accepted_text(action),
+                        ),
+                        Ok(code) => (
+                            format!("Command rejected ({code})"),
+                            bridge_client::rejected_text(action, code),
+                        ),
+                        Err(e) => {
+                            println!("bridge command failed: {e}");
+                            (
+                                "Command failed".to_string(),
+                                bridge_client::failed_text(action),
+                            )
+                        }
+                    };
+                    notify_panel_action(notifier.as_ref(), &report);
+                    *toast_text = Some(toast);
+                    *toast_at = Instant::now();
+                    *screen = Screen::Main;
+                    refresh_main(
+                        display,
+                        &with_toast(status, toast_text),
+                        app_config,
+                        clock_minute,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(LoopAction::Proceed)
+}
+
+fn expire_toast(
+    toast_text: &mut Option<String>,
+    toast_at: Instant,
+    display: &mut board::Core2Display<'_>,
+    status: &Status<'_>,
+    screen: &Screen,
+    app_config: &AppConfig,
+    clock_minute: &mut i64,
+    calendar_day: &mut Option<ui::CalendarDay>,
+) -> Result<(), Box<dyn Error>> {
+    if toast_expiry::is_expired(toast_text.is_some(), toast_at.elapsed()) {
+        *toast_text = None;
+        refresh_current_screen(
+            display,
+            status,
+            screen,
+            app_config,
+            clock_minute,
+            calendar_day,
+        )?;
+    }
+    Ok(())
+}
+
+fn update_clock_band(
+    backlight_on: bool,
+    screen: &Screen,
+    app_config: &AppConfig,
+    clock_minute: &mut i64,
+    display: &mut board::Core2Display<'_>,
+) -> Result<(), Box<dyn Error>> {
+    if backlight_on && matches!(screen, Screen::Main) {
+        let now_minute = current_clock_minute(app_config);
+        if now_minute != *clock_minute {
+            *clock_minute = now_minute;
+            ui::redraw_clock(display, &current_clock(app_config))?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_calendar_view(
+    backlight_on: bool,
+    screen: &Screen,
+    app_config: &AppConfig,
+    calendar_day: &mut Option<ui::CalendarDay>,
+    display: &mut board::Core2Display<'_>,
+    toast_text: &Option<String>,
+    status: &Status<'_>,
+) -> Result<(), Box<dyn Error>> {
+    if backlight_on && matches!(screen, Screen::Calendar) {
+        let now_day = ui::calendar_date(now_unix_secs(), app_config.timezone_offset_hours);
+        if calendar_update::needs_redraw(*calendar_day, now_day) {
+            refresh_calendar(
+                display,
+                &with_toast(status, toast_text),
+                app_config,
+                calendar_day,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     esp_idf_sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -364,294 +1078,88 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut last_touch_activity_at = Instant::now();
 
     loop {
-        // Wi-Fi切断時は一定間隔で再接続を試す。
-        if wifi_check_at.elapsed() >= WIFI_RECONNECT_INTERVAL {
-            wifi_check_at = Instant::now();
-            if let Some(w) = wifi.as_mut() {
-                if !w.is_up() {
-                    println!("Wi-Fi down; reconnecting");
-                    match w.reconnect() {
-                        Ok(()) => println!("Wi-Fi reconnected"),
-                        Err(e) => println!("Wi-Fi reconnect failed: {e}"),
-                    }
-                }
-            } else {
-                // 初回接続失敗時はModemも破棄されるため、再取得して接続を試す。
-                println!("Wi-Fi never connected; retrying");
-                match net::Wifi::connect_retry(
-                    nvs_partition.clone(),
-                    &app_config.wifi_ssid,
-                    &app_config.wifi_password,
-                ) {
-                    Ok(w) => {
-                        println!("Wi-Fi connected");
-                        wifi = Some(w);
-                    }
-                    Err(e) => println!("Wi-Fi connect retry failed: {e}"),
-                }
-            }
+        poll_wifi(
+            &mut wifi_check_at,
+            &mut wifi,
+            &nvs_partition,
+            &app_config,
+            &mut status,
+            &mut sntp,
+            &mut telegram_started,
+            &power_lock,
+            &operation_lock,
+            &telegram_state,
+            &mut notifier,
+            &settings,
+            &https_lock,
+            &battery_shared,
+            &wake_watch_shared,
+            &sleep_watch_shared,
+            &mut display,
+            &toast_text,
+            &screen,
+            &mut clock_minute,
+            &mut calendar_day,
+        )?;
 
-            let event = if wifi.as_ref().is_some_and(net::Wifi::is_up) {
-                online_state::OnlineEvent::WifiConnected
-            } else {
-                online_state::OnlineEvent::WifiDisconnected
-            };
-            let (next, actions) = online_state::OnlineState::from_parts(
-                status.wifi_connected,
-                sntp.is_some(),
-                notifier.is_some(),
-                telegram_started,
-            )
-            .transition(event, telegram::is_configured(app_config.as_ref()));
-            let now_connected = next.is_online();
-            if now_connected != status.wifi_connected {
-                status.wifi_connected = now_connected;
-                if !status.wifi_connected {
-                    status.pc_online = false;
-                }
-                // Calendar滞在中もヘッダー(Wi-Fiランプ等)が破綻しないよう追随する。
-                refresh_current_screen(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &screen,
-                    &app_config,
-                    &mut clock_minute,
-                    &mut calendar_day,
-                )?;
-            }
-            if now_connected {
-                apply_online_actions(
-                    actions,
-                    &mut sntp,
-                    &mut telegram_started,
-                    &power_lock,
-                    &operation_lock,
-                    &telegram_state,
-                    &mut notifier,
-                    &app_config,
-                    &settings,
-                    &https_lock,
-                    &battery_shared,
-                    &wake_watch_shared,
-                    &sleep_watch_shared,
-                );
-            }
-        }
+        sync_telegram_indicator(
+            &telegram_state,
+            &mut status,
+            &mut display,
+            &toast_text,
+            &screen,
+            &app_config,
+            &mut clock_minute,
+            &mut calendar_day,
+        )?;
 
-        let now_telegram = match *telegram::lock_state(&telegram_state) {
-            telegram::State::Disabled => TelegramState::Disabled,
-            telegram::State::Polling => TelegramState::Polling,
-            telegram::State::Error => TelegramState::Error,
-        };
-        if now_telegram != status.telegram {
-            status.telegram = now_telegram;
-            // Calendar滞在中もヘッダー(Telegramランプ)が破綻しないよう追随する。
-            refresh_current_screen(
-                &mut display,
-                &with_toast(&status, &toast_text),
-                &screen,
-                &app_config,
-                &mut clock_minute,
-                &mut calendar_day,
-            )?;
-        }
+        poll_battery(
+            &mut battery_fast_at,
+            &mut battery_at,
+            &i2c_bus,
+            &mut axp,
+            &battery_shared,
+            &mut status,
+            &mut display,
+            &toast_text,
+            &screen,
+            &mut power_notify,
+            &notifier,
+        )?;
 
-        // Wi-Fi断中も電池表示を止めないため、PC状態の確認とは条件を分ける。
-        // 1秒ごとにIRQラッチだけ見て、立っていればすぐ読む。10秒の無条件読みは
-        // 取りこぼしの保険。量産Core2はIRQピンが未接続なのでISRは使えない。
-        if battery_fast_at.elapsed() >= BATTERY_POLL_INTERVAL {
-            battery_fast_at = Instant::now();
-            // ラッチ読みに失敗したら安全側に倒して読む側にする。
-            let pending = board::power_event_pending(&mut *i2c_bus.borrow_mut()).unwrap_or(true);
-            if battery_read::should_read(pending, battery_at.elapsed()) {
-                battery_at = Instant::now();
-                let now_battery = board::read_battery(&mut axp);
-                // ラッチが出っぱなしになると次の抜き挿しを見分けられないため、
-                // 読み出し後は必ずクリアする。失敗しても次の周期で再試行する。
-                if let Err(e) = board::clear_power_irq_status(&mut *i2c_bus.borrow_mut()) {
-                    println!("battery: failed to clear AXP192 IRQ status (will retry): {e:?}");
-                }
-                // pollingスレッドはI2Cを持たないため、読み取り結果の値を共有する。
-                // 変化の有無に関わらず毎回書く。1秒に1回のMutex獲得は無視できる。
-                *telegram::lock_battery(&battery_shared) = now_battery;
-                // 表示に使う値が変わったときだけ描き直す。毎回描くとちらつく。
-                // 判定式はhostテスト済みの `battery::needs_redraw` を使う。
-                // 描き直しはヘッダー帯だけ(`redraw_header`)にし、全画面clearは
-                // しない。バッテリー表示はヘッダー内にしか無いため(判定自体は
-                // PR #161のまま変えない)。
-                let prev_state = status.battery.map(|b| b.display_state());
-                let next_state = now_battery.map(|b| b.display_state());
-                if battery::needs_redraw(prev_state, next_state) {
-                    status.battery = now_battery;
-                    // `redraw_header` はヘッダー帯だけ塗り直すため、Mainでも
-                    // Calendarでも安全に呼べる。Calendar滞在中も電池表示が固まらない。
-                    if matches!(screen, Screen::Main) || matches!(screen, Screen::Calendar) {
-                        ui::redraw_header(&mut display, &with_toast(&status, &toast_text))?;
-                    }
-                }
-            }
-            // 毎秒この判定を回すことで5回=約5秒で確定する。読み取り失敗(None)の間は
-            // 前回値を観測するので、失敗が通知を誘発しない。
-            // 停電ではルーターも落ちるため、復帰後に「戻りました」だけ届くことがある。
-            if let Some(known) = status.battery {
-                let (next_power, should_notify) = power_notify.poll(known.powered);
-                power_notify = next_power;
-                if should_notify && let Some(notifier) = notifier.as_ref() {
-                    // 文言の正本は `battery::power_state_notification_ja`。
-                    notifier.notify(battery::power_state_notification_ja(
-                        known.powered,
-                        known.percent,
-                    ));
-                }
-            }
-        }
+        poll_pc_status(
+            &mut status,
+            &mut status_at,
+            &settings,
+            &mut status_target_text,
+            &mut status_targets,
+            &mut status_dns_tried,
+            &mut display,
+            &toast_text,
+            &screen,
+            &app_config,
+            &mut clock_minute,
+            &mut calendar_day,
+            &wake_watch_shared,
+            &sleep_watch_shared,
+            &mut stable_notify,
+            &notifier,
+            &mut ota_validated,
+            display_ok,
+        )?;
 
-        if status.wifi_connected && status_at.elapsed() >= STATUS_INTERVAL {
-            status_at = Instant::now();
-            let previous_online = status.pc_online;
-            let addr_text = settings.pc_status_addr();
-            if addr_text != status_target_text {
-                status_target_text = addr_text;
-                // 実行時の変更はIPv4検証済みのためparseのみ。DNSは引かない。
-                status_targets = config_validation::parse_status_socket_addr(&status_target_text)
-                    .into_iter()
-                    .collect();
-                status_dns_tried = false;
-            }
-            if status_targets.is_empty() && !status_dns_tried {
-                // 未解決のままなら1回だけ解決を試みる。失敗しても再試行は
-                // せず、設定変更時まで未解決として保持する。
-                status_dns_tried = true;
-                status_targets = net::resolve_status_addr_once(&status_target_text);
-            }
-            let now_online =
-                net::check_pc_online_cached(&status_targets, net::STATUS_PROBE_TIMEOUT);
-            if now_online != status.pc_online {
-                status.pc_online = now_online;
-                println!("PC status changed: online={}", status.pc_online);
-            }
+        sync_lock_indicator(
+            &operation_lock,
+            &mut status,
+            &mut display,
+            &toast_text,
+            &screen,
+            &app_config,
+            &mut clock_minute,
+            &mut calendar_day,
+        )?;
 
-            // 単調時計の経過秒で判定する(NTPに依存しない)。成功時は所要時間付きで
-            // 送り、安定通知側を既済に進める(10秒後の通知と二重にしない)。
-            // **ガードを `match *lock(..)` の対象に置いたまま取り直さない。**
-            // `match` が終わるまで解放されず自己デッドロックする(Issue #182)。
-            let started = telegram::wake_watch_started(&wake_watch_shared);
-            let wake_notice = match started {
-                None => None,
-                Some(started_at) => {
-                    let elapsed_secs = started_at.elapsed().as_secs();
-                    let (next, notice) =
-                        wake_check::WakeWatch { waiting: true }.poll(now_online, elapsed_secs);
-                    if !next.waiting {
-                        telegram::clear_wake_watch(&wake_watch_shared);
-                    }
-                    notice.map(|notice| (notice, elapsed_secs))
-                }
-            };
-            // 成功時は安定通知側を既済に進めたため、下の安定通知は回さない。
-            // そうしないと10秒後に同じオンが「PCが起動しました。」として
-            // もう一度飛ぶ。
-            let wake_succeeded =
-                matches!(wake_notice, Some((wake_check::WakeNotice::Succeeded, _)));
-            match wake_notice {
-                Some((wake_check::WakeNotice::Succeeded, elapsed_secs)) => {
-                    stable_notify.notified_online = Some(true);
-                    stable_notify.notify_streak = 0;
-                    if let Some(notifier) = notifier.as_ref() {
-                        // 文言の正本は `wake_check::wake_succeeded_text`。
-                        notifier.notify(wake_check::wake_succeeded_text(elapsed_secs));
-                    }
-                }
-                Some((wake_check::WakeNotice::TimedOut, elapsed_secs)) => {
-                    if let Some(notifier) = notifier.as_ref() {
-                        // 文言の正本は `wake_check::wake_timed_out_text`。
-                        notifier.notify(wake_check::wake_timed_out_text(elapsed_secs));
-                    }
-                }
-                None => {}
-            }
-
-            // 安定通知の判定(`notify_stable::StableNotify::poll`、Issue #217の抑止を含む)は
-            // 純粋ロジックに寄せ、ここでは送信だけ行う。起動成功通知で既済のときは
-            // 同じオンを送らない(上の `wake_succeeded` 判定で既済化済み)。
-            // **ガードは `poll_sleep_watch` の中で一度だけ取り、その中で
-            // `poll`→書き戻しまで行う。**
-            let suppress_off = telegram::poll_sleep_watch(&sleep_watch_shared, now_online);
-            let (next_stable, should_notify) =
-                stable_notify.poll(now_online, wake_succeeded, suppress_off);
-            stable_notify = next_stable;
-            if should_notify && let Some(notifier) = notifier.as_ref() {
-                // 状態表示(オン/オフ)ではなく出来事(起動/停止)で通知する。
-                // 文言の正本は `net::pc_state_notification_ja`。
-                notifier.notify(net::pc_state_notification_ja(now_online).to_string());
-            }
-            // 表示内容が変わったときだけ描き直す。`draw_main`は全画面消去から
-            // 始まるため、10秒ごとに無条件で呼ぶとその周期で画面がちらつく。
-            // PC状態の変化はカード・ボタン配置に影響するため全画面描き直す
-            // (Issue #160)。バッテリーの変化はポーリング側でヘッダーだけ描き直す。
-            // Calendar滞在中もPC状態の変化に追随し、REBOOT/SHUTDOWNの
-            // 表示条件をMainと一致させる。
-            if status.pc_online != previous_online {
-                refresh_current_screen(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &screen,
-                    &app_config,
-                    &mut clock_minute,
-                    &mut calendar_day,
-                )?;
-            }
-
-            // 通ったときだけ新slotをvalidにする。通らなければ次回起動で旧slotへ戻る。
-            // 失敗してもpanicしない(戻る方向が安全側)。
-            if !ota_validated && display_ok {
-                let checks = pc_remote_signing::BootChecks {
-                    display_ok,
-                    wifi_connected: status.wifi_connected,
-                };
-                match crate::ota::mark_app_valid_after_self_test(&checks) {
-                    Ok(true) => {
-                        ota_validated = true;
-                        println!("ota: boot self-test passed, marked app valid");
-                    }
-                    // この呼び出し条件(display_ok・wifi_connectedともに真)では
-                    // 自己診断は必ず通る。将来条件が変わっても ota_validated を
-                    // 立てなければ次周期に再評価されるため、何もしない。
-                    Ok(false) => {}
-                    Err(e) => println!("ota: mark app valid failed (will retry): {e}"),
-                }
-            }
-        }
-
-        // ロック状態はTelegramスレッド側から変わるので、画面表示へ反映する。
-        let now_locked = operation_lock.is_locked();
-        if now_locked != status.locked {
-            status.locked = now_locked;
-            // Calendar滞在中もLOCK表示とボタンの有効・無効表示を追随させる。
-            refresh_current_screen(
-                &mut display,
-                &with_toast(&status, &toast_text),
-                &screen,
-                &app_config,
-                &mut clock_minute,
-                &mut calendar_day,
-            )?;
-        }
-
-        // 明るさ設定の即時反映(Issue #167)。Telegramでの変更確定はpollingスレッドが
-        // NVSと共有メモリまで更新するため、I2Cを持つUIループが変化を見てDCDC3へ
-        // 適用する。変化時のみI2Cを触り、通常時はMutex取得1回だけで済ませる。
-        // 値はパーセントでありsecretではないためログへ出してよい。
-        let now_brightness = settings.brightness_percent();
-        if now_brightness != applied_brightness {
-            match board::apply_brightness(&mut axp, now_brightness) {
-                Ok(()) => {
-                    println!("brightness changed: {applied_brightness} -> {now_brightness}");
-                    applied_brightness = now_brightness;
-                }
-                Err(e) => println!("brightness apply failed: {e:?}"),
-            }
-        }
+        apply_brightness_change(&settings, &mut applied_brightness, &mut axp);
 
         // タッチの立ち上がりだけを見ることで、1回のタップで1回だけ実行する。
         let touch_point = match touch.get_touch_event() {
@@ -661,270 +1169,78 @@ fn main() -> Result<(), Box<dyn Error>> {
         let touch_down = touch_point.is_some();
         let touch_rising_edge = touch_down && !touch_was_down;
 
-        // スリープ(Issue #168)。LDO2(LCD+タッチ電源)は触らないため、消灯中も
-        // タッチ検出自体は生きている。復帰用の最初のタッチはここで消費し、
-        // 下のボタン判定へは渡さない(誤操作防止)。
-        match backlight::decide(
-            backlight_on,
+        if handle_backlight(
+            &mut backlight_on,
             touch_rising_edge,
-            last_touch_activity_at.elapsed(),
-        ) {
-            BacklightAction::None => {}
-            BacklightAction::ResetIdle => {
-                last_touch_activity_at = Instant::now();
-            }
-            BacklightAction::TurnOff => match board::set_backlight_on(&mut axp, false) {
-                Ok(()) => {
-                    backlight_on = false;
-                    println!("sleep: backlight off (idle {}s)", SLEEP_TIMEOUT.as_secs());
-                }
-                Err(e) => println!("sleep: backlight off failed: {e:?}"),
-            },
-            BacklightAction::Wake => {
-                match board::apply_brightness(&mut axp, applied_brightness) {
-                    Ok(()) => {
-                        backlight_on = true;
-                        last_touch_activity_at = Instant::now();
-                        println!("sleep: backlight on (touch)");
-                    }
-                    Err(e) => println!("sleep: backlight on failed: {e:?}"),
-                }
-                touch_was_down = touch_down;
-                // 復帰時の再描画(Issue #172)。消灯中は描画しないため、ここで現在の
-                // 画面を描き直して時計帯を最新の分へ戻す。`screen` は借用だけにし、
-                // 確認画面を開いたまま消灯した場合も復帰後に確認画面を維持する。
-                if let Screen::Confirm(action) = &screen {
-                    ui::draw_confirm(&mut display, *action)?;
-                } else {
-                    refresh_current_screen(
-                        &mut display,
-                        &with_toast(&status, &toast_text),
-                        &screen,
-                        &app_config,
-                        &mut clock_minute,
-                        &mut calendar_day,
-                    )?;
-                }
-                std::thread::sleep(TOUCH_POLL_INTERVAL);
-                continue;
-            }
+            &mut last_touch_activity_at,
+            &mut axp,
+            applied_brightness,
+            &mut display,
+            &status,
+            &toast_text,
+            &screen,
+            &app_config,
+            &mut clock_minute,
+            &mut calendar_day,
+        )? == LoopAction::Continue
+        {
+            touch_was_down = touch_down;
+            std::thread::sleep(TOUCH_POLL_INTERVAL);
+            continue;
         }
 
-        if let Some((x, y)) = touch_point
-            && !touch_was_down
+        if handle_touch_action(
+            touch_point,
+            touch_was_down,
+            &mut screen,
+            &mut display,
+            &status,
+            &mut toast_text,
+            &mut toast_at,
+            &app_config,
+            &settings,
+            &power_lock,
+            &operation_lock,
+            &wake_watch_shared,
+            &notifier,
+            &mut clock_minute,
+            &mut calendar_day,
+        )? == LoopAction::Continue
         {
-            // 判定対象は今表示している画面のボタンだけにする。全画面分を見ると
-            // Main画面の空白(OK_BUTTONの領域)をタップしただけでトーストが出る。
-            // CANCELは電源操作ではないため
-            // ロック中でも通す(でないと確認画面から戻れない)。
-            let power_button_tapped = match screen {
-                Screen::Main | Screen::Calendar => {
-                    ui::WAKE_BUTTON.contains(x, y)
-                        || ui::REBOOT_BUTTON.contains(x, y)
-                        || ui::SHUTDOWN_BUTTON.contains(x, y)
-                }
-                Screen::Confirm(_) => ui::OK_BUTTON.contains(x, y),
-            };
-            if power_button_tapped && operation_lock.is_locked() {
-                reject_locked(
-                    &mut display,
-                    &status,
-                    &mut toast_text,
-                    &mut toast_at,
-                    &mut screen,
-                    &app_config,
-                    &mut clock_minute,
-                )?;
-                touch_was_down = touch_down;
-                std::thread::sleep(TOUCH_POLL_INTERVAL);
-                continue;
-            }
-
-            match screen {
-                // 電源ボタン行はMain/Calendarで共通のため、電源操作はまとめて
-                // 処理し、画面固有の遷移(時計帯・BACK)だけ分ける。
-                Screen::Main | Screen::Calendar => {
-                    if ui::WAKE_BUTTON.contains(x, y) {
-                        println!("WAKE tapped at x={x} y={y}");
-                        let _guard = telegram::lock_power(&power_lock);
-                        // status.lockedはループ先頭で読んだ値なので、判定から
-                        // ここまでの間にTelegramの/lockが通っている可能性がある。
-                        // 実行直前に共有状態を直接見る。
-                        if operation_lock.is_locked() {
-                            reject_locked(
-                                &mut display,
-                                &status,
-                                &mut toast_text,
-                                &mut toast_at,
-                                &mut screen,
-                                &app_config,
-                                &mut clock_minute,
-                            )?;
-                            touch_was_down = touch_down;
-                            std::thread::sleep(TOUCH_POLL_INTERVAL);
-                            continue;
-                        }
-                        let (toast, report) = match net::send_wake_on_lan(
-                            &app_config.pc_mac_address,
-                            settings.wol_port(),
-                        ) {
-                            Ok(()) => {
-                                println!("WOL sent");
-                                // 画面のトーストはASCIIフォントのため英語のまま。
-                                telegram::begin_wake_watch(&wake_watch_shared, status.pc_online);
-                                ("Magic packet sent", wake_check::wake_request_text())
-                            }
-                            Err(e) => {
-                                println!("WOL failed: {e}");
-                                ("WOL failed", wake_check::wake_request_failed_text())
-                            }
-                        };
-                        notify_panel_action(notifier.as_ref(), report);
-                        toast_text = Some(toast.to_string());
-                        toast_at = Instant::now();
-                        refresh_current_screen(
-                            &mut display,
-                            &with_toast(&status, &toast_text),
-                            &screen,
-                            &app_config,
-                            &mut clock_minute,
-                            &mut calendar_day,
-                        )?;
-                    } else if status.pc_online && ui::REBOOT_BUTTON.contains(x, y) {
-                        screen = Screen::Confirm(PowerAction::Reboot);
-                        ui::draw_confirm(&mut display, PowerAction::Reboot)?;
-                    } else if status.pc_online && ui::SHUTDOWN_BUTTON.contains(x, y) {
-                        screen = Screen::Confirm(PowerAction::Shutdown);
-                        ui::draw_confirm(&mut display, PowerAction::Shutdown)?;
-                    } else if matches!(screen, Screen::Main) && ui::CLOCK_TAP_ZONE.contains(x, y) {
-                        // 時計帯タップでCalendar画面へ(Issue #173)。
-                        // 電源操作ではないためLOCK中でも許可する。
-                        // タップ領域は電源ボタン行と重ならない内側に絞ってある。
-                        println!("clock tapped at x={x} y={y}");
-                        screen = Screen::Calendar;
-                        refresh_calendar(
-                            &mut display,
-                            &with_toast(&status, &toast_text),
-                            &app_config,
-                            &mut calendar_day,
-                        )?;
-                    } else if matches!(screen, Screen::Calendar)
-                        && ui::CALENDAR_BACK_BUTTON.contains(x, y)
-                    {
-                        // BACKボタン。電源ボタン行と重ならない専用座標のため、
-                        // 電源ボタン判定の後に置いても見た目と結果が一致する。
-                        // LOCK中でも表示切替は許可する。
-                        println!("calendar BACK tapped at x={x} y={y}");
-                        screen = Screen::Main;
-                        refresh_main(
-                            &mut display,
-                            &with_toast(&status, &toast_text),
-                            &app_config,
-                            &mut clock_minute,
-                        )?;
-                    }
-                    // カレンダーグリッド等の空白タップは何も起こさない。
-                }
-                Screen::Confirm(action) => {
-                    if ui::CANCEL_BUTTON.contains(x, y) {
-                        println!("{} cancelled", action.slug());
-                        screen = Screen::Main;
-                        toast_text = None;
-                        refresh_main(&mut display, &status, &app_config, &mut clock_minute)?;
-                    } else if ui::OK_BUTTON.contains(x, y) {
-                        println!("{} confirmed", action.slug());
-                        let _guard = telegram::lock_power(&power_lock);
-                        // WAKEと同じ理由で、実行直前にロックを再確認する。
-                        if operation_lock.is_locked() {
-                            reject_locked(
-                                &mut display,
-                                &status,
-                                &mut toast_text,
-                                &mut toast_at,
-                                &mut screen,
-                                &app_config,
-                                &mut clock_minute,
-                            )?;
-                            touch_was_down = touch_down;
-                            std::thread::sleep(TOUCH_POLL_INTERVAL);
-                            continue;
-                        }
-                        let pc_ip_address = settings.pc_ip_address();
-                        let (toast, report) = match bridge_client::send_command(
-                            action,
-                            app_config.as_ref(),
-                            &pc_ip_address,
-                        ) {
-                            Ok(code) if bridge_client::is_accepted(code) => (
-                                "Command accepted".to_string(),
-                                bridge_client::accepted_text(action),
-                            ),
-                            Ok(code) => (
-                                format!("Command rejected ({code})"),
-                                bridge_client::rejected_text(action, code),
-                            ),
-                            Err(e) => {
-                                println!("bridge command failed: {e}");
-                                (
-                                    "Command failed".to_string(),
-                                    bridge_client::failed_text(action),
-                                )
-                            }
-                        };
-                        notify_panel_action(notifier.as_ref(), &report);
-                        toast_text = Some(toast);
-                        toast_at = Instant::now();
-                        screen = Screen::Main;
-                        refresh_main(
-                            &mut display,
-                            &with_toast(&status, &toast_text),
-                            &app_config,
-                            &mut clock_minute,
-                        )?;
-                    }
-                }
-            }
+            touch_was_down = touch_down;
+            std::thread::sleep(TOUCH_POLL_INTERVAL);
+            continue;
         }
         touch_was_down = touch_down;
 
-        if toast_expiry::is_expired(toast_text.is_some(), toast_at.elapsed()) {
-            toast_text = None;
-            refresh_current_screen(
-                &mut display,
-                &status,
-                &screen,
-                &app_config,
-                &mut clock_minute,
-                &mut calendar_day,
-            )?;
-        }
+        expire_toast(
+            &mut toast_text,
+            toast_at,
+            &mut display,
+            &status,
+            &screen,
+            &app_config,
+            &mut clock_minute,
+            &mut calendar_day,
+        )?;
 
-        // 時計帯の更新(Issue #172)。表示中の分が変わったときだけ帯を描き直し、
-        // 秒単位の描画や余計なちらつきを避ける。消灯中はスキップし、復帰時の
-        // 再描画で最新表示へ戻す。Calendar滞在中は走らせない(Issue #173)。
-        if backlight_on && matches!(screen, Screen::Main) {
-            let now_minute = current_clock_minute(&app_config);
-            if now_minute != clock_minute {
-                clock_minute = now_minute;
-                ui::redraw_clock(&mut display, &current_clock(&app_config))?;
-            }
-        }
+        update_clock_band(
+            backlight_on,
+            &screen,
+            &app_config,
+            &mut clock_minute,
+            &mut display,
+        )?;
 
-        // Calendar滞在中の日付変化(Issue #173)。時計帯の分更新は走らせないが、
-        // 日が変わったときだけグリッドとハイライトを描き直す。消灯中は
-        // スキップし、復帰時の再描画に任せる。未同期->同期の遷移(None->Some)でも
-        // 1回描き直し、`NO CLOCK` から当月グリッドへ切り替える。
-        if backlight_on && matches!(screen, Screen::Calendar) {
-            let now_day = ui::calendar_date(now_unix_secs(), app_config.timezone_offset_hours);
-            if calendar_update::needs_redraw(calendar_day, now_day) {
-                refresh_calendar(
-                    &mut display,
-                    &with_toast(&status, &toast_text),
-                    &app_config,
-                    &mut calendar_day,
-                )?;
-            }
-        }
+        update_calendar_view(
+            backlight_on,
+            &screen,
+            &app_config,
+            &mut calendar_day,
+            &mut display,
+            &toast_text,
+            &status,
+        )?;
 
         std::thread::sleep(TOUCH_POLL_INTERVAL);
     }

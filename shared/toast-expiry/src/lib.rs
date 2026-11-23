@@ -11,6 +11,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ttl_is_three_seconds() {
+        // トーストの表示時間の変更は操作感に直結するため、値を固定して検知する。
+        assert_eq!(TOAST_TTL, Duration::from_secs(3));
+    }
+
+    #[test]
     fn stays_visible_while_toast_is_present_but_ttl_has_not_passed() {
         for elapsed in [
             Duration::ZERO,
