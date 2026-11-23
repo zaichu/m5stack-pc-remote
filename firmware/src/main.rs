@@ -29,7 +29,7 @@ use bridge_client::PowerAction;
 use settings::RuntimeSettings;
 use ui::{Status, TelegramState};
 
-const STATUS_INTERVAL: Duration = Duration::from_secs(10);
+const STATUS_INTERVAL: Duration = battery_read::FULL_READ_INTERVAL;
 /// バッテリーIRQラッチの確認周期。USB抜き挿し・充電開始/完了はAXP192が
 /// ラッチするので、ここで気づけば最大約1秒で画面へ反映できる。
 /// フル読み出し(`read_battery`)はラッチ有りか10秒保険のときだけ行い、

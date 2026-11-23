@@ -17,11 +17,9 @@ use crate::app_config::AppConfig;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const BODY: &str = r#"{"confirm":true}"#;
 
-/// bridgeの `GET /status` 確認の受信タイムアウト(Issue #183)。
-///
-/// `net::STATUS_PROBE_TIMEOUT` と同じ800ms。`/status` 全体の最悪は
-/// PC probe 800ms + bridge 800ms = 1.6秒。参照系なので電源操作の3秒より短くする。
-pub const BRIDGE_STATUS_TIMEOUT: Duration = Duration::from_millis(800);
+/// bridgeの `GET /status` 確認の受信タイムアウト(Issue #183)。正本は
+/// `net::STATUS_PROBE_TIMEOUT` で、値は参照で共有する。
+pub const BRIDGE_STATUS_TIMEOUT: Duration = crate::net::STATUS_PROBE_TIMEOUT;
 
 /// bridgeの `GET /status` 応答の受け入れ上限。固定値の小さなJSON(100B未満)の
 /// ため十分に余裕がある。ESP32のヒープ保護のため、超過分は読まずに失敗扱いに
@@ -96,6 +94,24 @@ pub(crate) fn nonce() -> String {
     format!("{random:x}-{uptime:x}")
 }
 
+/// 署名ヘッダの名前。wire protocolのためPOST(電源操作)とGET(OTA)で共有する。
+pub(crate) const HEADER_TIMESTAMP: &str = "X-Timestamp";
+pub(crate) const HEADER_NONCE: &str = "X-Nonce";
+pub(crate) const HEADER_SIGNATURE: &str = "X-Signature";
+
+/// HMAC署名だけを作る。時刻とnonceの取得は呼び出し側が行い、POSTとGETの
+/// 両方から使うことでcanonical文字列の組み立てを1か所にする。
+pub(crate) fn request_signature(
+    secret: &[u8],
+    method: &str,
+    path: &str,
+    timestamp: u64,
+    request_nonce: &str,
+    body: &[u8],
+) -> Result<String, pc_remote_signing::SigningError> {
+    pc_remote_signing::sign_request(secret, method, path, timestamp as i64, request_nonce, body)
+}
+
 /// 署名済みの電源操作を送り、HTTPステータスコードを返す。2xxだけを受理扱いにする。
 ///
 /// `pc_ip_address` はTelegram経由で実行時に変更できるため、`AppConfig` ではなく
@@ -109,11 +125,11 @@ pub fn send_command(
     let timestamp = unix_now()?;
     let request_nonce = nonce();
 
-    let signature = pc_remote_signing::sign_request(
+    let signature = request_signature(
         config.bridge_shared_secret.as_bytes(),
         "POST",
         path,
-        timestamp as i64,
+        timestamp,
         &request_nonce,
         BODY.as_bytes(),
     )?;
@@ -132,9 +148,9 @@ pub fn send_command(
     let headers = [
         ("Content-Type", "application/json"),
         ("Content-Length", content_length.as_str()),
-        ("X-Timestamp", timestamp_text.as_str()),
-        ("X-Nonce", request_nonce.as_str()),
-        ("X-Signature", signature.as_str()),
+        (HEADER_TIMESTAMP, timestamp_text.as_str()),
+        (HEADER_NONCE, request_nonce.as_str()),
+        (HEADER_SIGNATURE, signature.as_str()),
     ];
 
     let mut request = client.request(Method::Post, &url, &headers)?;
