@@ -82,4 +82,8 @@ def test_mid_list_failure_propagates_through_real_makefile(tmp_path):
         text=True,
         cwd=root,
     )
-    assert proc.returncode != 0, proc.stdout + proc.stderr
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0, out
+    # 終了コードだけでなく途中crateでの失敗であることを確かめる。
+    # cargo未導入などでループ前に落ちた場合はこの文字列が出ない。
+    assert "zzz-bogus" in out, out
