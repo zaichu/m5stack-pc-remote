@@ -110,8 +110,8 @@ pub fn start_notifier(
         .spawn(move || {
             let mut schedule = DailyReport::new(&api.config);
             let started = Instant::now();
-            let mut firmware_schedule = pc_remote_signing::FirmwareCheckSchedule::default();
-            let mut firmware_notice = pc_remote_signing::FirmwareNotice::default();
+            let mut firmware_schedule = notify_stable::FirmwareCheckSchedule::default();
+            let mut firmware_notice = notify_stable::FirmwareNotice::default();
             loop {
                 // 定期レポートの時刻判定のため、通知が無くても定期的に起きる。
                 let queued = match rx.recv_timeout(DAILY_REPORT_CHECK_INTERVAL) {
@@ -133,7 +133,7 @@ pub fn start_notifier(
                     let (next_notice, notify) = firmware_notice.observe(FIRMWARE_VERSION, offered);
                     firmware_notice = next_notice;
                     if notify && let (Some(tx), Some(version)) = (weak_tx.upgrade(), offered) {
-                        Notifier { tx }.notify(pc_remote_signing::firmware_available_text(
+                        Notifier { tx }.notify(notify_stable::firmware_available_text(
                             FIRMWARE_VERSION,
                             version,
                         ));

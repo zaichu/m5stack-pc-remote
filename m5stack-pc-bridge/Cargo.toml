@@ -12,6 +12,10 @@ clap = { version = "4.5", features = ["derive", "env"] }
 dashmap = "6.1"
 # firmware/と共有するHMAC署名wire protocol実装。
 pc-remote-signing = { path = "../shared/pc-remote-signing" }
+# firmware/と共有する通知抑制・更新通知の純粋ロジック。
+notify-stable = { path = "../shared/notify-stable" }
+# firmware/と共有する電源操作の識別子。
+wake-check = { path = "../shared/wake-check" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"

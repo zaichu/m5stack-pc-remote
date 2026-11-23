@@ -19,7 +19,7 @@ use crate::{
     firmware::{self, FirmwarePaths},
     power::{PowerAction, PowerResult, accepted_sleep_result, run_power_action},
 };
-use pc_remote_signing::PowerAction as SharedPowerAction;
+use wake_check::PowerAction as SharedPowerAction;
 
 /// `SetSuspendState` はスリープからの復帰まで戻らないため、`/sleep` は
 /// 受理応答(200)を先に返し、別スレッドで遅延実行する。firmware側の
