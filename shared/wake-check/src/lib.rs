@@ -398,3 +398,75 @@ mod tests {
         assert_eq!(next, SleepWatch::idle());
     }
 }
+
+/// 両側で共有する電源操作の識別子。パスとslugの対応をここ1箇所で決める
+/// (canonical文字列にPATHが入るため片方だけ変えると署名が一致しない)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerAction {
+    Reboot,
+    Shutdown,
+    Sleep,
+}
+
+impl PowerAction {
+    pub const ALL: [Self; 3] = [Self::Reboot, Self::Shutdown, Self::Sleep];
+
+    /// callback_dataや監査ログで使う識別子(`:` 区切りで解析するため小文字)。
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Reboot => "reboot",
+            Self::Shutdown => "shutdown",
+            Self::Sleep => "sleep",
+        }
+    }
+
+    /// 署名対象になるHTTPパス。slugへ `/` を付けたものと必ず一致する。
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Reboot => "/reboot",
+            Self::Shutdown => "/shutdown",
+            Self::Sleep => "/sleep",
+        }
+    }
+
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|action| action.slug() == slug)
+    }
+
+    pub fn from_path(path: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|action| action.path() == path)
+    }
+}
+
+#[cfg(test)]
+mod power_action_tests {
+    use super::PowerAction;
+
+    #[test]
+    fn path_is_slug_prefixed_with_slash() {
+        for action in PowerAction::ALL {
+            assert_eq!(action.path(), format!("/{}", action.slug()));
+        }
+    }
+
+    #[test]
+    fn slug_and_path_round_trip() {
+        for action in PowerAction::ALL {
+            assert_eq!(PowerAction::from_slug(action.slug()), Some(action));
+            assert_eq!(PowerAction::from_path(action.path()), Some(action));
+        }
+        assert_eq!(PowerAction::from_slug("hibernate"), None);
+        assert_eq!(PowerAction::from_path("/reboot/"), None);
+    }
+
+    #[test]
+    fn slugs_and_paths_are_all_distinct() {
+        // slug は callback_data と監査ログ、path は署名対象の HTTP パスに使う。
+        // 重複があると別の操作として区別できないため、列挙全体で一意にする。
+        use std::collections::HashSet;
+        let slugs: HashSet<_> = PowerAction::ALL.iter().map(|a| a.slug()).collect();
+        let paths: HashSet<_> = PowerAction::ALL.iter().map(|a| a.path()).collect();
+        assert_eq!(slugs.len(), PowerAction::ALL.len());
+        assert_eq!(paths.len(), PowerAction::ALL.len());
+    }
+}

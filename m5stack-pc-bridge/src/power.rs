@@ -4,9 +4,9 @@ use serde::Serialize;
 
 use crate::suspend;
 
-/// 電源操作の識別子はwire protocolの一部なので `pc-remote-signing` が正本。
+/// 電源操作の識別子はwire protocolの一部なので `wake-check` が正本。
 /// bridge側は再エクスポートして使う。
-pub use pc_remote_signing::PowerAction;
+pub use wake_check::PowerAction;
 
 #[derive(Debug, Serialize)]
 pub struct PowerResult {

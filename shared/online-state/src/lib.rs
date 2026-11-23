@@ -223,3 +223,357 @@ mod tests {
         assert_eq!(state.services(), Services::default());
     }
 }
+
+/// bridgeの `GET /status` 応答の解釈(Issue #183)。`agent_online` の形は
+/// wire protocolのためここが正本。
+/// `GET /status` は無認証で返すのは固定値だけ。**稼働時間などの環境情報を載せるなら
+/// 認証付きの別エンドポイントが要る。**
+pub const BRIDGE_STATUS_PATH: &str = "/status";
+
+/// `agent_online` がJSONの `true` のときだけtrueを返す。不正JSON・キー欠落・
+/// 想定外の型・空本文はすべてfalse(解釈不能を「応答あり」へ倒さない)。
+pub fn bridge_status_online(body: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    value
+        .get("agent_online")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PcStatusSnapshot {
+    pub pc_online: bool,
+    pub bridge_online: bool,
+    pub locked: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PcControlStatus {
+    Locked,
+    Off,
+    Ready,
+    BridgeUnavailable,
+}
+
+impl From<PcStatusSnapshot> for PcControlStatus {
+    fn from(snapshot: PcStatusSnapshot) -> Self {
+        match snapshot {
+            PcStatusSnapshot { locked: true, .. } => Self::Locked,
+            PcStatusSnapshot {
+                pc_online: false, ..
+            } => Self::Off,
+            PcStatusSnapshot {
+                bridge_online: true,
+                ..
+            } => Self::Ready,
+            _ => Self::BridgeUnavailable,
+        }
+    }
+}
+
+/// `/status` のボタン。`data` は `parse_callback_data` が解釈する固定文字列。
+pub struct StatusButton {
+    pub label: &'static str,
+    pub data: &'static str,
+}
+
+pub const STATUS_CB_REFRESH: &str = "status:refresh";
+pub const STATUS_CB_WAKE: &str = "status:wake";
+pub const STATUS_CB_REBOOT: &str = "status:reboot";
+pub const STATUS_CB_SHUTDOWN: &str = "status:shutdown";
+/// 設定メニューのロック解除と同じcallback。ロック中でも通る唯一のボタン。
+pub const STATUS_CB_UNLOCK: &str = "lock:off";
+
+const REFRESH_ROW: &[StatusButton] = &[StatusButton {
+    label: "↻ 最新の状態に更新",
+    data: STATUS_CB_REFRESH,
+}];
+
+/// 押された時点で意味のあるボタンだけを出す。ただし**古いメッセージのボタンは
+/// 後から押せる**ので、呼び出し側はここに出ていないことを根拠にしない。
+pub fn status_buttons(status: PcControlStatus) -> Vec<&'static [StatusButton]> {
+    let first: &[StatusButton] = match status {
+        PcControlStatus::Ready => &[
+            StatusButton {
+                label: "🔄 PCを再起動",
+                data: STATUS_CB_REBOOT,
+            },
+            StatusButton {
+                label: "⏻ シャットダウン",
+                data: STATUS_CB_SHUTDOWN,
+            },
+        ],
+        PcControlStatus::Off => &[StatusButton {
+            label: "⏻ PCを起動",
+            data: STATUS_CB_WAKE,
+        }],
+        PcControlStatus::Locked => &[StatusButton {
+            label: "🔓 ロックを解除",
+            data: STATUS_CB_UNLOCK,
+        }],
+        PcControlStatus::BridgeUnavailable => &[],
+    };
+    if first.is_empty() {
+        vec![REFRESH_ROW]
+    } else {
+        vec![first, REFRESH_ROW]
+    }
+}
+
+/// `parse_mode=HTML` で送るため、値に含まれる `&` `<` `>` を実体参照へ置き換える。
+pub fn escape_html(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+pub fn status_message_html(
+    status: PcControlStatus,
+    pc_label: &str,
+    battery_text: &str,
+    version: &str,
+) -> String {
+    let actions = match status {
+        PcControlStatus::Locked => {
+            "🔒 操作をロック中\n解除するまで起動・再起動・シャットダウンはできません"
+        }
+        PcControlStatus::Off => "起動できます",
+        PcControlStatus::Ready => "再起動・シャットダウンができます",
+        PcControlStatus::BridgeUnavailable => {
+            "⚠️ 再起動・シャットダウンはできません\nPC側の操作サービスが応答していません"
+        }
+    };
+    format!(
+        "🖥️ <b>PC ・ {}</b>\n{actions}\n\n📱 <b>M5Stack</b>\n🔋 {}\n🏷️ v{}",
+        escape_html(pc_label),
+        escape_html(battery_text),
+        escape_html(version)
+    )
+}
+
+#[cfg(test)]
+mod bridge_status_tests {
+    use super::{BRIDGE_STATUS_PATH, bridge_status_online};
+
+    #[test]
+    fn status_path_is_slash_status() {
+        // bridge側(`server.rs`)のrouteと一致させること。署名対象ではないため
+        // 変えても署名の互換性には影響しないが、確認先がずれる。
+        assert_eq!(BRIDGE_STATUS_PATH, "/status");
+    }
+
+    #[test]
+    fn accepts_agent_online_true_with_extra_keys() {
+        // bridgeの実際の応答(`agent`・`status`付き)を受け入れること。
+        assert!(bridge_status_online(
+            br#"{"agent_online":true,"agent":"m5stack-pc-bridge","status":"ok"}"#
+        ));
+        // 余分な空白・改行があっても受け入れること。
+        assert!(bridge_status_online(b"{\n  \"agent_online\" : true\n}"));
+    }
+
+    #[test]
+    fn rejects_agent_online_false() {
+        assert!(!bridge_status_online(
+            br#"{"agent_online":false,"agent":"m5stack-pc-bridge","status":"ok"}"#
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_key() {
+        assert!(!bridge_status_online(br#"{"agent":"m5stack-pc-bridge"}"#));
+        assert!(!bridge_status_online(b"{}"));
+    }
+
+    #[test]
+    fn rejects_invalid_json_and_empty_body() {
+        assert!(!bridge_status_online(b"{not json"));
+        assert!(!bridge_status_online(b""));
+        // JSONとしては有効だがオブジェクトではない。
+        assert!(!bridge_status_online(b"[true]"));
+        assert!(!bridge_status_online(b"true"));
+    }
+
+    #[test]
+    fn rejects_unexpected_types_without_treating_as_online() {
+        // 想定外の型はすべて「応答なし」に倒す。truthyな値でもtrueにしない。
+        for body in [
+            r#"{"agent_online":"true"}"#,
+            r#"{"agent_online":1}"#,
+            r#"{"agent_online":null}"#,
+            r#"{"agent_online":{}}"#,
+            r#"{"agent_online":[]}"#,
+        ] {
+            assert!(!bridge_status_online(body.as_bytes()), "{body}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod status_text_tests {
+    use super::{
+        PcControlStatus, PcStatusSnapshot, STATUS_CB_REBOOT, STATUS_CB_REFRESH, STATUS_CB_SHUTDOWN,
+        STATUS_CB_UNLOCK, STATUS_CB_WAKE, status_buttons, status_message_html,
+    };
+
+    fn status(pc_online: bool, bridge_online: bool, locked: bool) -> PcControlStatus {
+        PcStatusSnapshot {
+            pc_online,
+            bridge_online,
+            locked,
+        }
+        .into()
+    }
+
+    fn render(
+        pc_online: bool,
+        bridge_online: bool,
+        locked: bool,
+        label: &str,
+        battery: &str,
+    ) -> String {
+        status_message_html(
+            status(pc_online, bridge_online, locked),
+            label,
+            battery,
+            "0.13.0",
+        )
+    }
+
+    fn data(status: PcControlStatus) -> Vec<Vec<&'static str>> {
+        status_buttons(status)
+            .into_iter()
+            .map(|row| row.iter().map(|b| b.data).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_pc_on_ready() {
+        assert_eq!(
+            render(
+                true,
+                true,
+                false,
+                "オン",
+                &battery::status_ja(100, battery::PowerState::Powered)
+            ),
+            "🖥️ <b>PC ・ オン</b>\n再起動・シャットダウンができます\n\n📱 <b>M5Stack</b>\n🔋 100% 満充電・給電中\n🏷️ v0.13.0"
+        );
+        assert_eq!(
+            data(status(true, true, false)),
+            vec![
+                vec![STATUS_CB_REBOOT, STATUS_CB_SHUTDOWN],
+                vec![STATUS_CB_REFRESH]
+            ]
+        );
+    }
+
+    #[test]
+    fn b_pc_off() {
+        for bridge_online in [false, true] {
+            assert_eq!(
+                render(
+                    false,
+                    bridge_online,
+                    false,
+                    "オフ",
+                    &battery::status_ja(78, battery::PowerState::OnBattery)
+                ),
+                "🖥️ <b>PC ・ オフ</b>\n起動できます\n\n📱 <b>M5Stack</b>\n🔋 78% 電池駆動\n🏷️ v0.13.0"
+            );
+            assert_eq!(
+                data(status(false, bridge_online, false)),
+                vec![vec![STATUS_CB_WAKE], vec![STATUS_CB_REFRESH]]
+            );
+        }
+    }
+
+    #[test]
+    fn c_bridge_unavailable() {
+        assert_eq!(
+            render(
+                true,
+                false,
+                false,
+                "オン",
+                &battery::status_ja(100, battery::PowerState::Powered)
+            ),
+            "🖥️ <b>PC ・ オン</b>\n⚠️ 再起動・シャットダウンはできません\nPC側の操作サービスが応答していません\n\n📱 <b>M5Stack</b>\n🔋 100% 満充電・給電中\n🏷️ v0.13.0"
+        );
+        // 電源操作が通らない状態なので、押せるのは更新だけ。
+        assert_eq!(
+            data(status(true, false, false)),
+            vec![vec![STATUS_CB_REFRESH]]
+        );
+    }
+
+    #[test]
+    fn d_locked() {
+        assert_eq!(
+            render(
+                true,
+                true,
+                true,
+                "オン",
+                &battery::status_ja(100, battery::PowerState::Powered)
+            ),
+            "🖥️ <b>PC ・ オン</b>\n🔒 操作をロック中\n解除するまで起動・再起動・シャットダウンはできません\n\n📱 <b>M5Stack</b>\n🔋 100% 満充電・給電中\n🏷️ v0.13.0"
+        );
+        assert_eq!(
+            data(status(true, true, true)),
+            vec![vec![STATUS_CB_UNLOCK], vec![STATUS_CB_REFRESH]]
+        );
+    }
+
+    #[test]
+    fn unknown_battery() {
+        assert_eq!(
+            render(false, false, false, "オフ", "不明"),
+            "🖥️ <b>PC ・ オフ</b>\n起動できます\n\n📱 <b>M5Stack</b>\n🔋 不明\n🏷️ v0.13.0"
+        );
+    }
+
+    #[test]
+    fn lock_takes_priority_over_bridge_unavailable() {
+        assert_eq!(status(true, false, true), PcControlStatus::Locked);
+        assert_eq!(
+            data(status(true, false, true)),
+            vec![vec![STATUS_CB_UNLOCK], vec![STATUS_CB_REFRESH]]
+        );
+    }
+
+    #[test]
+    fn lock_takes_priority_over_pc_off() {
+        assert_eq!(status(false, false, true), PcControlStatus::Locked);
+    }
+
+    #[test]
+    fn refresh_is_always_available() {
+        for s in [
+            PcControlStatus::Ready,
+            PcControlStatus::Off,
+            PcControlStatus::Locked,
+            PcControlStatus::BridgeUnavailable,
+        ] {
+            let rows = data(s);
+            assert_eq!(rows.last().unwrap(), &vec![STATUS_CB_REFRESH], "{s:?}");
+        }
+    }
+
+    #[test]
+    fn escapes_html_in_interpolated_values() {
+        // 値にHTMLが混ざっても書式を壊さない。
+        let text = super::status_message_html(PcControlStatus::Off, "オフ", "<b>&", "0.13.0<");
+        assert!(text.contains("🔋 &lt;b&gt;&amp;"), "{text}");
+        assert!(text.contains("🏷️ v0.13.0&lt;"), "{text}");
+    }
+}

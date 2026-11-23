@@ -273,9 +273,9 @@ fn download_and_flash(
                     .write(&chunk[..read])
                     .map_err(|e| OtaError::Ota(e.to_string()))?;
                 received += read as u64;
-                let percent = pc_remote_signing::ota_progress_percent(received, manifest.size);
+                let percent = notify_stable::ota_progress_percent(received, manifest.size);
                 if percent
-                    >= reported_percent.saturating_add(pc_remote_signing::OTA_PROGRESS_STEP_PERCENT)
+                    >= reported_percent.saturating_add(notify_stable::OTA_PROGRESS_STEP_PERCENT)
                 {
                     reported_percent = percent;
                     println!(

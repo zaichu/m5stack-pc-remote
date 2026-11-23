@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use embedded_svc::http::Method;
 use serde_json::{Value, json};
 
-use pc_remote_signing::AlertThrottle;
+use notify_stable::AlertThrottle;
 use telegram_cursor::UpdateCursor;
 
 use crate::app_config::AppConfig;
@@ -321,19 +321,19 @@ impl Client {
                 self.config.as_ref(),
                 &self.settings.pc_ip_address(),
             );
-        let snapshot = pc_remote_signing::PcStatusSnapshot {
+        let snapshot = online_state::PcStatusSnapshot {
             pc_online: online,
             bridge_online,
             locked,
         };
-        let status: pc_remote_signing::PcControlStatus = snapshot.into();
-        let text = pc_remote_signing::status_message_html(
+        let status: online_state::PcControlStatus = snapshot.into();
+        let text = online_state::status_message_html(
             status,
             net::pc_online_label_ja(online),
             &battery_line,
             FIRMWARE_VERSION,
         );
-        let rows: Vec<Value> = pc_remote_signing::status_buttons(status)
+        let rows: Vec<Value> = online_state::status_buttons(status)
             .into_iter()
             .map(|row| {
                 row.iter()
@@ -634,9 +634,9 @@ impl Client {
                     return;
                 }
             };
-        let order = pc_remote_signing::compare_versions(FIRMWARE_VERSION, &manifest.version);
+        let order = notify_stable::compare_versions(FIRMWARE_VERSION, &manifest.version);
         let body =
-            pc_remote_signing::ota_confirm_text(FIRMWARE_VERSION, &manifest.version, manifest.size);
+            notify_stable::ota_confirm_text(FIRMWARE_VERSION, &manifest.version, manifest.size);
         if !order.shows_confirm_button() {
             self.api.send_message(chat_id, &body);
             return;
@@ -782,7 +782,7 @@ impl Client {
         let pc_ip_address = self.settings.pc_ip_address();
 
         // 直前に送った本文。進捗バーと適用通知で別々に持つが、両者の文言自体を
-        // 変えてある (`pc_remote_signing::ota_applying_text` 参照) ため、
+        // 変えてある (`notify_stable::ota_applying_text` 参照) ため、
         // 段階が進んでも同一内容の400にならない。
         let mut last_progress_text = String::new();
         let mut last_applying_text = String::new();
@@ -790,8 +790,7 @@ impl Client {
             let Some(message_id) = progress_message_id else {
                 return;
             };
-            let text =
-                pc_remote_signing::ota_progress_text(&manifest.version, received, manifest.size);
+            let text = notify_stable::ota_progress_text(&manifest.version, received, manifest.size);
             self.edit_progress_message(chat_id, message_id, &mut last_progress_text, text);
         };
         // 検証・書き込み完了の通知。同じメッセージを書き換える。
@@ -802,7 +801,7 @@ impl Client {
             let Some(message_id) = progress_message_id else {
                 return;
             };
-            let text = pc_remote_signing::ota_applying_text(&manifest.version);
+            let text = notify_stable::ota_applying_text(&manifest.version);
             self.edit_progress_message(chat_id, message_id, &mut last_applying_text, text);
         };
 

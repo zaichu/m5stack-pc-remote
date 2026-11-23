@@ -28,9 +28,9 @@ pub const BRIDGE_STATUS_TIMEOUT: Duration = Duration::from_millis(800);
 /// する(`ota.rs` の `MANIFEST_MAX_BYTES` と同じ考え方)。
 pub const BRIDGE_STATUS_MAX_BYTES: usize = 1024;
 
-/// 電源操作の識別子はwire protocolの一部なので `pc-remote-signing` が正本。
+/// 電源操作の識別子はwire protocolの一部なので `wake-check` が正本。
 /// firmware側は再エクスポートして使う。
-pub use pc_remote_signing::PowerAction;
+pub use wake_check::PowerAction;
 
 /// 日本語の表示文言。wire protocolではないのでshared crateへは置かない。
 /// `PowerAction` は他crateの型で inherent method を足せないため拡張traitにする。
@@ -160,7 +160,7 @@ pub fn check_bridge_online(config: &AppConfig, pc_ip_address: &str) -> bool {
     let url = format!(
         "http://{pc_ip_address}:{}{}",
         config.bridge_port,
-        pc_remote_signing::BRIDGE_STATUS_PATH
+        online_state::BRIDGE_STATUS_PATH
     );
 
     let result: Result<bool, Box<dyn Error>> = (|| {
@@ -188,7 +188,7 @@ pub fn check_bridge_online(config: &AppConfig, pc_ip_address: &str) -> bool {
             }
             body.extend_from_slice(&chunk[..read]);
         }
-        Ok(pc_remote_signing::bridge_status_online(&body))
+        Ok(online_state::bridge_status_online(&body))
     })();
 
     match result {

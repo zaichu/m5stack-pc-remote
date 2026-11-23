@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use pc_remote_signing::AlertThrottle;
+use notify_stable::AlertThrottle;
 
 use crate::app_config::AgentConfig;
 
