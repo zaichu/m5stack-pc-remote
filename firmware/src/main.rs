@@ -854,6 +854,9 @@ fn update_clock_band(
     clock_minute: &mut i64,
     display: &mut board::Core2Display<'_>,
 ) -> Result<(), Box<dyn Error>> {
+    // 時計帯の更新(Issue #172)。表示中の分が変わったときだけ帯を描き直し、
+    // 秒単位の描画や余計なちらつきを避ける。消灯中はスキップし、復帰時の
+    // 再描画で最新表示へ戻す。Calendar滞在中は走らせない(Issue #173)。
     if backlight_on && matches!(screen, Screen::Main) {
         let now_minute = current_clock_minute(app_config);
         if now_minute != *clock_minute {
@@ -874,6 +877,10 @@ fn update_calendar_view(
     toast_text: &Option<String>,
     status: &Status<'_>,
 ) -> Result<(), Box<dyn Error>> {
+    // Calendar滞在中の日付変化(Issue #173)。時計帯の分更新は走らせないが、
+    // 日が変わったときだけグリッドとハイライトを描き直す。消灯中は
+    // スキップし、復帰時の再描画に任せる。未同期->同期の遷移(None->Some)でも
+    // 1回描き直し、`NO CLOCK` から当月グリッドへ切り替える。
     if backlight_on && matches!(screen, Screen::Calendar) {
         let now_day = ui::calendar_date(now_unix_secs(), app_config.timezone_offset_hours);
         if calendar_update::needs_redraw(*calendar_day, now_day) {
