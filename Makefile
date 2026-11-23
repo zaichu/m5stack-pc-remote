@@ -1,4 +1,4 @@
-.PHONY: install install-hooks fmt fmt-check clippy test agent-windows-build agent-check \
+.PHONY: install install-hooks fmt fmt-check clippy test print-shared-crates print-workspaces crate-list-check agent-windows-build agent-check \
 	firmware-build firmware-rust-src-fix firmware-nvs-image firmware-package ota-readiness-check \
 	config-key-check agent-roles-check docs-consistency-check pr-issue-link-check secret-path-check secret-scan shell-syntax-check diff-check check git-pre-commit git-pre-push
 
@@ -7,60 +7,54 @@ install: install-hooks
 install-hooks:
 	bash ./scripts/install-git-hooks.sh
 
-# Cargo workspace定義が無いため、test と同じく各crateを明示列挙する。
+# Cargo workspace定義が無いため、host側でcargo実行するcrateの一覧をここ1か所に
+# 持つ。shared/*へcrateを足したらこの変数へ1行足すだけで、fmt・clippy・test・
+# CIキャッシュ・抜け検査のすべてに反映される。firmware/はXtensa toolchainが要る
+# ため対象外。
+SHARED_CRATES := backlight battery battery-read calendar-update config-validation notify-stable online-state pc-remote-signing telegram-cursor toast-expiry wake-check
+
 fmt:
 	cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml
 	cargo fmt --manifest-path firmware/Cargo.toml
 	cargo fmt --manifest-path firmware/partition-defaults/Cargo.toml
-	cargo fmt --manifest-path shared/pc-remote-signing/Cargo.toml
-	cargo fmt --manifest-path shared/config-validation/Cargo.toml
-	cargo fmt --manifest-path shared/battery/Cargo.toml
-	cargo fmt --manifest-path shared/backlight/Cargo.toml
-	cargo fmt --manifest-path shared/calendar-update/Cargo.toml
-	cargo fmt --manifest-path shared/wake-check/Cargo.toml
-	cargo fmt --manifest-path shared/toast-expiry/Cargo.toml
-	cargo fmt --manifest-path shared/notify-stable/Cargo.toml
-	cargo fmt --manifest-path shared/online-state/Cargo.toml
-	cargo fmt --manifest-path shared/battery-read/Cargo.toml
+	for c in $(SHARED_CRATES); do \
+		cargo fmt --manifest-path shared/$$c/Cargo.toml || exit 1; \
+	done
 
 fmt-check:
 	cargo fmt --manifest-path m5stack-pc-bridge/Cargo.toml --check
 	cargo fmt --manifest-path firmware/Cargo.toml --check
 	cargo fmt --manifest-path firmware/partition-defaults/Cargo.toml --check
-	cargo fmt --manifest-path shared/pc-remote-signing/Cargo.toml --check
-	cargo fmt --manifest-path shared/config-validation/Cargo.toml --check
-	cargo fmt --manifest-path shared/battery/Cargo.toml --check
-	cargo fmt --manifest-path shared/backlight/Cargo.toml --check
-	cargo fmt --manifest-path shared/calendar-update/Cargo.toml --check
-	cargo fmt --manifest-path shared/wake-check/Cargo.toml --check
-	cargo fmt --manifest-path shared/toast-expiry/Cargo.toml --check
-	cargo fmt --manifest-path shared/notify-stable/Cargo.toml --check
-	cargo fmt --manifest-path shared/online-state/Cargo.toml --check
-	cargo fmt --manifest-path shared/battery-read/Cargo.toml --check
+	for c in $(SHARED_CRATES); do \
+		cargo fmt --manifest-path shared/$$c/Cargo.toml --check || exit 1; \
+	done
 
 clippy:
 	cargo clippy --manifest-path m5stack-pc-bridge/Cargo.toml --all-targets -- -D warnings
-	cargo clippy --manifest-path shared/backlight/Cargo.toml --all-targets -- -D warnings
-	cargo clippy --manifest-path shared/calendar-update/Cargo.toml --all-targets -- -D warnings
-	cargo clippy --manifest-path shared/toast-expiry/Cargo.toml --all-targets -- -D warnings
-	cargo clippy --manifest-path shared/notify-stable/Cargo.toml --all-targets -- -D warnings
-	cargo clippy --manifest-path shared/battery-read/Cargo.toml --all-targets -- -D warnings
+	for c in $(SHARED_CRATES); do \
+		cargo clippy --manifest-path shared/$$c/Cargo.toml --all-targets -- -D warnings || exit 1; \
+	done
 
 test:
 	cargo test --manifest-path m5stack-pc-bridge/Cargo.toml
 	# shared/*はfirmwareとbridgeが参照するpath依存crateで、bridge側の
 	# cargo testでは走らないため、明示的に実行する必要がある。
-	cargo test --manifest-path shared/pc-remote-signing/Cargo.toml
-	cargo test --manifest-path shared/config-validation/Cargo.toml
-	cargo test --manifest-path shared/battery/Cargo.toml
-	cargo test --manifest-path shared/backlight/Cargo.toml
-	cargo test --manifest-path shared/calendar-update/Cargo.toml
-	cargo test --manifest-path shared/wake-check/Cargo.toml
-	cargo test --manifest-path shared/toast-expiry/Cargo.toml
-	cargo test --manifest-path shared/notify-stable/Cargo.toml
-	cargo test --manifest-path shared/online-state/Cargo.toml
-	cargo test --manifest-path shared/battery-read/Cargo.toml
-	cargo test --manifest-path shared/telegram-cursor/Cargo.toml
+	for c in $(SHARED_CRATES); do \
+		cargo test --manifest-path shared/$$c/Cargo.toml || exit 1; \
+	done
+
+# CIのrust-cacheへ渡すworkspace一覧(CIがここから読む)。firmware/はCIに
+# Xtensa toolchainが無くビルドされないため含めない。
+print-workspaces:
+	@echo "m5stack-pc-bridge"
+	@for c in $(SHARED_CRATES); do echo "shared/$$c"; done
+
+print-shared-crates:
+	@for c in $(SHARED_CRATES); do echo "$$c"; done
+
+# SHARED_CRATESに無いshared/*があれば落とす。新規crateの追加漏れ検出用。
+crate-list-check:
+	bash ./scripts/check-crate-list.sh
 
 # toolchainが無い開発端末では警告してskipするが、CI(CI=1)では必ず実行する。
 # skipを成功扱いのままにすると、ローカルで通ったものがCIで初めて落ちる。
@@ -138,7 +132,7 @@ shell-syntax-check:
 		echo "WARNING: shellcheck not found; skipping lint (bash -n only)."; \
 	fi
 
-check: diff-check secret-path-check secret-scan config-key-check agent-roles-check docs-consistency-check shell-syntax-check agent-check firmware-build
+check: diff-check secret-path-check secret-scan config-key-check crate-list-check agent-roles-check docs-consistency-check shell-syntax-check agent-check firmware-build
 
 git-pre-commit: fmt-check secret-path-check diff-check
 
