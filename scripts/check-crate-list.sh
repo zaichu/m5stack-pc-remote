@@ -33,7 +33,7 @@ done <<< "$actual"
 
 while IFS= read -r name; do
   [[ -z "$name" ]] && continue
-  if [[ ! -d "shared/${name}" ]]; then
+  if [[ ! -f "shared/${name}/Cargo.toml" ]]; then
     echo "CRATE-LIST FAIL: SHARED_CRATES の ${name} に対応する shared/${name}/Cargo.toml がありません。" >&2
     failures=$((failures + 1))
   fi

@@ -18,7 +18,7 @@ fmt:
 	cargo fmt --manifest-path firmware/Cargo.toml
 	cargo fmt --manifest-path firmware/partition-defaults/Cargo.toml
 	for c in $(SHARED_CRATES); do \
-		cargo fmt --manifest-path shared/$$c/Cargo.toml; \
+		cargo fmt --manifest-path shared/$$c/Cargo.toml || exit 1; \
 	done
 
 fmt-check:
@@ -26,13 +26,13 @@ fmt-check:
 	cargo fmt --manifest-path firmware/Cargo.toml --check
 	cargo fmt --manifest-path firmware/partition-defaults/Cargo.toml --check
 	for c in $(SHARED_CRATES); do \
-		cargo fmt --manifest-path shared/$$c/Cargo.toml --check; \
+		cargo fmt --manifest-path shared/$$c/Cargo.toml --check || exit 1; \
 	done
 
 clippy:
 	cargo clippy --manifest-path m5stack-pc-bridge/Cargo.toml --all-targets -- -D warnings
 	for c in $(SHARED_CRATES); do \
-		cargo clippy --manifest-path shared/$$c/Cargo.toml --all-targets -- -D warnings; \
+		cargo clippy --manifest-path shared/$$c/Cargo.toml --all-targets -- -D warnings || exit 1; \
 	done
 
 test:
@@ -40,7 +40,7 @@ test:
 	# shared/*はfirmwareとbridgeが参照するpath依存crateで、bridge側の
 	# cargo testでは走らないため、明示的に実行する必要がある。
 	for c in $(SHARED_CRATES); do \
-		cargo test --manifest-path shared/$$c/Cargo.toml; \
+		cargo test --manifest-path shared/$$c/Cargo.toml || exit 1; \
 	done
 
 # CIのrust-cacheへ渡すworkspace一覧(CIがここから読む)。firmware/はCIに

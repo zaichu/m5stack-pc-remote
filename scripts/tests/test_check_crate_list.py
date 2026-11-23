@@ -61,3 +61,25 @@ def test_listed_but_absent_dir_fails(tmp_path):
     proc = _run(root)
     assert proc.returncode != 0
     assert "bbb" in proc.stderr
+
+
+def test_mid_list_failure_propagates_through_real_makefile(tmp_path):
+    root = tmp_path / "real"
+    root.mkdir()
+    shutil.copy2(REPO_ROOT / "Makefile", root / "Makefile")
+    for name in ("m5stack-pc-bridge", "firmware", "shared"):
+        (root / name).symlink_to(REPO_ROOT / name, target_is_directory=True)
+    makefile = root / "Makefile"
+    text = makefile.read_text(encoding="utf-8")
+    assert "battery battery-read" in text
+    makefile.write_text(
+        text.replace("battery battery-read", "battery zzz-bogus battery-read"),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        ["make", "fmt-check", "--no-print-directory"],
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
